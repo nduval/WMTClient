@@ -11,6 +11,77 @@ const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
 
+// Telnet protocol constants
+const TELNET = {
+  IAC: 255,   // Interpret As Command
+  DONT: 254,
+  DO: 253,
+  WONT: 252,
+  WILL: 251,
+  SB: 250,    // Subnegotiation Begin
+  GA: 249,    // Go Ahead
+  EL: 248,    // Erase Line
+  EC: 247,    // Erase Character
+  AYT: 246,   // Are You There
+  AO: 245,    // Abort Output
+  IP: 244,    // Interrupt Process
+  BRK: 243,   // Break
+  DM: 242,    // Data Mark
+  NOP: 241,   // No Operation
+  SE: 240,    // Subnegotiation End
+};
+
+/**
+ * Strip telnet control sequences from buffer
+ * Returns clean text buffer
+ */
+function stripTelnetSequences(buffer) {
+  const result = [];
+  let i = 0;
+
+  while (i < buffer.length) {
+    const byte = buffer[i];
+
+    if (byte === TELNET.IAC) {
+      // IAC - start of telnet command
+      if (i + 1 >= buffer.length) break;
+
+      const cmd = buffer[i + 1];
+
+      if (cmd === TELNET.IAC) {
+        // Escaped IAC (255 255) = literal 255
+        result.push(255);
+        i += 2;
+      } else if (cmd === TELNET.SB) {
+        // Subnegotiation - skip until IAC SE
+        i += 2;
+        while (i < buffer.length) {
+          if (buffer[i] === TELNET.IAC && i + 1 < buffer.length && buffer[i + 1] === TELNET.SE) {
+            i += 2;
+            break;
+          }
+          i++;
+        }
+      } else if (cmd >= TELNET.WILL && cmd <= TELNET.DONT) {
+        // WILL/WONT/DO/DONT + option byte
+        i += 3;
+      } else if (cmd >= TELNET.SE && cmd <= TELNET.GA) {
+        // Single byte commands (GA, NOP, etc.)
+        i += 2;
+      } else {
+        // Unknown command, skip IAC and command byte
+        i += 2;
+      }
+    } else {
+      // Regular character
+      result.push(byte);
+      i++;
+    }
+  }
+
+  return Buffer.from(result);
+}
+
 // Create HTTP server for health checks
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
@@ -62,7 +133,9 @@ wss.on('connection', (ws, req) => {
     });
 
     mudSocket.on('data', (data) => {
-      const text = data.toString();
+      // Strip telnet control sequences before converting to text
+      const cleanData = stripTelnetSequences(data);
+      const text = cleanData.toString('utf8');
       const lines = text.split('\n');
 
       lines.forEach(line => {
