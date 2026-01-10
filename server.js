@@ -190,14 +190,17 @@ wss.on('connection', (ws, req) => {
       switch (data.type) {
         case 'command':
           if (mudSocket && !mudSocket.destroyed) {
-            const cmd = processAliases(data.command, aliases);
+            const cmd = processAliases(data.command || '', aliases);
             // Handle multiple commands separated by ;
             const commands = parseCommands(cmd);
             commands.forEach(c => {
-              if (c.trim()) {
-                mudSocket.write(c.trim() + '\r\n');
-              }
+              // Send command (including empty ones - just sends \r\n for "press enter")
+              mudSocket.write(c.trim() + '\r\n');
             });
+            // If no commands parsed (empty input), still send a newline
+            if (commands.length === 0) {
+              mudSocket.write('\r\n');
+            }
           }
           break;
 
