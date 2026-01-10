@@ -38,66 +38,76 @@ wss.on('connection', (ws, req) => {
   let triggers = [];
   let aliases = [];
 
-  // Send welcome message
-  ws.send(JSON.stringify({
-    type: 'system',
-    message: `Connecting to ${MUD_HOST}:${MUD_PORT}...`
-  }));
+  // Function to create and connect MUD socket with all handlers
+  function connectToMud() {
+    // Clean up existing socket if any
+    if (mudSocket) {
+      mudSocket.destroy();
+      mudSocket = null;
+    }
 
-  // Connect to MUD
-  mudSocket = new net.Socket();
-
-  mudSocket.connect(MUD_PORT, MUD_HOST, () => {
-    console.log('Connected to MUD');
     ws.send(JSON.stringify({
       type: 'system',
-      message: `Connected to ${MUD_HOST}:${MUD_PORT}!`
+      message: `Connecting to ${MUD_HOST}:${MUD_PORT}...`
     }));
-  });
 
-  mudSocket.on('data', (data) => {
-    const text = data.toString();
-    const lines = text.split('\n');
+    mudSocket = new net.Socket();
 
-    lines.forEach(line => {
-      if (line.trim() === '') return;
+    mudSocket.connect(MUD_PORT, MUD_HOST, () => {
+      console.log('Connected to MUD');
+      ws.send(JSON.stringify({
+        type: 'system',
+        message: `Connected to ${MUD_HOST}:${MUD_PORT}!`
+      }));
+    });
 
-      // Process triggers
-      const processed = processTriggers(line, triggers);
+    mudSocket.on('data', (data) => {
+      const text = data.toString();
+      const lines = text.split('\n');
 
-      if (!processed.gag) {
-        ws.send(JSON.stringify({
-          type: 'mud',
-          line: processed.line,
-          highlight: processed.highlight,
-          sound: processed.sound
-        }));
-      }
+      lines.forEach(line => {
+        if (line.trim() === '') return;
 
-      // Execute trigger commands
-      processed.commands.forEach(cmd => {
-        if (mudSocket && !mudSocket.destroyed) {
-          mudSocket.write(cmd + '\r\n');
+        // Process triggers
+        const processed = processTriggers(line, triggers);
+
+        if (!processed.gag) {
+          ws.send(JSON.stringify({
+            type: 'mud',
+            line: processed.line,
+            highlight: processed.highlight,
+            sound: processed.sound
+          }));
         }
+
+        // Execute trigger commands
+        processed.commands.forEach(cmd => {
+          if (mudSocket && !mudSocket.destroyed) {
+            mudSocket.write(cmd + '\r\n');
+          }
+        });
       });
     });
-  });
 
-  mudSocket.on('close', () => {
-    console.log('MUD connection closed');
-    ws.send(JSON.stringify({
-      type: 'system',
-      message: 'Connection to MUD closed.'
-    }));
-  });
+    mudSocket.on('close', () => {
+      console.log('MUD connection closed');
+      ws.send(JSON.stringify({
+        type: 'system',
+        message: 'Connection to MUD closed.'
+      }));
+    });
 
-  mudSocket.on('error', (err) => {
-    console.error('MUD socket error:', err.message);
-    ws.send(JSON.stringify({
-      type: 'error',
-      message: 'MUD connection error: ' + err.message
-    }));
-  });
+    mudSocket.on('error', (err) => {
+      console.error('MUD socket error:', err.message);
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'MUD connection error: ' + err.message
+      }));
+    });
+  }
+
+  // Initial connection
+  connectToMud();
 
   // Handle WebSocket messages
   ws.on('message', (message) => {
@@ -131,15 +141,8 @@ wss.on('connection', (ws, req) => {
           break;
 
         case 'reconnect':
-          if (mudSocket) {
-            mudSocket.destroy();
-          }
-          mudSocket = new net.Socket();
-          mudSocket.connect(MUD_PORT, MUD_HOST);
-          ws.send(JSON.stringify({
-            type: 'system',
-            message: 'Reconnecting...'
-          }));
+          console.log('Reconnect requested');
+          connectToMud();
           break;
       }
     } catch (e) {
