@@ -265,20 +265,69 @@ function parseCommands(input) {
 }
 
 function processAliases(command, aliases) {
-  const parts = command.split(' ');
-  const cmd = parts[0];
-  const args = parts.slice(1).join(' ');
-
   for (const alias of aliases) {
     if (!alias.enabled) continue;
-    if (cmd.toLowerCase() === alias.pattern.toLowerCase()) {
+
+    const matchType = alias.matchType || 'exact';
+    let matched = false;
+    let matches = [];
+
+    switch (matchType) {
+      case 'regex':
+        try {
+          const regex = new RegExp(alias.pattern, 'i');
+          const match = command.match(regex);
+          if (match) {
+            matched = true;
+            matches = match;
+          }
+        } catch (e) {}
+        break;
+
+      case 'startsWith':
+        // Match command that starts with pattern (word boundary)
+        const startsPattern = alias.pattern.toLowerCase();
+        const cmdLower = command.toLowerCase();
+        if (cmdLower === startsPattern || cmdLower.startsWith(startsPattern + ' ')) {
+          matched = true;
+          const parts = command.split(' ');
+          matches = [parts[0], ...parts.slice(1)];
+        }
+        break;
+
+      case 'exact':
+      default:
+        // Original behavior: match first word exactly
+        const parts = command.split(' ');
+        const cmd = parts[0];
+        if (cmd.toLowerCase() === alias.pattern.toLowerCase()) {
+          matched = true;
+          matches = [cmd, ...parts.slice(1)];
+        }
+        break;
+    }
+
+    if (matched) {
       let replacement = alias.replacement;
-      replacement = replacement.replace(/\$\*/g, args);
-      const argParts = args.split(/\s+/);
-      for (let i = 0; i < argParts.length; i++) {
-        replacement = replacement.replace(new RegExp('\\$' + (i + 1), 'g'), argParts[i]);
+
+      if (matchType === 'regex') {
+        // For regex, $0 = full match, $1, $2, etc. = capture groups
+        matches.forEach((m, i) => {
+          replacement = replacement.replace(new RegExp('\\$' + i, 'g'), m || '');
+        });
+        // Clean up unused variables
+        replacement = replacement.replace(/\$\d+/g, '');
+      } else {
+        // For exact/startsWith: $* = all args, $1, $2 = individual args
+        const args = matches.slice(1).join(' ');
+        replacement = replacement.replace(/\$\*/g, args);
+        const argParts = args.split(/\s+/).filter(p => p);
+        for (let i = 0; i < argParts.length; i++) {
+          replacement = replacement.replace(new RegExp('\\$' + (i + 1), 'g'), argParts[i]);
+        }
+        replacement = replacement.replace(/\$\d+/g, '');
       }
-      replacement = replacement.replace(/\$\d+/g, '');
+
       return replacement.trim();
     }
   }
