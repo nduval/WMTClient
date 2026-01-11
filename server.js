@@ -177,14 +177,32 @@ wss.on('connection', (ws, req) => {
         updated = true;
         break;
 
+      case 'BAB': // 2-way comms (tells)
+        // Format: sender~message
+        ws.send(JSON.stringify({
+          type: 'mip_chat',
+          chatType: 'tell',
+          raw: msgData,
+          message: convertMipColors(msgData)
+        }));
+        break;
+
+      case 'CAA': // Chat channel messages
+        // Format: channel~sender~message or similar
+        ws.send(JSON.stringify({
+          type: 'mip_chat',
+          chatType: 'channel',
+          raw: msgData,
+          message: convertMipColors(msgData)
+        }));
+        break;
+
       // Other MIP types we recognize but don't display
       case 'AAC': // Reboot time
       case 'AAF': // Uptime
       case 'BAE': // Mud lag
       case 'HAA': // Room items
       case 'HAB': // Item actions
-      case 'BAB': // 2-way comms (tells)
-      case 'CAA': // Chat messages
         // Silently ignore these for now
         break;
     }
