@@ -238,13 +238,23 @@ wss.on('connection', (ws, req) => {
         }
         break;
 
-      case 'AAC': // Reboot time (seconds until reboot)
+      case 'AAC': // Reboot time (days until reboot, e.g., "4.5 days")
         {
-          const seconds = parseInt(msgData) || 0;
-          if (seconds > 0) {
-            const hours = Math.floor(seconds / 3600);
-            const mins = Math.floor((seconds % 3600) / 60);
-            mipStats.reboot = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+          // Parse decimal days format like "4.5 days" or just "4.5"
+          const match = msgData.match(/^([\d.]+)/);
+          const decimalDays = match ? parseFloat(match[1]) : 0;
+          if (decimalDays > 0) {
+            const totalHours = decimalDays * 24;
+            const days = Math.floor(decimalDays);
+            const hours = Math.floor((decimalDays - days) * 24);
+            const mins = Math.floor(((decimalDays - days) * 24 - hours) * 60);
+            if (days > 0) {
+              mipStats.reboot = `${days}d ${hours}h ${mins}m`;
+            } else if (hours > 0) {
+              mipStats.reboot = `${hours}h ${mins}m`;
+            } else {
+              mipStats.reboot = `${mins}m`;
+            }
           } else {
             mipStats.reboot = '';
           }
@@ -252,19 +262,18 @@ wss.on('connection', (ws, req) => {
         }
         break;
 
-      case 'AAF': // Uptime (seconds since boot)
+      case 'AAF': // Uptime (days since boot, e.g., "7.7 days")
         {
-          const seconds = parseInt(msgData) || 0;
-          if (seconds > 0) {
-            const days = Math.floor(seconds / 86400);
-            const hours = Math.floor((seconds % 86400) / 3600);
-            const mins = Math.floor((seconds % 3600) / 60);
+          // Parse decimal days format like "7.7 days" or just "7.7"
+          const match = msgData.match(/^([\d.]+)/);
+          const decimalDays = match ? parseFloat(match[1]) : 0;
+          if (decimalDays > 0) {
+            const days = Math.floor(decimalDays);
+            const hours = Math.floor((decimalDays - days) * 24);
             if (days > 0) {
               mipStats.uptime = `${days}d ${hours}h`;
-            } else if (hours > 0) {
-              mipStats.uptime = `${hours}h ${mins}m`;
             } else {
-              mipStats.uptime = `${mins}m`;
+              mipStats.uptime = `${hours}h`;
             }
           } else {
             mipStats.uptime = '';
