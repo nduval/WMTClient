@@ -244,16 +244,12 @@ wss.on('connection', (ws, req) => {
           const match = msgData.match(/^([\d.]+)/);
           const decimalDays = match ? parseFloat(match[1]) : 0;
           if (decimalDays > 0) {
-            const totalHours = decimalDays * 24;
             const days = Math.floor(decimalDays);
-            const hours = Math.floor((decimalDays - days) * 24);
-            const mins = Math.floor(((decimalDays - days) * 24 - hours) * 60);
+            const hours = Math.round((decimalDays - days) * 24);
             if (days > 0) {
-              mipStats.reboot = `${days}d ${hours}h ${mins}m`;
-            } else if (hours > 0) {
-              mipStats.reboot = `${hours}h ${mins}m`;
+              mipStats.reboot = `${days}d ${hours}h`;
             } else {
-              mipStats.reboot = `${mins}m`;
+              mipStats.reboot = `${hours}h`;
             }
           } else {
             mipStats.reboot = '';
