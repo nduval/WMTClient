@@ -241,6 +241,123 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+/**
+ * Convert TinTin++ pattern to JavaScript regex
+ * Supports: %*, %+, %d, %w, %s, %., %1-%99, ^, $, \\%
+ */
+function tinTinToRegex(pattern) {
+  let result = '';
+  let i = 0;
+
+  while (i < pattern.length) {
+    const char = pattern[i];
+
+    if (char === '\\' && i + 1 < pattern.length) {
+      // Escape sequence
+      const next = pattern[i + 1];
+      if (next === '%') {
+        // Literal percent
+        result += '%';
+        i += 2;
+      } else {
+        // Pass through other escapes (for PCRE codes like \d, \w, \s)
+        result += '\\' + next;
+        i += 2;
+      }
+    } else if (char === '%') {
+      // TinTin++ wildcard
+      if (i + 1 < pattern.length) {
+        const next = pattern[i + 1];
+
+        if (next === '*') {
+          // %* - Zero or more characters (non-greedy, no newlines)
+          result += '(.*?)';
+          i += 2;
+        } else if (next === '+') {
+          // %+ - One or more characters (non-greedy)
+          result += '(.+?)';
+          i += 2;
+        } else if (next === 'd') {
+          // %d - Zero or more digits
+          result += '([0-9]*?)';
+          i += 2;
+        } else if (next === 'w') {
+          // %w - Zero or more word characters
+          result += '([A-Za-z0-9_]*?)';
+          i += 2;
+        } else if (next === 's') {
+          // %s - Zero or more whitespace
+          result += '([\\r\\n\\t ]*?)';
+          i += 2;
+        } else if (next === '.') {
+          // %. - Exactly one character
+          result += '(.)';
+          i += 2;
+        } else if (next === 'a') {
+          // %a - Zero or more characters including newlines
+          result += '([\\s\\S]*?)';
+          i += 2;
+        } else if (next >= '0' && next <= '9') {
+          // %1-%99 - Capture group reference (just becomes a capture group)
+          // Parse multi-digit numbers
+          let num = '';
+          let j = i + 1;
+          while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
+            num += pattern[j];
+            j++;
+          }
+          // In TinTin++, %1-%99 in patterns are capture groups
+          result += '(.+?)';
+          i = j;
+        } else {
+          // Unknown % sequence, escape it
+          result += '%';
+          i += 1;
+        }
+      } else {
+        // % at end of string
+        result += '%';
+        i += 1;
+      }
+    } else if (char === '^' || char === '$') {
+      // Anchors - pass through
+      result += char;
+      i += 1;
+    } else if ('[]{}()|+?*.\\'.includes(char)) {
+      // Regex special characters - escape them
+      result += '\\' + char;
+      i += 1;
+    } else {
+      // Regular character
+      result += char;
+      i += 1;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Replace TinTin++ variables (%0, %1, etc.) in a command string with matched values
+ */
+function replaceTinTinVars(command, matches) {
+  let result = command;
+
+  // Replace %0-%99 with matched groups
+  // matches[0] = full match, matches[1] = first capture, etc.
+  if (matches && matches.length > 0) {
+    for (let i = 0; i < matches.length && i < 100; i++) {
+      const regex = new RegExp('%' + i + '(?![0-9])', 'g');
+      result = result.replace(regex, matches[i] || '');
+    }
+  }
+
+  // Clean up any remaining unreplaced variables
+  result = result.replace(/%\d+/g, '');
+
+  return result;
+}
+
 function parseCommands(input) {
   const commands = [];
   let current = '';
@@ -284,6 +401,21 @@ function processAliases(command, aliases) {
         } catch (e) {}
         break;
 
+      case 'tintin':
+        // TinTin++ style pattern matching
+        try {
+          const regexPattern = tinTinToRegex(alias.pattern);
+          const regex = new RegExp('^' + regexPattern + '$', 'i');
+          const match = command.match(regex);
+          if (match) {
+            matched = true;
+            matches = match;
+          }
+        } catch (e) {
+          console.error('TinTin alias pattern error:', e.message);
+        }
+        break;
+
       case 'startsWith':
         // Match command that starts with pattern (word boundary)
         const startsPattern = alias.pattern.toLowerCase();
@@ -310,7 +442,10 @@ function processAliases(command, aliases) {
     if (matched) {
       let replacement = alias.replacement;
 
-      if (matchType === 'regex') {
+      if (matchType === 'tintin') {
+        // For TinTin++: %0 = full match, %1, %2, etc. = capture groups
+        replacement = replaceTinTinVars(replacement, matches);
+      } else if (matchType === 'regex') {
         // For regex, $0 = full match, $1, $2, etc. = capture groups
         matches.forEach((m, i) => {
           replacement = replacement.replace(new RegExp('\\$' + i, 'g'), m || '');
@@ -372,6 +507,20 @@ function processTriggers(line, triggers) {
           }
         } catch (e) {}
         break;
+      case 'tintin':
+        // TinTin++ style pattern matching
+        try {
+          const regexPattern = tinTinToRegex(trigger.pattern);
+          const regex = new RegExp(regexPattern, 'i');
+          const match = line.match(regex);
+          if (match) {
+            matched = true;
+            matches = match;
+          }
+        } catch (e) {
+          console.error('TinTin pattern error:', e.message);
+        }
+        break;
       default:
         matched = line.toLowerCase().includes(trigger.pattern.toLowerCase());
     }
@@ -388,9 +537,15 @@ function processTriggers(line, triggers) {
           case 'command':
             let cmd = action.command || '';
             if (matches.length) {
-              matches.forEach((m, i) => {
-                cmd = cmd.replace(new RegExp('\\$' + i, 'g'), m);
-              });
+              if (trigger.matchType === 'tintin') {
+                // Use TinTin++ variable replacement (%0, %1, etc.)
+                cmd = replaceTinTinVars(cmd, matches);
+              } else {
+                // Use JavaScript-style replacement ($0, $1, etc.)
+                matches.forEach((m, i) => {
+                  cmd = cmd.replace(new RegExp('\\$' + i, 'g'), m);
+                });
+              }
             }
             result.commands.push(cmd);
             break;
