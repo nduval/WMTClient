@@ -126,7 +126,9 @@ wss.on('connection', (ws, req) => {
     gline1: '',      // Primary guild line (raw HTML with colors)
     gline2: '',      // Secondary guild line (raw HTML with colors)
     gline1Raw: '',   // Raw guild line without color conversion (for debug/parsing)
-    gline2Raw: ''    // Raw guild line without color conversion (for debug/parsing)
+    gline2Raw: '',   // Raw guild line without color conversion (for debug/parsing)
+    uptime: '',      // Server uptime (AAF)
+    reboot: ''       // Time until reboot (AAC)
   };
 
   // Parse MIP message and send updates to client
@@ -236,9 +238,42 @@ wss.on('connection', (ws, req) => {
         }
         break;
 
+      case 'AAC': // Reboot time (seconds until reboot)
+        {
+          const seconds = parseInt(msgData) || 0;
+          if (seconds > 0) {
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            mipStats.reboot = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+          } else {
+            mipStats.reboot = '';
+          }
+          updated = true;
+        }
+        break;
+
+      case 'AAF': // Uptime (seconds since boot)
+        {
+          const seconds = parseInt(msgData) || 0;
+          if (seconds > 0) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            if (days > 0) {
+              mipStats.uptime = `${days}d ${hours}h`;
+            } else if (hours > 0) {
+              mipStats.uptime = `${hours}h ${mins}m`;
+            } else {
+              mipStats.uptime = `${mins}m`;
+            }
+          } else {
+            mipStats.uptime = '';
+          }
+          updated = true;
+        }
+        break;
+
       // Other MIP types we recognize but don't display
-      case 'AAC': // Reboot time
-      case 'AAF': // Uptime
       case 'BAE': // Mud lag
       case 'HAA': // Room items
       case 'HAB': // Item actions
