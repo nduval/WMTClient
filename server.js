@@ -394,6 +394,21 @@ wss.on('connection', (ws, req) => {
             // This is MIP data without the #K% prefix (fragmented)
             return;
           }
+
+          // Gag orphaned MIP action data fragments (from HAB item actions)
+          // These look like: "or~exa #N/search #N" or "noun~word~word~exa #N/search #N"
+          // The pattern is: optional word fragments, ~, words, ending with "#N/command #N"
+          if (/~exa\s+#N\/\w+\s+#N\s*$/.test(line)) {
+            return;
+          }
+          // Also catch lines that are just: "word~exa #N/search #N"
+          if (/^[a-z]+~[a-z]+\s+#N\/\w+\s+#N\s*$/.test(line)) {
+            return;
+          }
+          // Catch MIP action patterns like "#N/search #N" at end of lines
+          if (/\s#N\/\w+\s+#N\s*$/.test(line) && line.includes('~')) {
+            return;
+          }
         }
 
         // Process triggers
