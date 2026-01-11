@@ -440,31 +440,44 @@ wss.on('connection', (ws, req) => {
           // MIP lines start with #K% followed by the 5-digit session ID
           // Pattern: #K%<mipId><3-char-length><3-char-type><data>
           // Also handle lines that might have a leading "] " from the MUD
-          const mipPattern = new RegExp(`(?:^|\\] )#K%${mipId}(\\d{3})(\\w{3})(.*)`);
+          const mipPattern = new RegExp(`#K%${mipId}(\\d{3})(\\w{3})`);
           const match = line.match(mipPattern);
           if (match) {
-            // Parse MIP data and send to client
+            const mipLength = parseInt(match[1], 10);
             const msgType = match[2];
-            const msgData = match[3];
+            const mipStart = match.index;
+            const dataStart = mipStart + 5 + 3 + 3; // #K% + mipId + length + type
+            const msgData = line.substring(dataStart, dataStart + mipLength);
+
+            // Parse MIP data and send to client
             parseMipMessage(ws, msgType, msgData);
 
-            // Check if there's text before the MIP marker that should be shown
-            const mipIndex = line.indexOf('#K%');
-            if (mipIndex > 0) {
-              const beforeMip = line.substring(0, mipIndex).trim();
-              if (beforeMip && beforeMip !== ']') {
-                const processed = processTriggers(beforeMip, triggers);
-                if (!processed.gag) {
-                  ws.send(JSON.stringify({
-                    type: 'mud',
-                    line: processed.line,
-                    highlight: processed.highlight,
-                    sound: processed.sound
-                  }));
-                }
+            // Get text before and after the MIP marker
+            const beforeMip = line.substring(0, mipStart).trim();
+            const afterMip = line.substring(dataStart + mipLength).trim();
+
+            // Combine before and after text
+            let displayText = '';
+            if (beforeMip && beforeMip !== ']') {
+              displayText = beforeMip;
+            }
+            if (afterMip) {
+              displayText = displayText ? displayText + afterMip : afterMip;
+            }
+
+            // Send combined text if any
+            if (displayText) {
+              const processed = processTriggers(displayText, triggers);
+              if (!processed.gag) {
+                ws.send(JSON.stringify({
+                  type: 'mud',
+                  line: processed.line,
+                  highlight: processed.highlight,
+                  sound: processed.sound
+                }));
               }
             }
-            // Silently gag MIP protocol lines - don't show in output
+            // Silently gag MIP protocol portion
             return;
           }
 
