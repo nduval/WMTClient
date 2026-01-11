@@ -243,17 +243,35 @@ wss.on('connection', (ws, req) => {
   function convertMipColors(text) {
     if (!text) return '';
 
-    let result = text;
-    // Color mappings from mip.tin
-    result = result.replace(/<b/g, '<span style="color:#4488ff">');
-    result = result.replace(/<c/g, '<span style="color:#44dddd">');
-    result = result.replace(/<g/g, '<span style="color:#44dd44">');
-    result = result.replace(/<r/g, '<span style="color:#ff4444">');
-    result = result.replace(/<s/g, '<span style="color:#888888">');
-    result = result.replace(/<v/g, '<span style="color:#dd44dd">');
-    result = result.replace(/<w/g, '<span style="color:#ffffff">');
-    result = result.replace(/<y/g, '<span style="color:#dddd44">');
-    result = result.replace(/>/g, '</span>');
+    // Color map for MIP codes
+    const colorMap = {
+      'b': '#4488ff',  // blue
+      'c': '#44dddd',  // cyan
+      'g': '#44dd44',  // green
+      'r': '#ff4444',  // red
+      's': '#888888',  // gray (silver)
+      'v': '#dd44dd',  // violet
+      'w': '#ffffff',  // white
+      'y': '#dddd44'   // yellow
+    };
+
+    let result = '';
+    let i = 0;
+
+    while (i < text.length) {
+      if (text[i] === '<' && i + 1 < text.length && colorMap[text[i + 1]]) {
+        // MIP color code: <r, <g, etc.
+        result += `<span style="color:${colorMap[text[i + 1]]}">`;
+        i += 2;
+      } else if (text[i] === '>') {
+        // MIP reset code
+        result += '</span>';
+        i += 1;
+      } else {
+        result += text[i];
+        i += 1;
+      }
+    }
 
     return result;
   }
