@@ -122,8 +122,10 @@ wss.on('connection', (ws, req) => {
     round: 0,
     room: '',
     exits: '',
-    gline1: '',  // Primary guild line
-    gline2: ''   // Secondary guild line
+    gline1: '',      // Primary guild line (raw HTML with colors)
+    gline2: '',      // Secondary guild line (raw HTML with colors)
+    gline1Raw: '',   // Raw guild line without color conversion (for debug/parsing)
+    gline2Raw: ''    // Raw guild line without color conversion (for debug/parsing)
   };
 
   // Parse MIP message and send updates to client
@@ -220,8 +222,14 @@ wss.on('connection', (ws, req) => {
           case 'H': mipStats.gp2.max = parseInt(value) || 0; break;
           case 'L': mipStats.enemy = parseInt(value) || 0; break;
           case 'N': mipStats.round = parseInt(value) || 0; break;
-          case 'I': mipStats.gline1 = convertMipColors(value); break;
-          case 'J': mipStats.gline2 = convertMipColors(value); break;
+          case 'I':
+            mipStats.gline1Raw = value;  // Store raw for debugging
+            mipStats.gline1 = convertMipColors(value);
+            break;
+          case 'J':
+            mipStats.gline2Raw = value;  // Store raw for debugging
+            mipStats.gline2 = convertMipColors(value);
+            break;
         }
         i += 2; // Skip flag and value
       } else {
