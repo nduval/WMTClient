@@ -109,6 +109,10 @@ wss.on('connection', (ws, req) => {
   let triggers = [];
   let aliases = [];
 
+  // MIP (MUD Interface Protocol) state
+  let mipEnabled = false;
+  let mipId = null;
+
   // Function to create and connect MUD socket with all handlers
   function connectToMud() {
     // Clean up existing socket if any
@@ -140,6 +144,18 @@ wss.on('connection', (ws, req) => {
 
       lines.forEach(line => {
         if (line.trim() === '') return;
+
+        // Built-in MIP gag: filter out MIP protocol lines when MIP is enabled
+        if (mipEnabled && mipId) {
+          // MIP lines start with #K% followed by the 5-digit session ID
+          // Pattern: #K%<mipId><3-char-length><3-char-type><data>
+          // Also handle lines that might have a leading "] " from the MUD
+          const mipPattern = new RegExp(`^(?:\\] )?#K%${mipId}`);
+          if (mipPattern.test(line)) {
+            // Silently gag MIP protocol lines - don't show in output
+            return;
+          }
+        }
 
         // Process triggers
         const processed = processTriggers(line, triggers);
@@ -216,6 +232,12 @@ wss.on('connection', (ws, req) => {
 
         case 'set_aliases':
           aliases = data.aliases || [];
+          break;
+
+        case 'set_mip':
+          mipEnabled = data.enabled || false;
+          mipId = data.mipId || null;
+          console.log(`MIP ${mipEnabled ? 'enabled' : 'disabled'}${mipId ? ' (ID: ' + mipId + ')' : ''}`);
           break;
 
         case 'keepalive':
