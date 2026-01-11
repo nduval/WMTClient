@@ -155,7 +155,13 @@ wss.on('connection', (ws, req) => {
 
         // Execute trigger commands
         processed.commands.forEach(cmd => {
-          if (mudSocket && !mudSocket.destroyed) {
+          if (cmd.startsWith('#')) {
+            // Client-side command - send back to client for execution
+            ws.send(JSON.stringify({
+              type: 'client_command',
+              command: cmd
+            }));
+          } else if (mudSocket && !mudSocket.destroyed) {
             mudSocket.write(cmd + '\r\n');
           }
         });
@@ -619,7 +625,31 @@ function processTriggers(line, triggers) {
             result.gag = true;
             break;
           case 'highlight':
-            result.highlight = action.color || '#ffff00';
+            // Apply inline highlighting to matched text
+            const fgColor = action.fgColor || action.color || null;
+            const bgColor = action.bgColor || null;
+
+            if (fgColor || bgColor) {
+              let styleStr = '';
+              if (fgColor) styleStr += `color:${fgColor};`;
+              if (bgColor) styleStr += `background:${bgColor};`;
+
+              // Find what to highlight based on match type
+              let searchPattern;
+              if (trigger.matchType === 'regex') {
+                searchPattern = new RegExp(`(${trigger.pattern})`, 'gi');
+              } else if (trigger.matchType === 'tintin') {
+                const regexPattern = tinTinToRegex(trigger.pattern);
+                searchPattern = new RegExp(`(${regexPattern})`, 'gi');
+              } else {
+                // Escape special regex chars for literal match
+                const escaped = trigger.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                searchPattern = new RegExp(`(${escaped})`, 'gi');
+              }
+
+              // Wrap matched text in styled span
+              result.line = result.line.replace(searchPattern, `<hl style="${styleStr}">$1</hl>`);
+            }
             break;
           case 'command':
             let cmd = action.command || '';
