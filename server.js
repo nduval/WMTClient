@@ -112,6 +112,7 @@ wss.on('connection', (ws, req) => {
   // MIP (MUD Interface Protocol) state
   let mipEnabled = false;
   let mipId = null;
+  let mipDebug = false;  // Echo raw MIP data to client
   let mipStats = {
     hp: { current: 0, max: 0, label: 'HP' },
     sp: { current: 0, max: 0, label: 'SP' },
@@ -120,12 +121,23 @@ wss.on('connection', (ws, req) => {
     enemy: 0,
     round: 0,
     room: '',
-    exits: ''
+    exits: '',
+    gline1: '',  // Primary guild line
+    gline2: ''   // Secondary guild line
   };
 
   // Parse MIP message and send updates to client
   function parseMipMessage(ws, msgType, msgData) {
     let updated = false;
+
+    // If debug mode, send raw MIP data to client
+    if (mipDebug) {
+      ws.send(JSON.stringify({
+        type: 'mip_debug',
+        msgType: msgType,
+        msgData: msgData
+      }));
+    }
 
     switch (msgType) {
       case 'FFF': // Combined stats data
@@ -184,31 +196,58 @@ wss.on('connection', (ws, req) => {
   }
 
   // Parse FFF stats string: A~value~B~value~...
+  // Guild lines (I, J) can contain complex strings with embedded ~, so we handle them specially
   function parseFFFStats(data) {
+    // Split by ~ but track position for guild lines
     const parts = data.split('~');
-    let currentFlag = null;
+    let i = 0;
 
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
+    while (i < parts.length) {
+      const flag = parts[i];
 
-      if (part.length === 1 && /[A-Z]/.test(part)) {
-        currentFlag = part;
-      } else if (currentFlag && part !== '') {
-        switch (currentFlag) {
-          case 'A': mipStats.hp.current = parseInt(part) || 0; break;
-          case 'B': mipStats.hp.max = parseInt(part) || 0; break;
-          case 'C': mipStats.sp.current = parseInt(part) || 0; break;
-          case 'D': mipStats.sp.max = parseInt(part) || 0; break;
-          case 'E': mipStats.gp1.current = parseInt(part) || 0; break;
-          case 'F': mipStats.gp1.max = parseInt(part) || 0; break;
-          case 'G': mipStats.gp2.current = parseInt(part) || 0; break;
-          case 'H': mipStats.gp2.max = parseInt(part) || 0; break;
-          case 'L': mipStats.enemy = parseInt(part) || 0; break;
-          case 'N': mipStats.round = parseInt(part) || 0; break;
+      // Check if this is a single-letter flag
+      if (flag.length === 1 && /[A-Z]/.test(flag)) {
+        const value = parts[i + 1] || '';
+
+        switch (flag) {
+          case 'A': mipStats.hp.current = parseInt(value) || 0; break;
+          case 'B': mipStats.hp.max = parseInt(value) || 0; break;
+          case 'C': mipStats.sp.current = parseInt(value) || 0; break;
+          case 'D': mipStats.sp.max = parseInt(value) || 0; break;
+          case 'E': mipStats.gp1.current = parseInt(value) || 0; break;
+          case 'F': mipStats.gp1.max = parseInt(value) || 0; break;
+          case 'G': mipStats.gp2.current = parseInt(value) || 0; break;
+          case 'H': mipStats.gp2.max = parseInt(value) || 0; break;
+          case 'L': mipStats.enemy = parseInt(value) || 0; break;
+          case 'N': mipStats.round = parseInt(value) || 0; break;
+          case 'I': mipStats.gline1 = convertMipColors(value); break;
+          case 'J': mipStats.gline2 = convertMipColors(value); break;
         }
-        currentFlag = null;
+        i += 2; // Skip flag and value
+      } else {
+        i++; // Skip empty or unknown parts
       }
     }
+  }
+
+  // Convert MIP color codes to HTML spans
+  // MIP uses: <r (red), <g (green), <b (blue), <c (cyan), <y (yellow), <v (violet), <w (white), <s (gray), > (reset)
+  function convertMipColors(text) {
+    if (!text) return '';
+
+    let result = text;
+    // Color mappings from mip.tin
+    result = result.replace(/<b/g, '<span style="color:#4488ff">');
+    result = result.replace(/<c/g, '<span style="color:#44dddd">');
+    result = result.replace(/<g/g, '<span style="color:#44dd44">');
+    result = result.replace(/<r/g, '<span style="color:#ff4444">');
+    result = result.replace(/<s/g, '<span style="color:#888888">');
+    result = result.replace(/<v/g, '<span style="color:#dd44dd">');
+    result = result.replace(/<w/g, '<span style="color:#ffffff">');
+    result = result.replace(/<y/g, '<span style="color:#dddd44">');
+    result = result.replace(/>/g, '</span>');
+
+    return result;
   }
 
   // Function to create and connect MUD socket with all handlers
@@ -340,7 +379,8 @@ wss.on('connection', (ws, req) => {
         case 'set_mip':
           mipEnabled = data.enabled || false;
           mipId = data.mipId || null;
-          console.log(`MIP ${mipEnabled ? 'enabled' : 'disabled'}${mipId ? ' (ID: ' + mipId + ')' : ''}`);
+          mipDebug = data.debug || false;
+          console.log(`MIP ${mipEnabled ? 'enabled' : 'disabled'}${mipId ? ' (ID: ' + mipId + ')' : ''}${mipDebug ? ' [DEBUG]' : ''}`);
           break;
 
         case 'keepalive':
