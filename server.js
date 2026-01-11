@@ -298,8 +298,10 @@ wss.on('connection', (ws, req) => {
   // Parse FFF stats string: A~value~B~value~...
   // Guild lines (I, J) can contain complex strings with embedded ~, so we handle them specially
   function parseFFFStats(data) {
+    console.log('parseFFFStats input:', data);
     // Split by ~ but track position for guild lines
     const parts = data.split('~');
+    console.log('parseFFFStats parts:', parts);
     let i = 0;
 
     while (i < parts.length) {
