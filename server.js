@@ -446,7 +446,7 @@ wss.on('connection', (ws, req) => {
             const mipLength = parseInt(match[1], 10);
             const msgType = match[2];
             const mipStart = match.index;
-            const dataStart = mipStart + 5 + 3 + 3; // #K% + mipId + length + type
+            const dataStart = mipStart + 3 + 5 + 3 + 3; // #K%(3) + mipId(5) + length(3) + type(3) = 14
             const msgData = line.substring(dataStart, dataStart + mipLength);
 
             // Parse MIP data and send to client
