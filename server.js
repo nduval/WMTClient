@@ -447,6 +447,14 @@ wss.on('connection', (ws, req) => {
           if (/\s#N\/\w+\s+#N\s*$/.test(line) && line.includes('~')) {
             return;
           }
+          // Catch short orphaned fragments ending in #N (e.g., "earch #N" from split "#N/search #N")
+          if (/^[a-z]+\s+#N\s*$/.test(line) && line.length < 20) {
+            return;
+          }
+          // Catch fragments that are just "#N" or start with "#N"
+          if (/^#N(\/\w+)?\s*(#N)?\s*$/.test(line)) {
+            return;
+          }
         }
 
         // Process triggers
