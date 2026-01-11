@@ -113,6 +113,7 @@ wss.on('connection', (ws, req) => {
   let mipEnabled = false;
   let mipId = null;
   let mipDebug = false;  // Echo raw MIP data to client
+  let mipBuffer = '';    // Buffer for incomplete MIP lines (TCP fragmentation)
   let mipStats = {
     hp: { current: 0, max: 0, label: 'HP' },
     sp: { current: 0, max: 0, label: 'SP' },
@@ -328,17 +329,69 @@ wss.on('connection', (ws, req) => {
 
         // Built-in MIP gag: filter out MIP protocol lines when MIP is enabled
         if (mipEnabled && mipId) {
+          // Handle TCP fragmentation - if we have buffered data, prepend it
+          if (mipBuffer) {
+            line = mipBuffer + line;
+            mipBuffer = '';
+          }
+
+          // Check if line ends with partial MIP marker (fragmented packet)
+          // Buffer lines ending with #K% or #K%<partial>
+          if (line.endsWith('#K%') || (line.includes('#K%') && line.indexOf('#K%') > line.length - 20)) {
+            const mipStart = line.lastIndexOf('#K%');
+            // Send the part before the MIP marker
+            const beforeMip = line.substring(0, mipStart);
+            if (beforeMip.trim()) {
+              const processed = processTriggers(beforeMip, triggers);
+              if (!processed.gag) {
+                ws.send(JSON.stringify({
+                  type: 'mud',
+                  line: processed.line,
+                  highlight: processed.highlight,
+                  sound: processed.sound
+                }));
+              }
+            }
+            // Buffer the MIP part for next chunk
+            mipBuffer = line.substring(mipStart);
+            return;
+          }
+
           // MIP lines start with #K% followed by the 5-digit session ID
           // Pattern: #K%<mipId><3-char-length><3-char-type><data>
           // Also handle lines that might have a leading "] " from the MUD
-          const mipPattern = new RegExp(`^(?:\\] )?#K%${mipId}(\\d{3})(\\w{3})(.*)`);
+          const mipPattern = new RegExp(`(?:^|\\] )#K%${mipId}(\\d{3})(\\w{3})(.*)`);
           const match = line.match(mipPattern);
           if (match) {
             // Parse MIP data and send to client
             const msgType = match[2];
             const msgData = match[3];
             parseMipMessage(ws, msgType, msgData);
+
+            // Check if there's text before the MIP marker that should be shown
+            const mipIndex = line.indexOf('#K%');
+            if (mipIndex > 0) {
+              const beforeMip = line.substring(0, mipIndex).trim();
+              if (beforeMip && beforeMip !== ']') {
+                const processed = processTriggers(beforeMip, triggers);
+                if (!processed.gag) {
+                  ws.send(JSON.stringify({
+                    type: 'mud',
+                    line: processed.line,
+                    highlight: processed.highlight,
+                    sound: processed.sound
+                  }));
+                }
+              }
+            }
             // Silently gag MIP protocol lines - don't show in output
+            return;
+          }
+
+          // Also gag any line that looks like raw MIP data (starts with mipId + 3 digits + 3 letters)
+          const rawMipPattern = new RegExp(`^${mipId}\\d{3}[A-Z]{3}`);
+          if (rawMipPattern.test(line)) {
+            // This is MIP data without the #K% prefix (fragmented)
             return;
           }
         }
