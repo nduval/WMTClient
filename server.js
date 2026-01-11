@@ -112,6 +112,104 @@ wss.on('connection', (ws, req) => {
   // MIP (MUD Interface Protocol) state
   let mipEnabled = false;
   let mipId = null;
+  let mipStats = {
+    hp: { current: 0, max: 0, label: 'HP' },
+    sp: { current: 0, max: 0, label: 'SP' },
+    gp1: { current: 0, max: 0, label: 'GP1' },
+    gp2: { current: 0, max: 0, label: 'GP2' },
+    enemy: 0,
+    round: 0,
+    room: '',
+    exits: ''
+  };
+
+  // Parse MIP message and send updates to client
+  function parseMipMessage(ws, msgType, msgData) {
+    let updated = false;
+
+    switch (msgType) {
+      case 'FFF': // Combined stats data
+        parseFFFStats(msgData);
+        updated = true;
+        break;
+
+      case 'BAD': // Room description/name
+        mipStats.room = msgData.trim();
+        updated = true;
+        break;
+
+      case 'DDD': // Room exits (tilde-separated)
+        mipStats.exits = msgData.replace(/~/g, ', ');
+        updated = true;
+        break;
+
+      case 'BBA': // GP1 label
+        mipStats.gp1.label = msgData.trim() || 'GP1';
+        updated = true;
+        break;
+
+      case 'BBB': // GP2 label
+        mipStats.gp2.label = msgData.trim() || 'GP2';
+        updated = true;
+        break;
+
+      case 'BBC': // HP label
+        mipStats.hp.label = msgData.trim() || 'HP';
+        updated = true;
+        break;
+
+      case 'BBD': // SP label
+        mipStats.sp.label = msgData.trim() || 'SP';
+        updated = true;
+        break;
+
+      // Other MIP types we recognize but don't display
+      case 'AAC': // Reboot time
+      case 'AAF': // Uptime
+      case 'BAE': // Mud lag
+      case 'HAA': // Room items
+      case 'HAB': // Item actions
+      case 'BAB': // 2-way comms (tells)
+      case 'CAA': // Chat messages
+        // Silently ignore these for now
+        break;
+    }
+
+    if (updated) {
+      ws.send(JSON.stringify({
+        type: 'mip_stats',
+        stats: mipStats
+      }));
+    }
+  }
+
+  // Parse FFF stats string: A~value~B~value~...
+  function parseFFFStats(data) {
+    const parts = data.split('~');
+    let currentFlag = null;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+
+      if (part.length === 1 && /[A-Z]/.test(part)) {
+        currentFlag = part;
+      } else if (currentFlag && part !== '') {
+        switch (currentFlag) {
+          case 'A': mipStats.hp.current = parseInt(part) || 0; break;
+          case 'B': mipStats.hp.max = parseInt(part) || 0; break;
+          case 'C': mipStats.sp.current = parseInt(part) || 0; break;
+          case 'D': mipStats.sp.max = parseInt(part) || 0; break;
+          case 'E': mipStats.gp1.current = parseInt(part) || 0; break;
+          case 'F': mipStats.gp1.max = parseInt(part) || 0; break;
+          case 'G': mipStats.gp2.current = parseInt(part) || 0; break;
+          case 'H': mipStats.gp2.max = parseInt(part) || 0; break;
+          case 'L': mipStats.enemy = parseInt(part) || 0; break;
+          case 'N': mipStats.round = parseInt(part) || 0; break;
+        }
+        currentFlag = null;
+      }
+    }
+  }
 
   // Function to create and connect MUD socket with all handlers
   function connectToMud() {
@@ -150,8 +248,13 @@ wss.on('connection', (ws, req) => {
           // MIP lines start with #K% followed by the 5-digit session ID
           // Pattern: #K%<mipId><3-char-length><3-char-type><data>
           // Also handle lines that might have a leading "] " from the MUD
-          const mipPattern = new RegExp(`^(?:\\] )?#K%${mipId}`);
-          if (mipPattern.test(line)) {
+          const mipPattern = new RegExp(`^(?:\\] )?#K%${mipId}(\\d{3})(\\w{3})(.*)`);
+          const match = line.match(mipPattern);
+          if (match) {
+            // Parse MIP data and send to client
+            const msgType = match[2];
+            const msgData = match[3];
+            parseMipMessage(ws, msgType, msgData);
             // Silently gag MIP protocol lines - don't show in output
             return;
           }
