@@ -179,23 +179,61 @@ wss.on('connection', (ws, req) => {
         break;
 
       case 'BAB': // 2-way comms (tells)
-        // Format: sender~message
-        ws.send(JSON.stringify({
-          type: 'mip_chat',
-          chatType: 'tell',
-          raw: msgData,
-          message: convertMipColors(msgData)
-        }));
+        // Format: ~sender~message (received) or x~recipient~message (sent)
+        {
+          const parts = msgData.split('~');
+          let formatted;
+          if (parts[0] === '' && parts.length >= 3) {
+            // Received tell: ~Sender~message
+            const sender = parts[1];
+            const message = parts.slice(2).join('~');
+            formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
+          } else if (parts[0] === 'x' && parts.length >= 3) {
+            // Sent tell: x~Recipient~message
+            const recipient = parts[1];
+            const message = parts.slice(2).join('~');
+            formatted = `<span style="color:#88ff88">[To ${recipient}]:</span> ${convertMipColors(message)}`;
+          } else {
+            // Unknown format, show as-is
+            formatted = convertMipColors(msgData);
+          }
+          ws.send(JSON.stringify({
+            type: 'mip_chat',
+            chatType: 'tell',
+            raw: msgData,
+            message: formatted
+          }));
+        }
         break;
 
       case 'CAA': // Chat channel messages
-        // Format: channel~sender~message or similar
-        ws.send(JSON.stringify({
-          type: 'mip_chat',
-          chatType: 'channel',
-          raw: msgData,
-          message: convertMipColors(msgData)
-        }));
+        // Format: channel~group~sender~message (e.g., flapchat~Flappers~Beowulf~Beowulf flaps : meep)
+        {
+          const parts = msgData.split('~');
+          let formatted;
+          if (parts.length >= 4) {
+            // Full format: channel~group~sender~message
+            const channel = parts[0];
+            // parts[1] is group/guild name, often redundant
+            // parts[2] is sender name
+            const message = parts.slice(3).join('~');
+            formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
+          } else if (parts.length >= 2) {
+            // Simpler format: channel~message
+            const channel = parts[0];
+            const message = parts.slice(1).join('~');
+            formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
+          } else {
+            // Unknown format
+            formatted = convertMipColors(msgData);
+          }
+          ws.send(JSON.stringify({
+            type: 'mip_chat',
+            chatType: 'channel',
+            raw: msgData,
+            message: formatted
+          }));
+        }
         break;
 
       // Other MIP types we recognize but don't display
