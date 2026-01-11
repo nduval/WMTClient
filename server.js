@@ -120,6 +120,7 @@ wss.on('connection', (ws, req) => {
     gp1: { current: 0, max: 0, label: 'GP1' },
     gp2: { current: 0, max: 0, label: 'GP2' },
     enemy: 0,
+    enemyName: '',   // Attacker name from K code
     round: 0,
     room: '',
     exits: '',
@@ -317,6 +318,7 @@ wss.on('connection', (ws, req) => {
           case 'F': mipStats.gp1.max = parseInt(value) || 0; break;
           case 'G': mipStats.gp2.current = parseInt(value) || 0; break;
           case 'H': mipStats.gp2.max = parseInt(value) || 0; break;
+          case 'K': mipStats.enemyName = value.trim(); break;
           case 'L': mipStats.enemy = parseInt(value) || 0; break;
           case 'N': mipStats.round = parseInt(value) || 0; break;
           case 'I':
