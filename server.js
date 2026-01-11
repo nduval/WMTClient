@@ -243,7 +243,10 @@ wss.on('connection', (ws, req) => {
 
 /**
  * Convert TinTin++ pattern to JavaScript regex
- * Supports: %*, %+, %d, %w, %s, %., %1-%99, ^, $, \\%
+ * Full TinTin++ regexp support including:
+ * %*, %+, %?, %., %d, %D, %w, %W, %s, %S, %a, %A, %c, %p, %P, %u, %U
+ * %1-%99 capture groups, %!prefix for non-capturing, %i/%I for case
+ * Range specifiers: %+1..5d (1-5 digits)
  */
 function tinTinToRegex(pattern) {
   let result = '';
@@ -267,50 +270,113 @@ function tinTinToRegex(pattern) {
     } else if (char === '%') {
       // TinTin++ wildcard
       if (i + 1 < pattern.length) {
-        const next = pattern[i + 1];
+        let next = pattern[i + 1];
+        let nonCapturing = false;
+
+        // Check for %! (non-capturing prefix)
+        if (next === '!' && i + 2 < pattern.length) {
+          nonCapturing = true;
+          next = pattern[i + 2];
+          i += 1; // Skip the !
+        }
+
+        const groupStart = nonCapturing ? '(?:' : '(';
+
+        // Check for range specifier: %+1..5d or %+3s etc
+        if (next === '+' && i + 2 < pattern.length) {
+          const rangeMatch = pattern.slice(i + 2).match(/^(\d+)(?:\.\.(\d+))?([dDwWsSaApPuU])?/);
+          if (rangeMatch) {
+            const min = rangeMatch[1];
+            const max = rangeMatch[2] || min;
+            const type = rangeMatch[3] || '.';
+            const charClass = getCharClass(type);
+            result += `${groupStart}${charClass}{${min},${max}})`;
+            i += 2 + rangeMatch[0].length;
+            continue;
+          }
+        }
 
         if (next === '*') {
           // %* - Zero or more characters (non-greedy, no newlines)
-          result += '(.*?)';
+          result += groupStart + '.*?)';
           i += 2;
         } else if (next === '+') {
           // %+ - One or more characters (non-greedy)
-          result += '(.+?)';
+          result += groupStart + '.+?)';
           i += 2;
-        } else if (next === 'd') {
-          // %d - Zero or more digits
-          result += '([0-9]*?)';
-          i += 2;
-        } else if (next === 'w') {
-          // %w - Zero or more word characters
-          result += '([A-Za-z0-9_]*?)';
-          i += 2;
-        } else if (next === 's') {
-          // %s - Zero or more whitespace
-          result += '([\\r\\n\\t ]*?)';
+        } else if (next === '?') {
+          // %? - Zero or one character
+          result += groupStart + '.?)';
           i += 2;
         } else if (next === '.') {
           // %. - Exactly one character
-          result += '(.)';
+          result += groupStart + '.)';
+          i += 2;
+        } else if (next === 'd') {
+          // %d - Zero or more digits
+          result += groupStart + '[0-9]*?)';
+          i += 2;
+        } else if (next === 'D') {
+          // %D - Zero or more non-digits
+          result += groupStart + '[^0-9]*?)';
+          i += 2;
+        } else if (next === 'w') {
+          // %w - Zero or more word characters
+          result += groupStart + '[A-Za-z0-9_]*?)';
+          i += 2;
+        } else if (next === 'W') {
+          // %W - Zero or more non-word characters
+          result += groupStart + '[^A-Za-z0-9_]*?)';
+          i += 2;
+        } else if (next === 's') {
+          // %s - Zero or more whitespace
+          result += groupStart + '\\s*?)';
+          i += 2;
+        } else if (next === 'S') {
+          // %S - Zero or more non-whitespace
+          result += groupStart + '\\S*?)';
           i += 2;
         } else if (next === 'a') {
           // %a - Zero or more characters including newlines
-          result += '([\\s\\S]*?)';
+          result += groupStart + '[\\s\\S]*?)';
+          i += 2;
+        } else if (next === 'A') {
+          // %A - Zero or more newlines
+          result += groupStart + '[\\r\\n]*?)';
+          i += 2;
+        } else if (next === 'c') {
+          // %c - Zero or more ANSI color codes (escape sequences)
+          result += groupStart + '(?:\\x1b\\[[0-9;]*m)*?)';
+          i += 2;
+        } else if (next === 'p') {
+          // %p - Zero or more printable characters
+          result += groupStart + '[\\x20-\\x7E]*?)';
+          i += 2;
+        } else if (next === 'P') {
+          // %P - Zero or more non-printable characters
+          result += groupStart + '[^\\x20-\\x7E]*?)';
+          i += 2;
+        } else if (next === 'u') {
+          // %u - Zero or more unicode (any char)
+          result += groupStart + '.*?)';
+          i += 2;
+        } else if (next === 'U') {
+          // %U - Zero or more non-unicode (ASCII only)
+          result += groupStart + '[\\x00-\\x7F]*?)';
+          i += 2;
+        } else if (next === 'i' || next === 'I') {
+          // %i / %I - Case sensitivity flags (handled at regex level, skip here)
           i += 2;
         } else if (next >= '0' && next <= '9') {
-          // %1-%99 - Capture group reference (just becomes a capture group)
-          // Parse multi-digit numbers
-          let num = '';
+          // %1-%99 - Capture group reference (becomes a capture group)
           let j = i + 1;
           while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
-            num += pattern[j];
             j++;
           }
-          // In TinTin++, %1-%99 in patterns are capture groups
           result += '(.+?)';
           i = j;
         } else {
-          // Unknown % sequence, escape it
+          // Unknown % sequence, treat as literal
           result += '%';
           i += 1;
         }
@@ -335,6 +401,27 @@ function tinTinToRegex(pattern) {
   }
 
   return result;
+}
+
+/**
+ * Get character class for range specifiers
+ */
+function getCharClass(type) {
+  switch (type) {
+    case 'd': return '[0-9]';
+    case 'D': return '[^0-9]';
+    case 'w': return '[A-Za-z0-9_]';
+    case 'W': return '[^A-Za-z0-9_]';
+    case 's': return '\\s';
+    case 'S': return '\\S';
+    case 'a': return '[\\s\\S]';
+    case 'A': return '[\\r\\n]';
+    case 'p': return '[\\x20-\\x7E]';
+    case 'P': return '[^\\x20-\\x7E]';
+    case 'u': return '.';
+    case 'U': return '[\\x00-\\x7F]';
+    default: return '.';
+  }
 }
 
 /**
