@@ -10,7 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.1.0'; // Added for deploy verification
+const VERSION = '1.1.1'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -591,24 +591,10 @@ wss.on('connection', (ws, req) => {
           }
         }
 
-        // Final safety net: catch any remaining MIP protocol data
+        // Final safety net: gag any line containing MIP protocol data
         // Pattern: %<5digits><3digits><3uppercase> anywhere in line
-        const finalMipCheck = /%\d{5}\d{3}[A-Z]{3}/;
-        if (finalMipCheck.test(line)) {
-          // Strip the MIP data from the line
-          // Match pattern + following data based on length field
-          const mipMatch = line.match(/%(\d{5})(\d{3})([A-Z]{3})/);
-          if (mipMatch) {
-            const len = parseInt(mipMatch[2], 10);
-            const fullPattern = mipMatch[0];
-            const startIdx = mipMatch.index;
-            const dataEnd = startIdx + fullPattern.length + len;
-            const cleanLine = line.substring(0, startIdx) + line.substring(dataEnd);
-            if (!cleanLine.trim()) {
-              return; // Nothing left after stripping
-            }
-            line = cleanLine;
-          }
+        if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
+          return; // Gag entire line containing MIP data
         }
 
         // Process triggers
