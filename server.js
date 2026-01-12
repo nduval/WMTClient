@@ -10,7 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.2.0'; // Added for deploy verification
+const VERSION = '1.2.1'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -112,6 +112,7 @@ wss.on('connection', (ws, req) => {
 
   // TCP line buffer - accumulate data until we see newlines
   let lineBuffer = '';
+  let lineBufferTimeout = null;
 
   // MIP (MUD Interface Protocol) state
   let mipEnabled = false;
@@ -402,26 +403,8 @@ wss.on('connection', (ws, req) => {
       }));
     });
 
-    mudSocket.on('data', (data) => {
-      // Strip telnet control sequences before converting to text
-      const cleanData = stripTelnetSequences(data);
-      const text = cleanData.toString('utf8');
-
-      // Prepend any buffered data from previous chunk
-      const fullText = lineBuffer + text;
-
-      // Split on newlines
-      const parts = fullText.split('\n');
-
-      // If the text didn't end with a newline, the last part is incomplete - buffer it
-      if (!text.endsWith('\n') && parts.length > 0) {
-        lineBuffer = parts.pop();
-      } else {
-        lineBuffer = '';
-      }
-
-      // Process complete lines
-      parts.forEach(line => {
+    // Function to process a single line (extracted for reuse with buffer flush)
+    function processLine(line) {
         if (line.trim() === '') return;
 
         // FIRST LINE OF DEFENSE: Gag ANY line containing MIP protocol pattern
@@ -652,7 +635,43 @@ wss.on('connection', (ws, req) => {
             mudSocket.write(cmd + '\r\n');
           }
         });
-      });
+    }
+
+    mudSocket.on('data', (data) => {
+      // Strip telnet control sequences before converting to text
+      const cleanData = stripTelnetSequences(data);
+      const text = cleanData.toString('utf8');
+
+      // Clear any pending buffer flush timeout since we got new data
+      if (lineBufferTimeout) {
+        clearTimeout(lineBufferTimeout);
+        lineBufferTimeout = null;
+      }
+
+      // Prepend any buffered data from previous chunk
+      const fullText = lineBuffer + text;
+
+      // Split on newlines
+      const parts = fullText.split('\n');
+
+      // If the text didn't end with a newline, the last part is incomplete - buffer it
+      if (!text.endsWith('\n') && parts.length > 0) {
+        lineBuffer = parts.pop();
+        // Set a timeout to flush the buffer (handles prompts without newlines)
+        if (lineBuffer) {
+          lineBufferTimeout = setTimeout(() => {
+            if (lineBuffer) {
+              processLine(lineBuffer);
+              lineBuffer = '';
+            }
+          }, 100); // Flush after 100ms of no new data
+        }
+      } else {
+        lineBuffer = '';
+      }
+
+      // Process complete lines
+      parts.forEach(line => processLine(line));
     });
 
     mudSocket.on('close', () => {
