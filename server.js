@@ -452,18 +452,14 @@ wss.on('connection', (ws, req) => {
             // Parse MIP data and send to client
             parseMipMessage(ws, msgType, msgData);
 
-            // Get text before and after the MIP marker
-            const beforeMip = line.substring(0, mipStart).trim();
-            const afterMip = line.substring(dataStart + mipLength).trim();
+            // Get text before and after the MIP marker (don't trim - preserve flow)
+            const beforeMip = line.substring(0, mipStart);
+            const afterMip = line.substring(dataStart + mipLength);
 
             // Combine before and after text
-            let displayText = '';
-            if (beforeMip && beforeMip !== ']') {
-              displayText = beforeMip;
-            }
-            if (afterMip) {
-              displayText = displayText ? displayText + afterMip : afterMip;
-            }
+            let displayText = beforeMip + afterMip;
+            // Remove leading "] " if present (MUD artifact)
+            displayText = displayText.replace(/^\]\s*/, '');
 
             // Send combined text if any
             if (displayText) {
@@ -481,11 +477,44 @@ wss.on('connection', (ws, req) => {
             return;
           }
 
-          // Also gag any line that looks like raw MIP data
-          // Format: %<mipId><length><type><data> or just <mipId><length><type><data>
+          // Also handle %<mipId> format (without #K prefix) embedded in text
+          const altMipPattern = new RegExp(`%${mipId}(\\d{3})([A-Z]{3})`);
+          const altMatch = line.match(altMipPattern);
+          if (altMatch) {
+            const mipLength = parseInt(altMatch[1], 10);
+            const msgType = altMatch[2];
+            const mipStart = altMatch.index;
+            const dataStart = mipStart + 1 + 5 + 3 + 3; // %(1) + mipId(5) + length(3) + type(3) = 12
+            const msgData = line.substring(dataStart, dataStart + mipLength);
+
+            // Parse MIP data and send to client
+            parseMipMessage(ws, msgType, msgData);
+
+            // Get text before and after the MIP marker
+            const beforeMip = line.substring(0, mipStart);
+            const afterMip = line.substring(dataStart + mipLength);
+
+            // Combine before and after text (no trim - preserve spacing)
+            const displayText = beforeMip + afterMip;
+
+            // Send combined text if any
+            if (displayText.trim()) {
+              const processed = processTriggers(displayText, triggers);
+              if (!processed.gag) {
+                ws.send(JSON.stringify({
+                  type: 'mud',
+                  line: processed.line,
+                  highlight: processed.highlight,
+                  sound: processed.sound
+                }));
+              }
+            }
+            return;
+          }
+
+          // Gag lines that are ONLY raw MIP data (no surrounding text)
           const rawMipPattern = new RegExp(`^%?${mipId}\\d{3}[A-Z]{3}`);
           if (rawMipPattern.test(line)) {
-            // This is MIP data without the #K% prefix (or with just %)
             return;
           }
 
