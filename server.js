@@ -116,6 +116,10 @@ wss.on('connection', (ws, req) => {
   let triggers = [];
   let aliases = [];
 
+  // Target MUD server (can be changed by client via set_server message)
+  let targetHost = MUD_HOST;
+  let targetPort = MUD_PORT;
+
   // TCP line buffer - accumulate data until we see newlines
   let lineBuffer = '';
   let lineBufferTimeout = null;
@@ -399,16 +403,16 @@ wss.on('connection', (ws, req) => {
 
     ws.send(JSON.stringify({
       type: 'system',
-      message: `Connecting to ${MUD_HOST}:${MUD_PORT}...`
+      message: `Connecting to ${targetHost}:${targetPort}...`
     }));
 
     mudSocket = new net.Socket();
 
-    mudSocket.connect(MUD_PORT, MUD_HOST, () => {
-      console.log('Connected to MUD');
+    mudSocket.connect(targetPort, targetHost, () => {
+      console.log(`Connected to MUD: ${targetHost}:${targetPort}`);
       ws.send(JSON.stringify({
         type: 'system',
-        message: `Connected to ${MUD_HOST}:${MUD_PORT}!`
+        message: `Connected to ${targetHost}:${targetPort}!`
       }));
     });
 
@@ -778,6 +782,35 @@ wss.on('connection', (ws, req) => {
           mipId = data.mipId || null;
           mipDebug = data.debug || false;
           console.log(`MIP ${mipEnabled ? 'enabled' : 'disabled'}${mipId ? ' (ID: ' + mipId + ')' : ''}${mipDebug ? ' [DEBUG]' : ''}`);
+          break;
+
+        case 'set_server':
+          // Allow client to specify target MUD server
+          // Valid servers: 3k.org:3000 (default), 3s.org:3200
+          if (data.host && data.port) {
+            // Security: only allow known servers
+            const allowedServers = [
+              { host: '3k.org', port: 3000 },
+              { host: '3s.org', port: 3200 }
+            ];
+            const isAllowed = allowedServers.some(s => s.host === data.host && s.port === data.port);
+            if (isAllowed) {
+              targetHost = data.host;
+              targetPort = data.port;
+              console.log(`Target server set to ${targetHost}:${targetPort}`);
+              // If already connected, reconnect to new server
+              if (mudSocket && !mudSocket.destroyed) {
+                mudSocket.destroy();
+              }
+              connectToMud();
+            } else {
+              console.log(`Rejected invalid server: ${data.host}:${data.port}`);
+              ws.send(JSON.stringify({
+                type: 'system',
+                message: `Invalid server: ${data.host}:${data.port}`
+              }));
+            }
+          }
           break;
 
         case 'keepalive':
