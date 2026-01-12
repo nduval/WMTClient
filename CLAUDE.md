@@ -160,6 +160,19 @@ mudSocket.on('data', (data) => {
 
 **Key insight:** TinTin++ works correctly because it buffers until newline. Our proxy must do the same.
 
+### Telnet GA (Go Ahead) for Prompts (v1.2.2+)
+
+**Problem:** With line buffering, prompts that don't end with newlines would be delayed until the 100ms timeout.
+
+**Solution:** Detect telnet GA (Go Ahead, IAC GA = 255 249) signal. GA means "I'm done sending, waiting for input" - perfect for flushing the buffer immediately for prompts.
+
+**Reference:** TinTin++ has a similar "packet patch" setting (0.5-1.0 seconds) for this issue. They also mention using GA/EOR to detect prompts.
+
+**Implementation:**
+- `stripTelnetSequences()` now returns `{ buffer, hasGA }`
+- When GA is detected, flush and process all buffered content immediately
+- Fallback 100ms timeout still exists for MUDs that don't send GA
+
 ### Key Files
 - `assets/js/app.js` - MIP enable/disable, stat bar updates, conditions
 - `glitch/server.js` - MIP message parsing (parseMipMessage, parseFFFStats)
