@@ -481,10 +481,11 @@ wss.on('connection', (ws, req) => {
             return;
           }
 
-          // Also gag any line that looks like raw MIP data (starts with mipId + 3 digits + 3 letters)
-          const rawMipPattern = new RegExp(`^${mipId}\\d{3}[A-Z]{3}`);
+          // Also gag any line that looks like raw MIP data
+          // Format: %<mipId><length><type><data> or just <mipId><length><type><data>
+          const rawMipPattern = new RegExp(`^%?${mipId}\\d{3}[A-Z]{3}`);
           if (rawMipPattern.test(line)) {
-            // This is MIP data without the #K% prefix (fragmented)
+            // This is MIP data without the #K% prefix (or with just %)
             return;
           }
 
