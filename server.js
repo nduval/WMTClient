@@ -590,6 +590,26 @@ wss.on('connection', (ws, req) => {
           }
         }
 
+        // Final safety net: catch any remaining MIP protocol data
+        // Pattern: %<5digits><3digits><3uppercase> anywhere in line
+        const finalMipCheck = /%\d{5}\d{3}[A-Z]{3}/;
+        if (finalMipCheck.test(line)) {
+          // Strip the MIP data from the line
+          // Match pattern + following data based on length field
+          const mipMatch = line.match(/%(\d{5})(\d{3})([A-Z]{3})/);
+          if (mipMatch) {
+            const len = parseInt(mipMatch[2], 10);
+            const fullPattern = mipMatch[0];
+            const startIdx = mipMatch.index;
+            const dataEnd = startIdx + fullPattern.length + len;
+            const cleanLine = line.substring(0, startIdx) + line.substring(dataEnd);
+            if (!cleanLine.trim()) {
+              return; // Nothing left after stripping
+            }
+            line = cleanLine;
+          }
+        }
+
         // Process triggers
         const processed = processTriggers(line, triggers);
 
