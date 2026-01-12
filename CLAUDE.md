@@ -253,3 +253,29 @@ If changes aren't taking effect, check that the version number updated. Render f
 ### Colors dropping mid-line
 1. Usually caused by line fragmentation - fix TCP buffering first
 2. ANSI codes are at line start; split lines lose color context
+
+### Multi-line colored blocks only show color on first line (v1.2.3+)
+
+**Problem:** Room descriptions or other multi-line content set to a color (e.g., `aset room_long yellow`) only showed color on the first line. Subsequent lines displayed in default color.
+
+**Root Cause:** The MUD sends one ANSI code at the start of the block, then multiple lines, then a reset. When we split by lines:
+- Line 1: `\x1b[33mThis is the center of Pinnacle...` → has color
+- Line 2: `street runs north and south...` → NO color code
+- Line 3: `the middle of the street.\x1b[0m` → has reset only
+
+**Solution:** Track ANSI state across lines:
+```javascript
+let currentAnsiState = '';
+
+// If line doesn't start with ANSI but we have state, prepend it
+if (!startsWithAnsi && currentAnsiState) {
+  line = currentAnsiState + line;
+}
+
+// Track state: update on color codes, clear on reset
+if (line.includes('\x1b[0m')) {
+  currentAnsiState = '';
+} else if (lastAnsiCode) {
+  currentAnsiState = lastAnsiCode;
+}
+```
