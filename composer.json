@@ -1,0 +1,17 @@
+{
+    "name": "wmt/client",
+    "description": "WMT Client - A web-based MUD client for 3k.org",
+    "type": "project",
+    "require": {
+        "php": ">=8.0",
+        "cboden/ratchet": "^0.4.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "WMT\\": "src/"
+        }
+    },
+    "scripts": {
+        "start-websocket": "php websocket/server.php"
+    }
+}

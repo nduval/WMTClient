@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Terminal window background -->
+  <rect x="2" y="4" width="28" height="24" rx="3" fill="#1a1a1a" stroke="#333" stroke-width="1"/>
+
+  <!-- Title bar -->
+  <rect x="2" y="4" width="28" height="6" rx="3" fill="#333"/>
+  <rect x="2" y="7" width="28" height="3" fill="#333"/>
+
+  <!-- Window buttons -->
+  <circle cx="6" cy="7" r="1.5" fill="#ff5f56"/>
+  <circle cx="10" cy="7" r="1.5" fill="#ffbd2e"/>
+  <circle cx="14" cy="7" r="1.5" fill="#27ca40"/>
+
+  <!-- Command prompt -->
+  <text x="5" y="18" font-family="monospace" font-size="7" fill="#00ff00">&gt;_</text>
+
+  <!-- Cursor blink effect - static green block -->
+  <rect x="17" y="13" width="4" height="6" fill="#00ff00" opacity="0.8"/>
+</svg>

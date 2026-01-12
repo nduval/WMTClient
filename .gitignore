@@ -1,0 +1,34 @@
+# Credentials - DO NOT COMMIT
+sftp.txt
+ssh_user.txt
+priv_key.txt
+github_token.txt
+
+# Dependencies
+/vendor/
+/glitch/node_modules/
+node_modules/
+
+# User data
+/data/users/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/
