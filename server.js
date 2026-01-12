@@ -513,8 +513,10 @@ wss.on('connection', (ws, req) => {
           }
 
           // Gag lines that are ONLY raw MIP data (no surrounding text)
+          // Match both specific mipId and generic pattern (for race conditions)
           const rawMipPattern = new RegExp(`^%?${mipId}\\d{3}[A-Z]{3}`);
-          if (rawMipPattern.test(line)) {
+          const genericMipPattern = /^%?\d{5}\d{3}[A-Z]{3}/;
+          if (rawMipPattern.test(line) || genericMipPattern.test(line)) {
             return;
           }
 
