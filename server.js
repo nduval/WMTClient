@@ -10,7 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.2.2'; // Added for deploy verification
+const VERSION = '1.2.3'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -119,6 +119,9 @@ wss.on('connection', (ws, req) => {
   // TCP line buffer - accumulate data until we see newlines
   let lineBuffer = '';
   let lineBufferTimeout = null;
+
+  // ANSI color state - track current color to apply to continuation lines
+  let currentAnsiState = '';
 
   // MIP (MUD Interface Protocol) state
   let mipEnabled = false;
@@ -615,6 +618,38 @@ wss.on('connection', (ws, req) => {
         // Pattern: %<5digits><3digits><3uppercase> anywhere in line
         if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
           return; // Gag entire line containing MIP data
+        }
+
+        // ANSI color state tracking for multi-line colored blocks
+        // If line doesn't start with ANSI code but we have a current state, prepend it
+        const ansiPattern = /\x1b\[([0-9;]+)m/g;
+        const startsWithAnsi = /^\x1b\[/.test(line);
+
+        if (!startsWithAnsi && currentAnsiState) {
+          // Prepend current color state to continuation lines
+          line = currentAnsiState + line;
+        }
+
+        // Extract all ANSI codes from line and track the final state
+        let match;
+        let lastAnsiCode = '';
+        while ((match = ansiPattern.exec(line)) !== null) {
+          const codes = match[1];
+          // Check if this is a reset code (0 or empty)
+          if (codes === '0' || codes === '') {
+            currentAnsiState = '';
+          } else {
+            // Store this as the current state
+            lastAnsiCode = match[0];
+          }
+        }
+        // If we found non-reset ANSI codes, update state
+        if (lastAnsiCode && !line.includes('\x1b[0m')) {
+          // Line has color but no reset - color continues to next line
+          currentAnsiState = lastAnsiCode;
+        } else if (line.includes('\x1b[0m')) {
+          // Line has reset - clear state
+          currentAnsiState = '';
         }
 
         // Process triggers
