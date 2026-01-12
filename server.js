@@ -10,7 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.1.1'; // Added for deploy verification
+const VERSION = '1.1.2'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -407,6 +407,21 @@ wss.on('connection', (ws, req) => {
 
       lines.forEach(line => {
         if (line.trim() === '') return;
+
+        // FIRST LINE OF DEFENSE: Gag ANY line containing MIP protocol pattern
+        // This runs before ALL other processing, no exceptions
+        if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
+          // Try to parse it for stats if possible, then gag
+          const mipMatch = line.match(/%(\d{5})(\d{3})([A-Z]{3})/);
+          if (mipMatch && mipEnabled) {
+            const len = parseInt(mipMatch[2], 10);
+            const msgType = mipMatch[3];
+            const dataStart = mipMatch.index + mipMatch[0].length;
+            const msgData = line.substring(dataStart, dataStart + len);
+            parseMipMessage(ws, msgType, msgData);
+          }
+          return; // Always gag the line
+        }
 
         // Early MIP filter: catch obvious MIP protocol data even before mipId is set
         // This prevents leaks during the race condition window between MIP enable and set_mip
