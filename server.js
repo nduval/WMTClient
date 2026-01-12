@@ -744,8 +744,8 @@ wss.on('connection', (ws, req) => {
     });
   }
 
-  // Initial connection
-  connectToMud();
+  // Wait for client to send set_server before connecting
+  // This avoids connecting to default server then reconnecting to the right one
 
   // Handle WebSocket messages
   ws.on('message', (message) => {
@@ -786,12 +786,12 @@ wss.on('connection', (ws, req) => {
 
         case 'set_server':
           // Allow client to specify target MUD server
-          // Valid servers: 3k.org:3000 (default), 3s.org:3200
+          // Valid servers: 3k.org:3000 (default), 3scapes.org:3200
           if (data.host && data.port) {
             // Security: only allow known servers
             const allowedServers = [
               { host: '3k.org', port: 3000 },
-              { host: '3s.org', port: 3200 }
+              { host: '3scapes.org', port: 3200 }
             ];
             const isAllowed = allowedServers.some(s => s.host === data.host && s.port === data.port);
             if (isAllowed) {
