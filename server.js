@@ -10,7 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.2.1'; // Added for deploy verification
+const VERSION = '1.2.2'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -34,11 +34,13 @@ const TELNET = {
 
 /**
  * Strip telnet control sequences from buffer
- * Returns clean text buffer
+ * Returns { buffer: cleaned text, hasGA: true if Go Ahead was seen }
+ * GA (Go Ahead) signals end of output - used to flush line buffer for prompts
  */
 function stripTelnetSequences(buffer) {
   const result = [];
   let i = 0;
+  let hasGA = false;
 
   while (i < buffer.length) {
     const byte = buffer[i];
@@ -66,8 +68,12 @@ function stripTelnetSequences(buffer) {
       } else if (cmd >= TELNET.WILL && cmd <= TELNET.DONT) {
         // WILL/WONT/DO/DONT + option byte
         i += 3;
+      } else if (cmd === TELNET.GA) {
+        // Go Ahead - signal that MUD is waiting for input
+        hasGA = true;
+        i += 2;
       } else if (cmd >= TELNET.SE && cmd <= TELNET.GA) {
-        // Single byte commands (GA, NOP, etc.)
+        // Single byte commands (NOP, etc.)
         i += 2;
       } else {
         // Unknown command, skip IAC and command byte
@@ -80,7 +86,7 @@ function stripTelnetSequences(buffer) {
     }
   }
 
-  return Buffer.from(result);
+  return { buffer: Buffer.from(result), hasGA };
 }
 
 // Create HTTP server for health checks
@@ -639,7 +645,8 @@ wss.on('connection', (ws, req) => {
 
     mudSocket.on('data', (data) => {
       // Strip telnet control sequences before converting to text
-      const cleanData = stripTelnetSequences(data);
+      // Also detect GA (Go Ahead) which signals end of output/prompt
+      const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
       const text = cleanData.toString('utf8');
 
       // Clear any pending buffer flush timeout since we got new data
@@ -654,10 +661,17 @@ wss.on('connection', (ws, req) => {
       // Split on newlines
       const parts = fullText.split('\n');
 
+      // If GA was received, flush everything immediately (it's a prompt)
+      if (hasGA) {
+        lineBuffer = '';
+        parts.forEach(line => processLine(line));
+        return;
+      }
+
       // If the text didn't end with a newline, the last part is incomplete - buffer it
       if (!text.endsWith('\n') && parts.length > 0) {
         lineBuffer = parts.pop();
-        // Set a timeout to flush the buffer (handles prompts without newlines)
+        // Set a timeout to flush the buffer (fallback for MUDs without GA)
         if (lineBuffer) {
           lineBufferTimeout = setTimeout(() => {
             if (lineBuffer) {
