@@ -132,6 +132,55 @@ if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
 - Pattern-specific filters (`%${mipId}...`) failed when mipId wasn't set yet or didn't match
 - The generic regex `/%\d{5}\d{3}[A-Z]{3}/` catches ALL MIP data regardless of session ID
 
+## Understanding MUD Packet Handling (CRITICAL)
+
+This section documents fundamental knowledge about how MUD data flows through TCP/telnet. This understanding is essential for debugging display issues.
+
+### The Data Flow
+```
+MUD Server (3k.org:3000)
+    ↓ TCP packets (arbitrary boundaries, NOT line-aligned)
+    ↓ Telnet protocol (control sequences like GA embedded in stream)
+WebSocket Proxy (Render - server.js)
+    ↓ Must reassemble complete lines
+    ↓ Must detect prompts via GA signal
+    ↓ Must filter MIP protocol data
+Browser Client (IONOS - app.js)
+    ↓ Receives clean, complete lines
+Display
+```
+
+### Why Lines Break (TCP Fragmentation)
+TCP is a stream protocol - it does NOT preserve message boundaries. When the MUD sends:
+```
+=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\n
+```
+TCP may deliver it as multiple packets:
+```
+Packet 1: =-=-=-=-=-=-=-=-=-=-
+Packet 2: =-=-=-=-=-=-=-=-=-=-=\n
+```
+
+**If you process packets immediately, you get broken lines.** You MUST buffer until you see a newline.
+
+### Why Prompts Need Special Handling
+MUD prompts typically don't end with newlines - they wait for input on the same line:
+```
+Enter your name: _
+```
+
+With line buffering, this would sit in the buffer forever. Two solutions:
+1. **Telnet GA (Go Ahead):** The proper signal. IAC GA (255 249) means "done sending, waiting for input"
+2. **Timeout fallback:** If no GA, flush buffer after ~100ms of silence
+
+### Reference: TinTin++ Packet Patch
+TinTin++ has the same challenges and solves them similarly:
+- `#config {packet patch} 0.5` - wait up to 0.5s for complete lines
+- Uses GA/EOR signals to detect prompts
+- This is a universal MUD client issue, not specific to our implementation
+
+---
+
 ### TCP Line Buffering - Critical Fix (v1.2.0+)
 
 **Problem:** Lines were being broken mid-way (e.g., `=-=-=` appearing on separate lines). This was NOT caused by MIP - TinTin++ with no MIP awareness displayed lines correctly.
