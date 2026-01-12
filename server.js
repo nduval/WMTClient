@@ -407,6 +407,52 @@ wss.on('connection', (ws, req) => {
       lines.forEach(line => {
         if (line.trim() === '') return;
 
+        // Early MIP filter: catch obvious MIP protocol data even before mipId is set
+        // This prevents leaks during the race condition window between MIP enable and set_mip
+        // Pattern: %<5digits><3digits><3uppercase><data> or #K%<5digits>...
+        if (!mipId) {
+          // Check if line is ONLY MIP data (gag entirely)
+          const pureEarlyMipPattern = /^%?\d{5}\d{3}[A-Z]{3}/;
+          if (pureEarlyMipPattern.test(line.trim())) {
+            return; // Gag raw MIP data
+          }
+
+          // Also strip embedded MIP data from lines
+          // Match %<5digits><3digits><3uppercase><variable length data>
+          // The length field tells us how many chars of data follow
+          const embeddedMipPattern = /%(\d{5})(\d{3})([A-Z]{3})/g;
+          let strippedLine = line;
+          let match;
+          while ((match = embeddedMipPattern.exec(line)) !== null) {
+            const mipLength = parseInt(match[2], 10);
+            const fullMatch = match[0];
+            const dataStart = match.index + fullMatch.length;
+            const mipData = line.substring(dataStart, dataStart + mipLength);
+            // Remove the entire MIP sequence (pattern + data)
+            const toRemove = fullMatch + mipData;
+            strippedLine = strippedLine.replace(toRemove, '');
+          }
+          if (strippedLine !== line) {
+            line = strippedLine;
+            if (!line.trim()) return; // Nothing left after stripping MIP
+          }
+
+          // Also strip #K% format
+          const embeddedKPattern = /#K%(\d{5})(\d{3})([A-Z]{3})/g;
+          while ((match = embeddedKPattern.exec(line)) !== null) {
+            const mipLength = parseInt(match[2], 10);
+            const fullMatch = match[0];
+            const dataStart = match.index + fullMatch.length;
+            const mipData = line.substring(dataStart, dataStart + mipLength);
+            const toRemove = fullMatch + mipData;
+            strippedLine = strippedLine.replace(toRemove, '');
+          }
+          if (strippedLine !== line) {
+            line = strippedLine;
+            if (!line.trim()) return;
+          }
+        }
+
         // Built-in MIP gag: filter out MIP protocol lines when MIP is enabled
         if (mipEnabled && mipId) {
           // Handle TCP fragmentation - if we have buffered data, prepend it
