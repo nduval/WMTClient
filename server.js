@@ -10,7 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.1.2'; // Added for deploy verification
+const VERSION = '1.2.0'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -109,6 +109,9 @@ wss.on('connection', (ws, req) => {
   let mudSocket = null;
   let triggers = [];
   let aliases = [];
+
+  // TCP line buffer - accumulate data until we see newlines
+  let lineBuffer = '';
 
   // MIP (MUD Interface Protocol) state
   let mipEnabled = false;
@@ -403,9 +406,22 @@ wss.on('connection', (ws, req) => {
       // Strip telnet control sequences before converting to text
       const cleanData = stripTelnetSequences(data);
       const text = cleanData.toString('utf8');
-      const lines = text.split('\n');
 
-      lines.forEach(line => {
+      // Prepend any buffered data from previous chunk
+      const fullText = lineBuffer + text;
+
+      // Split on newlines
+      const parts = fullText.split('\n');
+
+      // If the text didn't end with a newline, the last part is incomplete - buffer it
+      if (!text.endsWith('\n') && parts.length > 0) {
+        lineBuffer = parts.pop();
+      } else {
+        lineBuffer = '';
+      }
+
+      // Process complete lines
+      parts.forEach(line => {
         if (line.trim() === '') return;
 
         // FIRST LINE OF DEFENSE: Gag ANY line containing MIP protocol pattern
