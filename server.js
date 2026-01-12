@@ -10,6 +10,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
+const VERSION = '1.1.0'; // Added for deploy verification
 
 // Telnet protocol constants
 const TELNET = {
@@ -86,10 +87,10 @@ function stripTelnetSequences(buffer) {
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>WMT WebSocket Proxy</h1><p>WebSocket server running for 3k.org MUD</p>');
+    res.end(`<h1>WMT WebSocket Proxy v${VERSION}</h1><p>WebSocket server running for 3k.org MUD</p>`);
   } else if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', mud: `${MUD_HOST}:${MUD_PORT}` }));
+    res.end(JSON.stringify({ status: 'ok', version: VERSION, mud: `${MUD_HOST}:${MUD_PORT}` }));
   } else {
     res.writeHead(404);
     res.end('Not found');
