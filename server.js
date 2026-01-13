@@ -170,7 +170,8 @@ wss.on('connection', (ws, req) => {
         break;
 
       case 'BAD': // Room description/name
-        mipStats.room = msgData.trim();
+        // Strip exits from room name - they come as "(n,s,e,w)" at the end
+        mipStats.room = msgData.trim().replace(/\s*\([nsewud,\s]+\)\s*$/i, '').trim();
         updated = true;
         break;
 
