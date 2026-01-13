@@ -3,6 +3,7 @@ sftp.txt
 ssh_user.txt
 priv_key.txt
 github_token.txt
+config/sendgrid.php
 
 # Dependencies
 /vendor/

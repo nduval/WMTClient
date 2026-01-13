@@ -89,15 +89,13 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                         <button onclick="wmtClient.logout()">Logout</button>
                     </div>
                 </div>
-                <div class="character-switcher">
-                    <select id="character-select" class="character-select">
-                        <?php foreach ($characters as $char): ?>
-                            <option value="<?= htmlspecialchars($char['id']) ?>" <?= $char['id'] === $characterId ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($char['name']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <a href="characters.php" class="manage-characters-link" title="Manage Characters">+</a>
+                <div class="header-dropdown character-dropdown">
+                    <button class="character-btn" id="character-btn">
+                        <?= htmlspecialchars($characterName) ?>
+                    </button>
+                    <div class="character-menu" id="character-menu">
+                        <a href="characters.php">Character Selection</a>
+                    </div>
                 </div>
                 <span class="user-info">
                     <?= htmlspecialchars($username) ?>

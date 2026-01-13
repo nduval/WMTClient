@@ -1439,6 +1439,8 @@ class WMTClient {
             hamburgerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 hamburgerMenu.classList.toggle('open');
+                // Close character menu if open
+                document.getElementById('character-menu')?.classList.remove('open');
             });
             // Close menu when clicking elsewhere
             document.addEventListener('click', () => {
@@ -1449,6 +1451,22 @@ class WMTClient {
                 btn.addEventListener('click', () => {
                     hamburgerMenu.classList.remove('open');
                 });
+            });
+        }
+
+        // Character dropdown menu
+        const characterBtn = document.getElementById('character-btn');
+        const characterMenu = document.getElementById('character-menu');
+        if (characterBtn && characterMenu) {
+            characterBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                characterMenu.classList.toggle('open');
+                // Close hamburger menu if open
+                hamburgerMenu?.classList.remove('open');
+            });
+            // Close menu when clicking elsewhere
+            document.addEventListener('click', () => {
+                characterMenu.classList.remove('open');
             });
         }
 
@@ -1467,9 +1485,6 @@ class WMTClient {
         });
         document.getElementById('script-file-input')?.addEventListener('change', (e) => this.handleScriptUpload(e));
         this.initSidebarResize();
-
-        // Character switcher
-        document.getElementById('character-select')?.addEventListener('change', (e) => this.switchCharacter(e.target.value));
 
         // Panel close buttons
         document.querySelectorAll('.panel-close').forEach(btn => {
