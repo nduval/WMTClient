@@ -1261,7 +1261,9 @@ function processTriggers(line, triggers) {
                 });
               }
             }
-            result.commands.push(cmd);
+            // Split on semicolons to handle multiple commands
+            const cmds = cmd.split(';').map(c => c.trim()).filter(c => c);
+            result.commands.push(...cmds);
             break;
           case 'sound':
             result.sound = action.sound || 'beep';
