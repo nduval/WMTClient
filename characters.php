@@ -264,7 +264,7 @@ if (in_array($username, $ADMIN_USERS)) {
             background: #1a1a1a;
             color: #fff;
             font-size: 16px;
-            flex: 1;
+            width: 200px;
             min-width: 0;
         }
 
@@ -282,7 +282,7 @@ if (in_array($username, $ADMIN_USERS)) {
             cursor: pointer;
             font-weight: bold;
             white-space: nowrap;
-            min-width: 120px;
+            width: 140px;
         }
 
         .new-character-form button:hover {
@@ -423,15 +423,16 @@ if (in_array($username, $ADMIN_USERS)) {
 
             .new-character-form {
                 flex-direction: column;
+                align-items: stretch;
             }
 
             .new-character-form input {
-                width: 100%;
+                width: 100% !important;
                 box-sizing: border-box;
             }
 
             .new-character-form button {
-                width: 100%;
+                width: 100% !important;
             }
         }
 

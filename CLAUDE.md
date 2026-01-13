@@ -35,7 +35,53 @@ This project has two deployment targets:
 
 - **Frontend**: PHP on IONOS (index.php, app.php, etc.)
 - **WebSocket Proxy**: Node.js on Render (server.js) - connects browser to MUD
-- **MUD Server**: 3k.org:3000
+- **MUD Servers**:
+  - 3Kingdoms: 3k.org:3000 (default)
+  - 3Scapes: 3scapes.org:3200
+
+## Multi-Server Support (3K/3S Toggle)
+
+The client supports both 3Kingdoms and 3Scapes MUDs. Each character profile can be configured for either server.
+
+### How It Works
+
+1. **Character Data** (`includes/functions.php`):
+   - Each character has a `server` field: `'3k'` or `'3s'`
+   - Default is `'3k'` for backwards compatibility
+   - Functions: `updateCharacterServer()`, `getCharacterServer()`, `getCurrentCharacterServer()`
+
+2. **Session Tracking**:
+   - `setCurrentCharacter()` stores server in `$_SESSION['character_server']`
+   - `app.php` reads this to set `mudHost` and `mudPort` in `WMT_CONFIG`
+
+3. **WebSocket Proxy** (`glitch/server.js`):
+   - Does NOT auto-connect on WebSocket open
+   - Waits for `set_server` message from client with host/port
+   - **Security**: Only allows whitelisted servers:
+     ```javascript
+     const allowedServers = [
+       { host: '3k.org', port: 3000 },
+       { host: '3scapes.org', port: 3200 }
+     ];
+     ```
+   - On `set_server`, validates against whitelist, then connects to MUD
+
+4. **Client Connection** (`assets/js/app.js`):
+   - `onConnect()` always sends `set_server` first with host/port from `WMT_CONFIG`
+   - This ensures correct server before any MUD interaction
+
+5. **Character Selection** (`characters.php`):
+   - Toggle UI next to each character (left of password icon)
+   - Toggle in "Add Character Profile" and "New to 3Kingdoms" forms
+   - API endpoint: `api/characters.php?action=set_server`
+
+### Duplicate Character Names
+Characters with the same name are allowed if they're on different servers. The duplicate check in `api/characters.php` compares both name AND server.
+
+### MIP Detection for 3Scapes
+3Scapes has different login messages. MIP detection triggers on:
+- `"3Kingdoms welcomes you"` or `"entering 3Kingdoms"` (3K)
+- `"3Scapes welcomes you"` or `"entering 3Scapes"` (3S)
 
 ## Key Directories
 
@@ -222,6 +268,13 @@ mudSocket.on('data', (data) => {
 - When GA is detected, flush and process all buffered content immediately
 - Fallback 100ms timeout still exists for MUDs that don't send GA
 
+### MIP Disabled State
+When "Enable MIP" is toggled off in settings:
+- Sub-toggles (HP bar, ChatMon, etc.) are greyed out with `mip-disabled` class
+- HP status bar is hidden
+- ChatMon button is hidden and ChatMon panel closes if open
+- Managed by `updateMipDependentUI()` in `app.js`
+
 ### Key Files
 - `assets/js/app.js` - MIP enable/disable, stat bar updates, conditions
 - `glitch/server.js` - MIP message parsing (parseMipMessage, parseFFFStats)
@@ -253,6 +306,17 @@ If changes aren't taking effect, check that the version number updated. Render f
 ### Colors dropping mid-line
 1. Usually caused by line fragmentation - fix TCP buffering first
 2. ANSI codes are at line start; split lines lose color context
+
+### 3S character connecting to wrong server
+1. Verify character's server field is set to `'3s'` in their data
+2. Check `app.php` is reading `getCurrentCharacterServer()` correctly
+3. Ensure client sends `set_server` message before any other interaction
+4. Check proxy logs - should show "Connecting to 3scapes.org:3200"
+
+### Double connection on 3S (connects to 3K then 3S)
+**Problem:** Saw "Connecting to 3k.org:3000" then "Connecting to 3scapes.org:3200"
+**Cause:** Proxy was auto-connecting on WebSocket open before receiving set_server
+**Fix:** Removed auto-connect from proxy. Client MUST send set_server first, which triggers the connection.
 
 ### Multi-line colored blocks only show color on first line (v1.2.3+)
 
