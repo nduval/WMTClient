@@ -282,6 +282,12 @@ wss.on('connection', (ws, req) => {
         // Format: channel~group~sender~message (e.g., flapchat~Flappers~Beowulf~Beowulf flaps : meep)
         {
           const parts = msgData.split('~');
+
+          // Skip party divvy messages (spam)
+          if (parts[0] === 'ptell' && msgData.includes('Divvy of') && msgData.includes('coins called by')) {
+            break;
+          }
+
           let formatted;
           if (parts.length >= 4) {
             // Full format: channel~group~sender~message
