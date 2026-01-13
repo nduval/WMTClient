@@ -147,8 +147,56 @@ wss.on('connection', (ws, req) => {
     gline1Raw: '',   // Raw guild line without color conversion (for debug/parsing)
     gline2Raw: '',   // Raw guild line without color conversion (for debug/parsing)
     uptime: '',      // Server uptime (AAF)
-    reboot: ''       // Time until reboot (AAC)
+    reboot: '',      // Time until reboot (AAC)
+    guildVars: {}    // Parsed guild variables (e.g., nukes_current, nukes_max, reset_pct)
   };
+
+  // Parse guild line to extract variables
+  // Patterns: "Name: [X/Y]" -> name_current, name_max
+  //           "Name: [X%]" or "Name: X%" -> name_pct
+  //           "Name:[X]" -> name
+  function parseGuildVars(line1, line2) {
+    const vars = {};
+    const combined = (line1 || '') + ' ' + (line2 || '');
+
+    // Strip MIP color codes for parsing
+    const clean = combined.replace(/<[a-z]|>/gi, '');
+
+    // Pattern: Name: [X/Y] or Name:[X/Y]
+    const ratioPattern = /(\w+):\s*\[(\d+)\/(\d+)\]/gi;
+    let match;
+    while ((match = ratioPattern.exec(clean)) !== null) {
+      const name = match[1].toLowerCase();
+      vars[name + '_current'] = parseInt(match[2]) || 0;
+      vars[name + '_max'] = parseInt(match[3]) || 0;
+    }
+
+    // Pattern: Name: [X%] or Name:[X%]
+    const pctBracketPattern = /(\w+):\s*\[(\d+(?:\.\d+)?)%\]/gi;
+    while ((match = pctBracketPattern.exec(clean)) !== null) {
+      const name = match[1].toLowerCase();
+      vars[name + '_pct'] = parseFloat(match[2]) || 0;
+    }
+
+    // Pattern: Name: X% (without brackets)
+    const pctPattern = /(\w+):\s*(\d+(?:\.\d+)?)%/gi;
+    while ((match = pctPattern.exec(clean)) !== null) {
+      const name = match[1].toLowerCase();
+      // Don't overwrite if already set from bracket pattern
+      if (!(name + '_pct' in vars)) {
+        vars[name + '_pct'] = parseFloat(match[2]) || 0;
+      }
+    }
+
+    // Pattern: Name:[X] (single value in brackets)
+    const singlePattern = /(\w+):\s*\[(\d+)\](?!\/)/gi;
+    while ((match = singlePattern.exec(clean)) !== null) {
+      const name = match[1].toLowerCase();
+      vars[name] = parseInt(match[2]) || 0;
+    }
+
+    return vars;
+  }
 
   // Parse MIP message and send updates to client
   function parseMipMessage(ws, msgType, msgData) {
@@ -355,6 +403,9 @@ wss.on('connection', (ws, req) => {
         i++; // Skip empty or unknown parts
       }
     }
+
+    // Parse guild lines to extract variables (e.g., nukes_current, reset_pct)
+    mipStats.guildVars = parseGuildVars(mipStats.gline1Raw, mipStats.gline2Raw);
   }
 
   // Convert MIP color codes to HTML spans
