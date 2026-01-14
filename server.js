@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.0'; // Session persistence update
+const VERSION = '2.0.1'; // Fix buffer replay batching
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 1000;  // Max lines to buffer while browser disconnected
@@ -294,6 +294,7 @@ function sendToClient(session, message) {
 
 /**
  * Replay buffered messages to a newly connected client
+ * Uses batching to avoid overwhelming the browser
  */
 function replayBuffer(session) {
   if (session.buffer.length === 0) return;
@@ -301,29 +302,48 @@ function replayBuffer(session) {
   const ws = session.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-  console.log(`Replaying ${session.buffer.length} buffered messages to client`);
-
-  ws.send(JSON.stringify({
-    type: 'system',
-    message: `--- Reconnected. Replaying ${session.buffer.length} buffered lines ---`
-  }));
-
-  for (const message of session.buffer) {
-    try {
-      ws.send(JSON.stringify(message));
-    } catch (e) {
-      console.error('Error replaying buffer:', e.message);
-      break;
-    }
-  }
-
+  const bufferCopy = [...session.buffer];
   session.buffer = [];
   session.bufferOverflow = false;
 
+  console.log(`Replaying ${bufferCopy.length} buffered messages to client`);
+
   ws.send(JSON.stringify({
     type: 'system',
-    message: '--- End of buffered content ---'
+    message: `--- Reconnected. Replaying ${bufferCopy.length} buffered lines ---`
   }));
+
+  // Send in batches to let browser breathe
+  const BATCH_SIZE = 50;
+  let index = 0;
+
+  function sendBatch() {
+    if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+
+    const end = Math.min(index + BATCH_SIZE, bufferCopy.length);
+    for (let i = index; i < end; i++) {
+      try {
+        session.ws.send(JSON.stringify(bufferCopy[i]));
+      } catch (e) {
+        console.error('Error replaying buffer:', e.message);
+        return;
+      }
+    }
+    index = end;
+
+    if (index < bufferCopy.length) {
+      // More to send - schedule next batch
+      setImmediate(sendBatch);
+    } else {
+      // Done - send end marker
+      session.ws.send(JSON.stringify({
+        type: 'system',
+        message: '--- End of buffered content ---'
+      }));
+    }
+  }
+
+  sendBatch();
 }
 
 /**
