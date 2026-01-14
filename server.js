@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.2'; // Smarter buffer: 150 lines max, keeps newest
+const VERSION = '2.0.3'; // Slower buffer replay with real delays
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -320,8 +320,9 @@ function replayBuffer(session) {
       : `--- Reconnected. Replaying ${bufferCopy.length} buffered lines ---`
   }));
 
-  // Send in batches to let browser breathe
-  const BATCH_SIZE = 50;
+  // Send in batches with delays to let browser DOM breathe
+  const BATCH_SIZE = 25;  // Smaller batches
+  const BATCH_DELAY_MS = 50;  // 50ms between batches
   let index = 0;
 
   function sendBatch() {
@@ -339,14 +340,18 @@ function replayBuffer(session) {
     index = end;
 
     if (index < bufferCopy.length) {
-      // More to send - schedule next batch
-      setImmediate(sendBatch);
+      // More to send - wait before next batch to let client render
+      setTimeout(sendBatch, BATCH_DELAY_MS);
     } else {
-      // Done - send end marker
-      session.ws.send(JSON.stringify({
-        type: 'system',
-        message: '--- End of buffered content ---'
-      }));
+      // Done - send end marker after a brief pause
+      setTimeout(() => {
+        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+          session.ws.send(JSON.stringify({
+            type: 'system',
+            message: '--- End of buffered content ---'
+          }));
+        }
+      }, BATCH_DELAY_MS);
     }
   }
 
