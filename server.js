@@ -13,10 +13,10 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.1'; // Fix buffer replay batching
+const VERSION = '2.0.2'; // Smarter buffer: 150 lines max, keeps newest
 
 // Session persistence configuration
-const SESSION_BUFFER_MAX_LINES = 1000;  // Max lines to buffer while browser disconnected
+const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;  // 30 minutes without browser = close MUD connection
 
 // Persistent sessions store: token -> session object
@@ -273,6 +273,7 @@ function createSession(token) {
 
 /**
  * Send a message to the browser, or buffer it if disconnected
+ * Buffer keeps the MOST RECENT lines - old lines are dropped when full
  */
 function sendToClient(session, message) {
   if (session.ws && session.ws.readyState === WebSocket.OPEN) {
@@ -282,12 +283,15 @@ function sendToClient(session, message) {
       console.error('Error sending to client:', e.message);
     }
   } else {
-    // Buffer the message
-    if (session.buffer.length < SESSION_BUFFER_MAX_LINES) {
-      session.buffer.push(message);
-    } else if (!session.bufferOverflow) {
-      session.bufferOverflow = true;
-      console.log(`Buffer overflow for session ${session.token.substring(0, 8)}...`);
+    // Buffer the message - keep most recent, drop oldest
+    session.buffer.push(message);
+    if (session.buffer.length > SESSION_BUFFER_MAX_LINES) {
+      // Remove oldest lines, keep newest
+      const dropped = session.buffer.length - SESSION_BUFFER_MAX_LINES;
+      session.buffer = session.buffer.slice(dropped);
+      if (!session.bufferOverflow) {
+        session.bufferOverflow = true;  // Flag that some content was lost
+      }
     }
   }
 }
@@ -303,14 +307,17 @@ function replayBuffer(session) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
   const bufferCopy = [...session.buffer];
+  const hadOverflow = session.bufferOverflow;
   session.buffer = [];
   session.bufferOverflow = false;
 
-  console.log(`Replaying ${bufferCopy.length} buffered messages to client`);
+  console.log(`Replaying ${bufferCopy.length} buffered messages to client${hadOverflow ? ' (older content truncated)' : ''}`);
 
   ws.send(JSON.stringify({
     type: 'system',
-    message: `--- Reconnected. Replaying ${bufferCopy.length} buffered lines ---`
+    message: hadOverflow
+      ? `--- Reconnected. Showing last ${bufferCopy.length} lines (older content truncated) ---`
+      : `--- Reconnected. Replaying ${bufferCopy.length} buffered lines ---`
   }));
 
   // Send in batches to let browser breathe
