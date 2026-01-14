@@ -1,6 +1,9 @@
 /**
- * WMT Client - WebSocket to TCP Proxy for Glitch
+ * WMT Client - WebSocket to TCP Proxy
  * Proxies WebSocket connections to 3k.org MUD
+ *
+ * Session Persistence: MUD connections persist when browser disconnects unexpectedly.
+ * Reconnecting with the same token resumes the session and replays buffered output.
  */
 
 const WebSocket = require('ws');
@@ -10,7 +13,14 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '1.2.3'; // Added for deploy verification
+const VERSION = '2.0.0'; // Session persistence update
+
+// Session persistence configuration
+const SESSION_BUFFER_MAX_LINES = 1000;  // Max lines to buffer while browser disconnected
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;  // 30 minutes without browser = close MUD connection
+
+// Persistent sessions store: token -> session object
+const sessions = new Map();
 
 // Telnet protocol constants
 const TELNET = {
@@ -35,7 +45,6 @@ const TELNET = {
 /**
  * Strip telnet control sequences from buffer
  * Returns { buffer: cleaned text, hasGA: true if Go Ahead was seen }
- * GA (Go Ahead) signals end of output - used to flush line buffer for prompts
  */
 function stripTelnetSequences(buffer) {
   const result = [];
@@ -46,17 +55,14 @@ function stripTelnetSequences(buffer) {
     const byte = buffer[i];
 
     if (byte === TELNET.IAC) {
-      // IAC - start of telnet command
       if (i + 1 >= buffer.length) break;
 
       const cmd = buffer[i + 1];
 
       if (cmd === TELNET.IAC) {
-        // Escaped IAC (255 255) = literal 255
         result.push(255);
         i += 2;
       } else if (cmd === TELNET.SB) {
-        // Subnegotiation - skip until IAC SE
         i += 2;
         while (i < buffer.length) {
           if (buffer[i] === TELNET.IAC && i + 1 < buffer.length && buffer[i + 1] === TELNET.SE) {
@@ -66,21 +72,16 @@ function stripTelnetSequences(buffer) {
           i++;
         }
       } else if (cmd >= TELNET.WILL && cmd <= TELNET.DONT) {
-        // WILL/WONT/DO/DONT + option byte
         i += 3;
       } else if (cmd === TELNET.GA) {
-        // Go Ahead - signal that MUD is waiting for input
         hasGA = true;
         i += 2;
       } else if (cmd >= TELNET.SE && cmd <= TELNET.GA) {
-        // Single byte commands (NOP, etc.)
         i += 2;
       } else {
-        // Unknown command, skip IAC and command byte
         i += 2;
       }
     } else {
-      // Regular character
       result.push(byte);
       i++;
     }
@@ -89,14 +90,117 @@ function stripTelnetSequences(buffer) {
   return { buffer: Buffer.from(result), hasGA };
 }
 
+/**
+ * Convert MIP color codes to HTML spans
+ */
+function convertMipColors(text) {
+  if (!text) return '';
+
+  const colorMap = {
+    'b': '#4488ff',  // blue
+    'c': '#44dddd',  // cyan
+    'g': '#44dd44',  // green
+    'r': '#ff4444',  // red
+    's': '#888888',  // gray (silver)
+    'v': '#dd44dd',  // violet
+    'w': '#ffffff',  // white
+    'y': '#dddd44'   // yellow
+  };
+
+  let result = '';
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] === '<' && i + 1 < text.length && colorMap[text[i + 1]]) {
+      result += `<span style="color:${colorMap[text[i + 1]]}">`;
+      i += 2;
+    } else if (text[i] === '>') {
+      result += '</span>';
+      i += 1;
+    } else {
+      result += text[i];
+      i += 1;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Parse guild line to extract variables
+ */
+function parseGuildVars(line1, line2) {
+  const vars = {};
+  const combined = (line1 || '') + ' ' + (line2 || '');
+  const clean = combined.replace(/<[a-z]|>/gi, '');
+
+  // Pattern: Name: [X/Y] or Name:[X/Y]
+  const ratioPattern = /(\w+):\s*\[(\d+)\/(\d+)\]/gi;
+  let match;
+  while ((match = ratioPattern.exec(clean)) !== null) {
+    const name = match[1].toLowerCase();
+    vars[name + '_current'] = parseInt(match[2]) || 0;
+    vars[name + '_max'] = parseInt(match[3]) || 0;
+  }
+
+  // Pattern: Name: [X%] or Name:[X%]
+  const pctBracketPattern = /(\w+):\s*\[(\d+(?:\.\d+)?)%\]/gi;
+  while ((match = pctBracketPattern.exec(clean)) !== null) {
+    const name = match[1].toLowerCase();
+    vars[name + '_pct'] = parseFloat(match[2]) || 0;
+  }
+
+  // Pattern: Name: X% (without brackets)
+  const pctPattern = /(\w+):\s*(\d+(?:\.\d+)?)%/gi;
+  while ((match = pctPattern.exec(clean)) !== null) {
+    const name = match[1].toLowerCase();
+    if (!(name + '_pct' in vars)) {
+      vars[name + '_pct'] = parseFloat(match[2]) || 0;
+    }
+  }
+
+  // Pattern: Name:[X] (single value in brackets)
+  const singlePattern = /(\w+):\s*\[(\d+)\](?!\/)/gi;
+  while ((match = singlePattern.exec(clean)) !== null) {
+    const name = match[1].toLowerCase();
+    vars[name] = parseInt(match[2]) || 0;
+  }
+
+  return vars;
+}
+
+// Periodic cleanup of stale sessions
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessions) {
+    if (!session.ws && session.disconnectedAt) {
+      const elapsed = now - session.disconnectedAt;
+      if (elapsed > SESSION_TIMEOUT_MS) {
+        console.log(`Session timeout for token ${token.substring(0, 8)}... (${Math.round(elapsed / 1000)}s without browser)`);
+        closeSession(session, 'timeout');
+      }
+    }
+  }
+}, 60000);
+
 // Create HTTP server for health checks
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
+    const activeSessions = Array.from(sessions.values()).filter(s => s.mudSocket && !s.mudSocket.destroyed).length;
+    const connectedBrowsers = Array.from(sessions.values()).filter(s => s.ws).length;
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(`<h1>WMT WebSocket Proxy v${VERSION}</h1><p>WebSocket server running for 3k.org MUD</p>`);
+    res.end(`<h1>WMT WebSocket Proxy v${VERSION}</h1>
+      <p>WebSocket server running for 3k.org MUD</p>
+      <p>Active MUD sessions: ${activeSessions}</p>
+      <p>Connected browsers: ${connectedBrowsers}</p>`);
   } else if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', version: VERSION, mud: `${MUD_HOST}:${MUD_PORT}` }));
+    res.end(JSON.stringify({
+      status: 'ok',
+      version: VERSION,
+      mud: `${MUD_HOST}:${MUD_PORT}`,
+      activeSessions: sessions.size
+    }));
   } else {
     res.writeHead(404);
     res.end('Not found');
@@ -109,760 +213,741 @@ const wss = new WebSocket.Server({ server });
 console.log('WMT WebSocket Proxy starting...');
 console.log(`MUD Server: ${MUD_HOST}:${MUD_PORT}`);
 
-wss.on('connection', (ws, req) => {
-  console.log('New WebSocket connection from:', req.socket.remoteAddress);
+/**
+ * Create a new session object with all required state
+ */
+function createSession(token) {
+  return {
+    token: token,
+    ws: null,
+    mudSocket: null,
+    authenticated: false,
+    explicitDisconnect: false,
+    disconnectedAt: null,
+    timeoutHandle: null,
 
-  let mudSocket = null;
-  let triggers = [];
-  let aliases = [];
+    // Reconnect buffer
+    buffer: [],
+    bufferOverflow: false,
 
-  // Target MUD server (can be changed by client via set_server message)
-  let targetHost = MUD_HOST;
-  let targetPort = MUD_PORT;
+    // Target MUD server
+    targetHost: MUD_HOST,
+    targetPort: MUD_PORT,
 
-  // TCP line buffer - accumulate data until we see newlines
-  let lineBuffer = '';
-  let lineBufferTimeout = null;
+    // Triggers and aliases
+    triggers: [],
+    aliases: [],
 
-  // ANSI color state - track current color to apply to continuation lines
-  let currentAnsiState = '';
+    // TCP line buffer
+    lineBuffer: '',
+    lineBufferTimeout: null,
 
-  // MIP (MUD Interface Protocol) state
-  let mipEnabled = false;
-  let mipId = null;
-  let mipDebug = false;  // Echo raw MIP data to client
-  let mipBuffer = '';    // Buffer for incomplete MIP lines (TCP fragmentation)
-  let mipStats = {
-    hp: { current: 0, max: 0, label: 'HP' },
-    sp: { current: 0, max: 0, label: 'SP' },
-    gp1: { current: 0, max: 0, label: 'GP1' },
-    gp2: { current: 0, max: 0, label: 'GP2' },
-    enemy: 0,
-    enemyName: '',   // Attacker name from K code
-    round: 0,
-    room: '',
-    exits: '',
-    gline1: '',      // Primary guild line (raw HTML with colors)
-    gline2: '',      // Secondary guild line (raw HTML with colors)
-    gline1Raw: '',   // Raw guild line without color conversion (for debug/parsing)
-    gline2Raw: '',   // Raw guild line without color conversion (for debug/parsing)
-    uptime: '',      // Server uptime (AAF)
-    reboot: '',      // Time until reboot (AAC)
-    guildVars: {}    // Parsed guild variables (e.g., nukes_current, nukes_max, reset_pct)
+    // ANSI color state
+    currentAnsiState: '',
+
+    // MIP state
+    mipEnabled: false,
+    mipId: null,
+    mipDebug: false,
+    mipBuffer: '',
+    mipStats: {
+      hp: { current: 0, max: 0, label: 'HP' },
+      sp: { current: 0, max: 0, label: 'SP' },
+      gp1: { current: 0, max: 0, label: 'GP1' },
+      gp2: { current: 0, max: 0, label: 'GP2' },
+      enemy: 0,
+      enemyName: '',
+      round: 0,
+      room: '',
+      exits: '',
+      gline1: '',
+      gline2: '',
+      gline1Raw: '',
+      gline2Raw: '',
+      uptime: '',
+      reboot: '',
+      guildVars: {}
+    }
   };
+}
 
-  // Parse guild line to extract variables
-  // Patterns: "Name: [X/Y]" -> name_current, name_max
-  //           "Name: [X%]" or "Name: X%" -> name_pct
-  //           "Name:[X]" -> name
-  function parseGuildVars(line1, line2) {
-    const vars = {};
-    const combined = (line1 || '') + ' ' + (line2 || '');
-
-    // Strip MIP color codes for parsing
-    const clean = combined.replace(/<[a-z]|>/gi, '');
-
-    // Pattern: Name: [X/Y] or Name:[X/Y]
-    const ratioPattern = /(\w+):\s*\[(\d+)\/(\d+)\]/gi;
-    let match;
-    while ((match = ratioPattern.exec(clean)) !== null) {
-      const name = match[1].toLowerCase();
-      vars[name + '_current'] = parseInt(match[2]) || 0;
-      vars[name + '_max'] = parseInt(match[3]) || 0;
+/**
+ * Send a message to the browser, or buffer it if disconnected
+ */
+function sendToClient(session, message) {
+  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+    try {
+      session.ws.send(JSON.stringify(message));
+    } catch (e) {
+      console.error('Error sending to client:', e.message);
     }
-
-    // Pattern: Name: [X%] or Name:[X%]
-    const pctBracketPattern = /(\w+):\s*\[(\d+(?:\.\d+)?)%\]/gi;
-    while ((match = pctBracketPattern.exec(clean)) !== null) {
-      const name = match[1].toLowerCase();
-      vars[name + '_pct'] = parseFloat(match[2]) || 0;
+  } else {
+    // Buffer the message
+    if (session.buffer.length < SESSION_BUFFER_MAX_LINES) {
+      session.buffer.push(message);
+    } else if (!session.bufferOverflow) {
+      session.bufferOverflow = true;
+      console.log(`Buffer overflow for session ${session.token.substring(0, 8)}...`);
     }
-
-    // Pattern: Name: X% (without brackets)
-    const pctPattern = /(\w+):\s*(\d+(?:\.\d+)?)%/gi;
-    while ((match = pctPattern.exec(clean)) !== null) {
-      const name = match[1].toLowerCase();
-      // Don't overwrite if already set from bracket pattern
-      if (!(name + '_pct' in vars)) {
-        vars[name + '_pct'] = parseFloat(match[2]) || 0;
-      }
-    }
-
-    // Pattern: Name:[X] (single value in brackets)
-    const singlePattern = /(\w+):\s*\[(\d+)\](?!\/)/gi;
-    while ((match = singlePattern.exec(clean)) !== null) {
-      const name = match[1].toLowerCase();
-      vars[name] = parseInt(match[2]) || 0;
-    }
-
-    return vars;
   }
+}
 
-  // Parse MIP message and send updates to client
-  function parseMipMessage(ws, msgType, msgData) {
-    let updated = false;
+/**
+ * Replay buffered messages to a newly connected client
+ */
+function replayBuffer(session) {
+  if (session.buffer.length === 0) return;
 
-    // If debug mode, send raw MIP data to client
-    if (mipDebug) {
-      ws.send(JSON.stringify({
-        type: 'mip_debug',
-        msgType: msgType,
-        msgData: msgData
-      }));
-    }
+  const ws = session.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    switch (msgType) {
-      case 'FFF': // Combined stats data
-        parseFFFStats(msgData);
-        updated = true;
-        break;
+  console.log(`Replaying ${session.buffer.length} buffered messages to client`);
 
-      case 'BAD': // Room description/name
-        // Strip exits from room name - they come as "(e,w,s,n,omp,jump...)" at the end
-        // Handle both closed parens and truncated/unclosed parens
-        // Strip exits like "(nw,se)" and room IDs like "~1968" from room name
-        mipStats.room = msgData.trim().replace(/\s*\([^)]*\)?(~\d+)?\s*$/, '').trim();
-        updated = true;
-        break;
+  ws.send(JSON.stringify({
+    type: 'system',
+    message: `--- Reconnected. Replaying ${session.buffer.length} buffered lines ---`
+  }));
 
-      case 'DDD': // Room exits (tilde-separated)
-        mipStats.exits = msgData.replace(/~/g, ', ');
-        updated = true;
-        break;
-
-      case 'BBA': // GP1 label
-        mipStats.gp1.label = msgData.trim() || 'GP1';
-        updated = true;
-        break;
-
-      case 'BBB': // GP2 label
-        mipStats.gp2.label = msgData.trim() || 'GP2';
-        updated = true;
-        break;
-
-      case 'BBC': // HP label
-        mipStats.hp.label = msgData.trim() || 'HP';
-        updated = true;
-        break;
-
-      case 'BBD': // SP label
-        mipStats.sp.label = msgData.trim() || 'SP';
-        updated = true;
-        break;
-
-      case 'BAB': // 2-way comms (tells)
-        // Format: ~sender~message (received) or x~recipient~message (sent)
-        {
-          const parts = msgData.split('~');
-          let formatted;
-          if (parts[0] === '' && parts.length >= 3) {
-            // Received tell: ~Sender~message
-            const sender = parts[1];
-            const message = parts.slice(2).join('~');
-            formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
-          } else if (parts[0] === 'x' && parts.length >= 3) {
-            // Sent tell: x~Recipient~message
-            const recipient = parts[1];
-            const message = parts.slice(2).join('~');
-            formatted = `<span style="color:#88ff88">[To ${recipient}]:</span> ${convertMipColors(message)}`;
-          } else {
-            // Unknown format, show as-is
-            formatted = convertMipColors(msgData);
-          }
-          ws.send(JSON.stringify({
-            type: 'mip_chat',
-            chatType: 'tell',
-            raw: msgData,
-            message: formatted
-          }));
-        }
-        break;
-
-      case 'CAA': // Chat channel messages
-        // Format: channel~group~sender~message (e.g., flapchat~Flappers~Beowulf~Beowulf flaps : meep)
-        {
-          const parts = msgData.split('~');
-
-          // Skip party divvy messages (spam)
-          if (parts[0] === 'ptell' && msgData.includes('Divvy of') && msgData.includes('coins called by')) {
-            break;
-          }
-
-          let formatted;
-          if (parts.length >= 4) {
-            // Full format: channel~group~sender~message
-            const channel = parts[0];
-            // parts[1] is group/guild name, often redundant
-            // parts[2] is sender name
-            const message = parts.slice(3).join('~');
-            formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
-          } else if (parts.length >= 2) {
-            // Simpler format: channel~message
-            const channel = parts[0];
-            const message = parts.slice(1).join('~');
-            formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
-          } else {
-            // Unknown format
-            formatted = convertMipColors(msgData);
-          }
-          ws.send(JSON.stringify({
-            type: 'mip_chat',
-            chatType: 'channel',
-            raw: msgData,
-            message: formatted
-          }));
-        }
-        break;
-
-      case 'AAC': // Reboot time (days until reboot, e.g., "4.5 days")
-        {
-          // Parse decimal days format like "4.5 days" or just "4.5"
-          const match = msgData.match(/^([\d.]+)/);
-          const decimalDays = match ? parseFloat(match[1]) : 0;
-          if (decimalDays > 0) {
-            const days = Math.floor(decimalDays);
-            const hours = Math.round((decimalDays - days) * 24);
-            if (days > 0) {
-              mipStats.reboot = `${days}d ${hours}h`;
-            } else {
-              mipStats.reboot = `${hours}h`;
-            }
-          } else {
-            mipStats.reboot = '';
-          }
-          updated = true;
-        }
-        break;
-
-      case 'AAF': // Uptime (days since boot, e.g., "7.7 days")
-        {
-          // Parse decimal days format like "7.7 days" or just "7.7"
-          const match = msgData.match(/^([\d.]+)/);
-          const decimalDays = match ? parseFloat(match[1]) : 0;
-          if (decimalDays > 0) {
-            const days = Math.floor(decimalDays);
-            const hours = Math.floor((decimalDays - days) * 24);
-            if (days > 0) {
-              mipStats.uptime = `${days}d ${hours}h`;
-            } else {
-              mipStats.uptime = `${hours}h`;
-            }
-          } else {
-            mipStats.uptime = '';
-          }
-          updated = true;
-        }
-        break;
-
-      // Other MIP types we recognize but don't display
-      case 'BAE': // Mud lag
-      case 'HAA': // Room items
-      case 'HAB': // Item actions
-        // Silently ignore these for now
-        break;
-    }
-
-    if (updated) {
-      ws.send(JSON.stringify({
-        type: 'mip_stats',
-        stats: mipStats
-      }));
+  for (const message of session.buffer) {
+    try {
+      ws.send(JSON.stringify(message));
+    } catch (e) {
+      console.error('Error replaying buffer:', e.message);
+      break;
     }
   }
 
-  // Parse FFF stats string: A~value~B~value~...
-  // Guild lines (I, J) can contain complex strings with embedded ~, so we handle them specially
-  function parseFFFStats(data) {
-    // Split by ~ but track position for guild lines
-    const parts = data.split('~');
-    let i = 0;
+  session.buffer = [];
+  session.bufferOverflow = false;
 
-    while (i < parts.length) {
-      const flag = parts[i];
+  ws.send(JSON.stringify({
+    type: 'system',
+    message: '--- End of buffered content ---'
+  }));
+}
 
-      // Check if this is a single-letter flag
-      if (flag.length === 1 && /[A-Z]/.test(flag)) {
-        const value = parts[i + 1] || '';
+/**
+ * Close a session completely
+ */
+function closeSession(session, reason) {
+  console.log(`Closing session ${session.token.substring(0, 8)}...: ${reason}`);
 
-        switch (flag) {
-          case 'A': mipStats.hp.current = parseInt(value) || 0; break;
-          case 'B': mipStats.hp.max = parseInt(value) || 0; break;
-          case 'C': mipStats.sp.current = parseInt(value) || 0; break;
-          case 'D': mipStats.sp.max = parseInt(value) || 0; break;
-          case 'E': mipStats.gp1.current = parseInt(value) || 0; break;
-          case 'F': mipStats.gp1.max = parseInt(value) || 0; break;
-          case 'G': mipStats.gp2.current = parseInt(value) || 0; break;
-          case 'H': mipStats.gp2.max = parseInt(value) || 0; break;
-          case 'K': mipStats.enemyName = value.trim(); break;
-          case 'L': mipStats.enemy = parseInt(value) || 0; break;
-          case 'N': mipStats.round = parseInt(value) || 0; break;
-          case 'I':
-            mipStats.gline1Raw = value;  // Store raw for debugging
-            mipStats.gline1 = convertMipColors(value);
-            break;
-          case 'J':
-            mipStats.gline2Raw = value;  // Store raw for debugging
-            mipStats.gline2 = convertMipColors(value);
-            break;
-        }
-        i += 2; // Skip flag and value
-      } else {
-        i++; // Skip empty or unknown parts
-      }
-    }
-
-    // Parse guild lines to extract variables (e.g., nukes_current, reset_pct)
-    mipStats.guildVars = parseGuildVars(mipStats.gline1Raw, mipStats.gline2Raw);
+  if (session.mudSocket && !session.mudSocket.destroyed) {
+    session.mudSocket.destroy();
   }
-
-  // Convert MIP color codes to HTML spans
-  // MIP uses: <r (red), <g (green), <b (blue), <c (cyan), <y (yellow), <v (violet), <w (white), <s (gray), > (reset)
-  function convertMipColors(text) {
-    if (!text) return '';
-
-    // Color map for MIP codes
-    const colorMap = {
-      'b': '#4488ff',  // blue
-      'c': '#44dddd',  // cyan
-      'g': '#44dd44',  // green
-      'r': '#ff4444',  // red
-      's': '#888888',  // gray (silver)
-      'v': '#dd44dd',  // violet
-      'w': '#ffffff',  // white
-      'y': '#dddd44'   // yellow
-    };
-
-    let result = '';
-    let i = 0;
-
-    while (i < text.length) {
-      if (text[i] === '<' && i + 1 < text.length && colorMap[text[i + 1]]) {
-        // MIP color code: <r, <g, etc.
-        result += `<span style="color:${colorMap[text[i + 1]]}">`;
-        i += 2;
-      } else if (text[i] === '>') {
-        // MIP reset code
-        result += '</span>';
-        i += 1;
-      } else {
-        result += text[i];
-        i += 1;
-      }
-    }
-
-    return result;
+  if (session.timeoutHandle) {
+    clearTimeout(session.timeoutHandle);
   }
+  if (session.lineBufferTimeout) {
+    clearTimeout(session.lineBufferTimeout);
+  }
+  sessions.delete(session.token);
+}
 
-  // Function to create and connect MUD socket with all handlers
-  function connectToMud() {
-    // Clean up existing socket if any
-    if (mudSocket) {
-      mudSocket.destroy();
-      mudSocket = null;
-    }
+/**
+ * Parse MIP message and send updates to client
+ */
+function parseMipMessage(session, msgType, msgData) {
+  let updated = false;
+  const mipStats = session.mipStats;
 
-    ws.send(JSON.stringify({
-      type: 'system',
-      message: `Connecting to ${targetHost}:${targetPort}...`
-    }));
-
-    mudSocket = new net.Socket();
-
-    mudSocket.connect(targetPort, targetHost, () => {
-      console.log(`Connected to MUD: ${targetHost}:${targetPort}`);
-      ws.send(JSON.stringify({
-        type: 'system',
-        message: `Connected to ${targetHost}:${targetPort}!`
-      }));
+  if (session.mipDebug) {
+    sendToClient(session, {
+      type: 'mip_debug',
+      msgType: msgType,
+      msgData: msgData
     });
+  }
 
-    // Function to process a single line (extracted for reuse with buffer flush)
-    function processLine(line) {
-        if (line.trim() === '') return;
+  switch (msgType) {
+    case 'FFF':
+      parseFFFStats(session, msgData);
+      updated = true;
+      break;
 
-        // FIRST LINE OF DEFENSE: Gag ANY line containing MIP protocol pattern
-        // This runs before ALL other processing, no exceptions
-        if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
-          // Try to parse it for stats if possible, then gag
-          const mipMatch = line.match(/%(\d{5})(\d{3})([A-Z]{3})/);
-          if (mipMatch && mipEnabled) {
-            const len = parseInt(mipMatch[2], 10);
-            const msgType = mipMatch[3];
-            const dataStart = mipMatch.index + mipMatch[0].length;
-            const msgData = line.substring(dataStart, dataStart + len);
-            parseMipMessage(ws, msgType, msgData);
-          }
-          return; // Always gag the line
+    case 'BAD':
+      mipStats.room = msgData.trim().replace(/\s*\([^)]*\)?(~\d+)?\s*$/, '').trim();
+      updated = true;
+      break;
+
+    case 'DDD':
+      mipStats.exits = msgData.replace(/~/g, ', ');
+      updated = true;
+      break;
+
+    case 'BBA':
+      mipStats.gp1.label = msgData.trim() || 'GP1';
+      updated = true;
+      break;
+
+    case 'BBB':
+      mipStats.gp2.label = msgData.trim() || 'GP2';
+      updated = true;
+      break;
+
+    case 'BBC':
+      mipStats.hp.label = msgData.trim() || 'HP';
+      updated = true;
+      break;
+
+    case 'BBD':
+      mipStats.sp.label = msgData.trim() || 'SP';
+      updated = true;
+      break;
+
+    case 'BAB': // Tells
+      {
+        const parts = msgData.split('~');
+        let formatted;
+        if (parts[0] === '' && parts.length >= 3) {
+          const sender = parts[1];
+          const message = parts.slice(2).join('~');
+          formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
+        } else if (parts[0] === 'x' && parts.length >= 3) {
+          const recipient = parts[1];
+          const message = parts.slice(2).join('~');
+          formatted = `<span style="color:#88ff88">[To ${recipient}]:</span> ${convertMipColors(message)}`;
+        } else {
+          formatted = convertMipColors(msgData);
+        }
+        sendToClient(session, {
+          type: 'mip_chat',
+          chatType: 'tell',
+          raw: msgData,
+          message: formatted
+        });
+      }
+      break;
+
+    case 'CAA': // Chat channels
+      {
+        const parts = msgData.split('~');
+        if (parts[0] === 'ptell' && msgData.includes('Divvy of') && msgData.includes('coins called by')) {
+          break;
         }
 
-        // Early MIP filter: catch obvious MIP protocol data even before mipId is set
-        // This prevents leaks during the race condition window between MIP enable and set_mip
-        // Pattern: %<5digits><3digits><3uppercase><data> or #K%<5digits>...
-        if (!mipId) {
-          // Check if line is ONLY MIP data (gag entirely)
-          const pureEarlyMipPattern = /^%?\d{5}\d{3}[A-Z]{3}/;
-          if (pureEarlyMipPattern.test(line.trim())) {
-            return; // Gag raw MIP data
-          }
-
-          // Also strip embedded MIP data from lines
-          // Match %<5digits><3digits><3uppercase><variable length data>
-          // The length field tells us how many chars of data follow
-          const embeddedMipPattern = /%(\d{5})(\d{3})([A-Z]{3})/g;
-          let strippedLine = line;
-          let match;
-          while ((match = embeddedMipPattern.exec(line)) !== null) {
-            const mipLength = parseInt(match[2], 10);
-            const fullMatch = match[0];
-            const dataStart = match.index + fullMatch.length;
-            const mipData = line.substring(dataStart, dataStart + mipLength);
-            // Remove the entire MIP sequence (pattern + data)
-            const toRemove = fullMatch + mipData;
-            strippedLine = strippedLine.replace(toRemove, '');
-          }
-          if (strippedLine !== line) {
-            line = strippedLine;
-            if (!line.trim()) return; // Nothing left after stripping MIP
-          }
-
-          // Also strip #K% format
-          const embeddedKPattern = /#K%(\d{5})(\d{3})([A-Z]{3})/g;
-          while ((match = embeddedKPattern.exec(line)) !== null) {
-            const mipLength = parseInt(match[2], 10);
-            const fullMatch = match[0];
-            const dataStart = match.index + fullMatch.length;
-            const mipData = line.substring(dataStart, dataStart + mipLength);
-            const toRemove = fullMatch + mipData;
-            strippedLine = strippedLine.replace(toRemove, '');
-          }
-          if (strippedLine !== line) {
-            line = strippedLine;
-            if (!line.trim()) return;
-          }
+        let formatted;
+        if (parts.length >= 4) {
+          const channel = parts[0];
+          const message = parts.slice(3).join('~');
+          formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
+        } else if (parts.length >= 2) {
+          const channel = parts[0];
+          const message = parts.slice(1).join('~');
+          formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
+        } else {
+          formatted = convertMipColors(msgData);
         }
+        sendToClient(session, {
+          type: 'mip_chat',
+          chatType: 'channel',
+          raw: msgData,
+          message: formatted
+        });
+      }
+      break;
 
-        // Built-in MIP gag: filter out MIP protocol lines when MIP is enabled
-        if (mipEnabled && mipId) {
-          // Handle TCP fragmentation - if we have buffered data, prepend it
-          if (mipBuffer) {
-            line = mipBuffer + line;
-            mipBuffer = '';
-          }
-
-          // Check if line ends with partial MIP marker (fragmented packet)
-          // Buffer lines ending with #K% or #K%<partial>
-          if (line.endsWith('#K%') || (line.includes('#K%') && line.indexOf('#K%') > line.length - 20)) {
-            const mipStart = line.lastIndexOf('#K%');
-            // Send the part before the MIP marker
-            const beforeMip = line.substring(0, mipStart);
-            if (beforeMip.trim()) {
-              const processed = processTriggers(beforeMip, triggers);
-              if (!processed.gag) {
-                ws.send(JSON.stringify({
-                  type: 'mud',
-                  line: processed.line,
-                  highlight: processed.highlight,
-                  sound: processed.sound
-                }));
-              }
-            }
-            // Buffer the MIP part for next chunk
-            mipBuffer = line.substring(mipStart);
-            return;
-          }
-
-          // MIP lines start with #K% followed by the 5-digit session ID
-          // Pattern: #K%<mipId><3-char-length><3-char-type><data>
-          // Also handle lines that might have a leading "] " from the MUD
-          const mipPattern = new RegExp(`#K%${mipId}(\\d{3})(\\w{3})`);
-          const match = line.match(mipPattern);
-          if (match) {
-            const mipLength = parseInt(match[1], 10);
-            const msgType = match[2];
-            const mipStart = match.index;
-            const dataStart = mipStart + 3 + 5 + 3 + 3; // #K%(3) + mipId(5) + length(3) + type(3) = 14
-            const msgData = line.substring(dataStart, dataStart + mipLength);
-
-            // Parse MIP data and send to client
-            parseMipMessage(ws, msgType, msgData);
-
-            // Get text before and after the MIP marker (don't trim - preserve flow)
-            const beforeMip = line.substring(0, mipStart);
-            const afterMip = line.substring(dataStart + mipLength);
-
-            // Combine before and after text
-            let displayText = beforeMip + afterMip;
-            // Remove leading "] " if present (MUD artifact)
-            displayText = displayText.replace(/^\]\s*/, '');
-
-            // Send combined text if any
-            if (displayText) {
-              const processed = processTriggers(displayText, triggers);
-              if (!processed.gag) {
-                ws.send(JSON.stringify({
-                  type: 'mud',
-                  line: processed.line,
-                  highlight: processed.highlight,
-                  sound: processed.sound
-                }));
-              }
-            }
-            // Silently gag MIP protocol portion
-            return;
-          }
-
-          // Also handle %<mipId> format (without #K prefix) embedded in text
-          const altMipPattern = new RegExp(`%${mipId}(\\d{3})([A-Z]{3})`);
-          const altMatch = line.match(altMipPattern);
-          if (altMatch) {
-            const mipLength = parseInt(altMatch[1], 10);
-            const msgType = altMatch[2];
-            const mipStart = altMatch.index;
-            const dataStart = mipStart + 1 + 5 + 3 + 3; // %(1) + mipId(5) + length(3) + type(3) = 12
-            const msgData = line.substring(dataStart, dataStart + mipLength);
-
-            // Parse MIP data and send to client
-            parseMipMessage(ws, msgType, msgData);
-
-            // Get text before and after the MIP marker
-            const beforeMip = line.substring(0, mipStart);
-            const afterMip = line.substring(dataStart + mipLength);
-
-            // Combine before and after text (no trim - preserve spacing)
-            const displayText = beforeMip + afterMip;
-
-            // Send combined text if any
-            if (displayText.trim()) {
-              const processed = processTriggers(displayText, triggers);
-              if (!processed.gag) {
-                ws.send(JSON.stringify({
-                  type: 'mud',
-                  line: processed.line,
-                  highlight: processed.highlight,
-                  sound: processed.sound
-                }));
-              }
-            }
-            return;
-          }
-
-          // Gag lines that are ONLY raw MIP data (no surrounding text)
-          // Match both specific mipId and generic pattern (for race conditions)
-          const rawMipPattern = new RegExp(`^%?${mipId}\\d{3}[A-Z]{3}`);
-          const genericMipPattern = /^%?\d{5}\d{3}[A-Z]{3}/;
-          if (rawMipPattern.test(line) || genericMipPattern.test(line)) {
-            return;
-          }
-
-          // Gag orphaned MIP action data fragments (from HAB item actions)
-          // These look like: "or~exa #N/search #N" or "noun~word~word~exa #N/search #N"
-          // The pattern is: optional word fragments, ~, words, ending with "#N/command #N"
-          if (/~exa\s+#N\/\w+\s+#N\s*$/.test(line)) {
-            return;
-          }
-          // Also catch lines that are just: "word~exa #N/search #N"
-          if (/^[a-z]+~[a-z]+\s+#N\/\w+\s+#N\s*$/.test(line)) {
-            return;
-          }
-          // Catch MIP action patterns like "#N/search #N" at end of lines
-          if (/\s#N\/\w+\s+#N\s*$/.test(line) && line.includes('~')) {
-            return;
-          }
-          // Catch short orphaned fragments ending in #N (e.g., "earch #N" from split "#N/search #N")
-          if (/^[a-z]+\s+#N\s*$/.test(line) && line.length < 20) {
-            return;
-          }
-          // Catch fragments that are just "#N" or start with "#N"
-          if (/^#N(\/\w+)?\s*(#N)?\s*$/.test(line)) {
-            return;
-          }
+    case 'AAC': // Reboot time
+      {
+        const match = msgData.match(/^([\d.]+)/);
+        const decimalDays = match ? parseFloat(match[1]) : 0;
+        if (decimalDays > 0) {
+          const days = Math.floor(decimalDays);
+          const hours = Math.round((decimalDays - days) * 24);
+          mipStats.reboot = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+        } else {
+          mipStats.reboot = '';
         }
+        updated = true;
+      }
+      break;
 
-        // Final safety net: gag any line containing MIP protocol data
-        // Pattern: %<5digits><3digits><3uppercase> anywhere in line
-        if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
-          return; // Gag entire line containing MIP data
+    case 'AAF': // Uptime
+      {
+        const match = msgData.match(/^([\d.]+)/);
+        const decimalDays = match ? parseFloat(match[1]) : 0;
+        if (decimalDays > 0) {
+          const days = Math.floor(decimalDays);
+          const hours = Math.floor((decimalDays - days) * 24);
+          mipStats.uptime = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+        } else {
+          mipStats.uptime = '';
         }
+        updated = true;
+      }
+      break;
 
-        // ANSI color state tracking for multi-line colored blocks
-        // If line doesn't start with ANSI code but we have a current state, prepend it
-        const ansiPattern = /\x1b\[([0-9;]+)m/g;
-        const startsWithAnsi = /^\x1b\[/.test(line);
+    case 'BAE':
+    case 'HAA':
+    case 'HAB':
+      break;
+  }
 
-        if (!startsWithAnsi && currentAnsiState) {
-          // Prepend current color state to continuation lines
-          line = currentAnsiState + line;
-        }
+  if (updated) {
+    sendToClient(session, {
+      type: 'mip_stats',
+      stats: mipStats
+    });
+  }
+}
 
-        // Extract all ANSI codes from line and track the final state
-        let match;
-        let lastAnsiCode = '';
-        while ((match = ansiPattern.exec(line)) !== null) {
-          const codes = match[1];
-          // Check if this is a reset code (0 or empty)
-          if (codes === '0' || codes === '') {
-            currentAnsiState = '';
-          } else {
-            // Store this as the current state
-            lastAnsiCode = match[0];
-          }
-        }
-        // If we found non-reset ANSI codes, update state
-        if (lastAnsiCode && !line.includes('\x1b[0m')) {
-          // Line has color but no reset - color continues to next line
-          currentAnsiState = lastAnsiCode;
-        } else if (line.includes('\x1b[0m')) {
-          // Line has reset - clear state
-          currentAnsiState = '';
-        }
+/**
+ * Parse FFF stats string
+ */
+function parseFFFStats(session, data) {
+  const mipStats = session.mipStats;
+  const parts = data.split('~');
+  let i = 0;
 
-        // Process triggers
-        const processed = processTriggers(line, triggers);
+  while (i < parts.length) {
+    const flag = parts[i];
 
+    if (flag.length === 1 && /[A-Z]/.test(flag)) {
+      const value = parts[i + 1] || '';
+
+      switch (flag) {
+        case 'A': mipStats.hp.current = parseInt(value) || 0; break;
+        case 'B': mipStats.hp.max = parseInt(value) || 0; break;
+        case 'C': mipStats.sp.current = parseInt(value) || 0; break;
+        case 'D': mipStats.sp.max = parseInt(value) || 0; break;
+        case 'E': mipStats.gp1.current = parseInt(value) || 0; break;
+        case 'F': mipStats.gp1.max = parseInt(value) || 0; break;
+        case 'G': mipStats.gp2.current = parseInt(value) || 0; break;
+        case 'H': mipStats.gp2.max = parseInt(value) || 0; break;
+        case 'K': mipStats.enemyName = value.trim(); break;
+        case 'L': mipStats.enemy = parseInt(value) || 0; break;
+        case 'N': mipStats.round = parseInt(value) || 0; break;
+        case 'I':
+          mipStats.gline1Raw = value;
+          mipStats.gline1 = convertMipColors(value);
+          break;
+        case 'J':
+          mipStats.gline2Raw = value;
+          mipStats.gline2 = convertMipColors(value);
+          break;
+      }
+      i += 2;
+    } else {
+      i++;
+    }
+  }
+
+  mipStats.guildVars = parseGuildVars(mipStats.gline1Raw, mipStats.gline2Raw);
+}
+
+/**
+ * Process a single line from MUD
+ */
+function processLine(session, line) {
+  if (line.trim() === '') return;
+
+  // FIRST LINE OF DEFENSE: Gag MIP protocol lines
+  if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
+    const mipMatch = line.match(/%(\d{5})(\d{3})([A-Z]{3})/);
+    if (mipMatch && session.mipEnabled) {
+      const len = parseInt(mipMatch[2], 10);
+      const msgType = mipMatch[3];
+      const dataStart = mipMatch.index + mipMatch[0].length;
+      const msgData = line.substring(dataStart, dataStart + len);
+      parseMipMessage(session, msgType, msgData);
+    }
+    return;
+  }
+
+  // Early MIP filter for before mipId is set
+  if (!session.mipId) {
+    const pureEarlyMipPattern = /^%?\d{5}\d{3}[A-Z]{3}/;
+    if (pureEarlyMipPattern.test(line.trim())) {
+      return;
+    }
+
+    const embeddedMipPattern = /%(\d{5})(\d{3})([A-Z]{3})/g;
+    let strippedLine = line;
+    let match;
+    while ((match = embeddedMipPattern.exec(line)) !== null) {
+      const mipLength = parseInt(match[2], 10);
+      const fullMatch = match[0];
+      const dataStart = match.index + fullMatch.length;
+      const mipData = line.substring(dataStart, dataStart + mipLength);
+      const toRemove = fullMatch + mipData;
+      strippedLine = strippedLine.replace(toRemove, '');
+    }
+    if (strippedLine !== line) {
+      line = strippedLine;
+      if (!line.trim()) return;
+    }
+
+    const embeddedKPattern = /#K%(\d{5})(\d{3})([A-Z]{3})/g;
+    while ((match = embeddedKPattern.exec(line)) !== null) {
+      const mipLength = parseInt(match[2], 10);
+      const fullMatch = match[0];
+      const dataStart = match.index + fullMatch.length;
+      const mipData = line.substring(dataStart, dataStart + mipLength);
+      const toRemove = fullMatch + mipData;
+      strippedLine = strippedLine.replace(toRemove, '');
+    }
+    if (strippedLine !== line) {
+      line = strippedLine;
+      if (!line.trim()) return;
+    }
+  }
+
+  // MIP filtering when enabled
+  if (session.mipEnabled && session.mipId) {
+    if (session.mipBuffer) {
+      line = session.mipBuffer + line;
+      session.mipBuffer = '';
+    }
+
+    if (line.endsWith('#K%') || (line.includes('#K%') && line.indexOf('#K%') > line.length - 20)) {
+      const mipStart = line.lastIndexOf('#K%');
+      const beforeMip = line.substring(0, mipStart);
+      if (beforeMip.trim()) {
+        const processed = processTriggers(beforeMip, session.triggers);
         if (!processed.gag) {
-          ws.send(JSON.stringify({
+          sendToClient(session, {
             type: 'mud',
             line: processed.line,
             highlight: processed.highlight,
             sound: processed.sound
-          }));
+          });
         }
-
-        // Execute trigger commands
-        processed.commands.forEach(cmd => {
-          if (cmd.startsWith('#')) {
-            // Client-side command - send back to client for execution
-            ws.send(JSON.stringify({
-              type: 'client_command',
-              command: cmd
-            }));
-          } else if (mudSocket && !mudSocket.destroyed) {
-            mudSocket.write(cmd + '\r\n');
-          }
-        });
+      }
+      session.mipBuffer = line.substring(mipStart);
+      return;
     }
 
-    mudSocket.on('data', (data) => {
-      // Strip telnet control sequences before converting to text
-      // Also detect GA (Go Ahead) which signals end of output/prompt
-      const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
-      const text = cleanData.toString('utf8');
+    const mipPattern = new RegExp(`#K%${session.mipId}(\\d{3})(\\w{3})`);
+    const match = line.match(mipPattern);
+    if (match) {
+      const mipLength = parseInt(match[1], 10);
+      const msgType = match[2];
+      const mipStart = match.index;
+      const dataStart = mipStart + 3 + 5 + 3 + 3;
+      const msgData = line.substring(dataStart, dataStart + mipLength);
 
-      // Clear any pending buffer flush timeout since we got new data
-      if (lineBufferTimeout) {
-        clearTimeout(lineBufferTimeout);
-        lineBufferTimeout = null;
-      }
+      parseMipMessage(session, msgType, msgData);
 
-      // Prepend any buffered data from previous chunk
-      const fullText = lineBuffer + text;
+      const beforeMip = line.substring(0, mipStart);
+      const afterMip = line.substring(dataStart + mipLength);
+      let displayText = beforeMip + afterMip;
+      displayText = displayText.replace(/^\]\s*/, '');
 
-      // Split on newlines
-      const parts = fullText.split('\n');
-
-      // If GA was received, flush everything immediately (it's a prompt)
-      if (hasGA) {
-        lineBuffer = '';
-        parts.forEach(line => processLine(line));
-        return;
-      }
-
-      // If the text didn't end with a newline, the last part is incomplete - buffer it
-      if (!text.endsWith('\n') && parts.length > 0) {
-        lineBuffer = parts.pop();
-        // Set a timeout to flush the buffer (fallback for MUDs without GA)
-        if (lineBuffer) {
-          lineBufferTimeout = setTimeout(() => {
-            if (lineBuffer) {
-              processLine(lineBuffer);
-              lineBuffer = '';
-            }
-          }, 100); // Flush after 100ms of no new data
+      if (displayText) {
+        const processed = processTriggers(displayText, session.triggers);
+        if (!processed.gag) {
+          sendToClient(session, {
+            type: 'mud',
+            line: processed.line,
+            highlight: processed.highlight,
+            sound: processed.sound
+          });
         }
-      } else {
-        lineBuffer = '';
       }
+      return;
+    }
 
-      // Process complete lines
-      parts.forEach(line => processLine(line));
-    });
+    const altMipPattern = new RegExp(`%${session.mipId}(\\d{3})([A-Z]{3})`);
+    const altMatch = line.match(altMipPattern);
+    if (altMatch) {
+      const mipLength = parseInt(altMatch[1], 10);
+      const msgType = altMatch[2];
+      const mipStart = altMatch.index;
+      const dataStart = mipStart + 1 + 5 + 3 + 3;
+      const msgData = line.substring(dataStart, dataStart + mipLength);
 
-    mudSocket.on('close', () => {
-      console.log('MUD connection closed');
-      ws.send(JSON.stringify({
-        type: 'system',
-        message: 'Connection to MUD closed.'
-      }));
-    });
+      parseMipMessage(session, msgType, msgData);
 
-    mudSocket.on('error', (err) => {
-      console.error('MUD socket error:', err.message);
-      ws.send(JSON.stringify({
-        type: 'error',
-        message: 'MUD connection error: ' + err.message
-      }));
+      const beforeMip = line.substring(0, mipStart);
+      const afterMip = line.substring(dataStart + mipLength);
+      const displayText = beforeMip + afterMip;
+
+      if (displayText.trim()) {
+        const processed = processTriggers(displayText, session.triggers);
+        if (!processed.gag) {
+          sendToClient(session, {
+            type: 'mud',
+            line: processed.line,
+            highlight: processed.highlight,
+            sound: processed.sound
+          });
+        }
+      }
+      return;
+    }
+
+    const rawMipPattern = new RegExp(`^%?${session.mipId}\\d{3}[A-Z]{3}`);
+    const genericMipPattern = /^%?\d{5}\d{3}[A-Z]{3}/;
+    if (rawMipPattern.test(line) || genericMipPattern.test(line)) {
+      return;
+    }
+
+    if (/~exa\s+#N\/\w+\s+#N\s*$/.test(line)) return;
+    if (/^[a-z]+~[a-z]+\s+#N\/\w+\s+#N\s*$/.test(line)) return;
+    if (/\s#N\/\w+\s+#N\s*$/.test(line) && line.includes('~')) return;
+    if (/^[a-z]+\s+#N\s*$/.test(line) && line.length < 20) return;
+    if (/^#N(\/\w+)?\s*(#N)?\s*$/.test(line)) return;
+  }
+
+  if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
+    return;
+  }
+
+  // ANSI color state tracking
+  const ansiPattern = /\x1b\[([0-9;]+)m/g;
+  const startsWithAnsi = /^\x1b\[/.test(line);
+
+  if (!startsWithAnsi && session.currentAnsiState) {
+    line = session.currentAnsiState + line;
+  }
+
+  let ansiMatch;
+  let lastAnsiCode = '';
+  while ((ansiMatch = ansiPattern.exec(line)) !== null) {
+    const codes = ansiMatch[1];
+    if (codes === '0' || codes === '') {
+      session.currentAnsiState = '';
+    } else {
+      lastAnsiCode = ansiMatch[0];
+    }
+  }
+  if (lastAnsiCode && !line.includes('\x1b[0m')) {
+    session.currentAnsiState = lastAnsiCode;
+  } else if (line.includes('\x1b[0m')) {
+    session.currentAnsiState = '';
+  }
+
+  // Process triggers
+  const processed = processTriggers(line, session.triggers);
+
+  if (!processed.gag) {
+    sendToClient(session, {
+      type: 'mud',
+      line: processed.line,
+      highlight: processed.highlight,
+      sound: processed.sound
     });
   }
 
-  // Wait for client to send set_server before connecting
-  // This avoids connecting to default server then reconnecting to the right one
+  // Execute trigger commands
+  processed.commands.forEach(cmd => {
+    if (cmd.startsWith('#')) {
+      sendToClient(session, {
+        type: 'client_command',
+        command: cmd
+      });
+    } else if (session.mudSocket && !session.mudSocket.destroyed) {
+      session.mudSocket.write(cmd + '\r\n');
+    }
+  });
+}
 
-  // Handle WebSocket messages
+/**
+ * Create and connect MUD socket for a session
+ */
+function connectToMud(session) {
+  if (session.mudSocket) {
+    session.mudSocket.destroy();
+    session.mudSocket = null;
+  }
+
+  sendToClient(session, {
+    type: 'system',
+    message: `Connecting to ${session.targetHost}:${session.targetPort}...`
+  });
+
+  session.mudSocket = new net.Socket();
+
+  session.mudSocket.connect(session.targetPort, session.targetHost, () => {
+    console.log(`Connected to MUD: ${session.targetHost}:${session.targetPort}`);
+    sendToClient(session, {
+      type: 'system',
+      message: `Connected to ${session.targetHost}:${session.targetPort}!`
+    });
+  });
+
+  session.mudSocket.on('data', (data) => {
+    const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
+    const text = cleanData.toString('utf8');
+
+    if (session.lineBufferTimeout) {
+      clearTimeout(session.lineBufferTimeout);
+      session.lineBufferTimeout = null;
+    }
+
+    const fullText = session.lineBuffer + text;
+    const parts = fullText.split('\n');
+
+    if (hasGA) {
+      session.lineBuffer = '';
+      parts.forEach(line => processLine(session, line));
+      return;
+    }
+
+    if (!text.endsWith('\n') && parts.length > 0) {
+      session.lineBuffer = parts.pop();
+      if (session.lineBuffer) {
+        session.lineBufferTimeout = setTimeout(() => {
+          if (session.lineBuffer) {
+            processLine(session, session.lineBuffer);
+            session.lineBuffer = '';
+          }
+        }, 100);
+      }
+    } else {
+      session.lineBuffer = '';
+    }
+
+    parts.forEach(line => processLine(session, line));
+  });
+
+  session.mudSocket.on('close', () => {
+    console.log('MUD connection closed');
+    sendToClient(session, {
+      type: 'system',
+      message: 'Connection to MUD closed.'
+    });
+    // Clean up session when MUD disconnects
+    closeSession(session, 'MUD connection closed');
+  });
+
+  session.mudSocket.on('error', (err) => {
+    console.error('MUD socket error:', err.message);
+    sendToClient(session, {
+      type: 'error',
+      message: 'MUD connection error: ' + err.message
+    });
+  });
+}
+
+/**
+ * Handle WebSocket connection
+ */
+wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection from:', req.socket.remoteAddress);
+
+  let session = null;
+  let authenticated = false;
+
+  // Handle messages
   ws.on('message', (message) => {
     try {
       const data = JSON.parse(message);
 
+      // Auth must be first message
+      if (!authenticated) {
+        if (data.type === 'auth') {
+          const token = data.token;
+          if (!token || token.length !== 64) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Invalid auth token' }));
+            ws.close();
+            return;
+          }
+
+          // Check for existing session
+          if (sessions.has(token)) {
+            session = sessions.get(token);
+
+            // Check if another browser is already connected
+            if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+              console.log(`Taking over session ${token.substring(0, 8)}... from another browser`);
+              try {
+                session.ws.send(JSON.stringify({
+                  type: 'system',
+                  message: 'Session taken over by another browser.'
+                }));
+                session.ws.close();
+              } catch (e) {}
+            }
+
+            // Attach new WebSocket
+            session.ws = ws;
+            session.disconnectedAt = null;
+            session.explicitDisconnect = false;
+            if (session.timeoutHandle) {
+              clearTimeout(session.timeoutHandle);
+              session.timeoutHandle = null;
+            }
+
+            console.log(`Resumed session ${token.substring(0, 8)}... (MUD ${session.mudSocket && !session.mudSocket.destroyed ? 'connected' : 'disconnected'})`);
+
+            ws.send(JSON.stringify({
+              type: 'session_resumed',
+              mudConnected: session.mudSocket && !session.mudSocket.destroyed
+            }));
+
+            // Replay buffered content
+            replayBuffer(session);
+
+            // Send current MIP stats if available
+            if (session.mipStats.hp.max > 0) {
+              ws.send(JSON.stringify({
+                type: 'mip_stats',
+                stats: session.mipStats
+              }));
+            }
+          } else {
+            // Create new session
+            session = createSession(token);
+            session.ws = ws;
+            sessions.set(token, session);
+
+            console.log(`New session ${token.substring(0, 8)}...`);
+
+            ws.send(JSON.stringify({
+              type: 'session_new'
+            }));
+          }
+
+          authenticated = true;
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: 'Must authenticate first' }));
+        }
+        return;
+      }
+
+      // Handle authenticated messages
       switch (data.type) {
         case 'command':
-          if (mudSocket && !mudSocket.destroyed) {
-            const cmd = processAliases(data.command || '', aliases);
-            // Handle multiple commands separated by ;
+          if (session.mudSocket && !session.mudSocket.destroyed) {
+            const cmd = processAliases(data.command || '', session.aliases);
             const commands = parseCommands(cmd);
             commands.forEach(c => {
-              // Send command (including empty ones - just sends \r\n for "press enter")
-              mudSocket.write(c.trim() + '\r\n');
+              session.mudSocket.write(c.trim() + '\r\n');
             });
-            // If no commands parsed (empty input), still send a newline
             if (commands.length === 0) {
-              mudSocket.write('\r\n');
+              session.mudSocket.write('\r\n');
             }
           }
           break;
 
         case 'set_triggers':
-          triggers = data.triggers || [];
+          session.triggers = data.triggers || [];
           break;
 
         case 'set_aliases':
-          aliases = data.aliases || [];
+          session.aliases = data.aliases || [];
           break;
 
         case 'set_mip':
-          mipEnabled = data.enabled || false;
-          mipId = data.mipId || null;
-          mipDebug = data.debug || false;
-          console.log(`MIP ${mipEnabled ? 'enabled' : 'disabled'}${mipId ? ' (ID: ' + mipId + ')' : ''}${mipDebug ? ' [DEBUG]' : ''}`);
+          session.mipEnabled = data.enabled || false;
+          session.mipId = data.mipId || null;
+          session.mipDebug = data.debug || false;
+          console.log(`MIP ${session.mipEnabled ? 'enabled' : 'disabled'}${session.mipId ? ' (ID: ' + session.mipId + ')' : ''}`);
           break;
 
         case 'set_server':
-          // Allow client to specify target MUD server
-          // Valid servers: 3k.org:3000 (default), 3scapes.org:3200
           if (data.host && data.port) {
-            // Security: only allow known servers
             const allowedServers = [
               { host: '3k.org', port: 3000 },
               { host: '3scapes.org', port: 3200 }
             ];
             const isAllowed = allowedServers.some(s => s.host === data.host && s.port === data.port);
             if (isAllowed) {
-              targetHost = data.host;
-              targetPort = data.port;
-              console.log(`Target server set to ${targetHost}:${targetPort}`);
-              // If already connected, reconnect to new server
-              if (mudSocket && !mudSocket.destroyed) {
-                mudSocket.destroy();
-              }
-              connectToMud();
+              session.targetHost = data.host;
+              session.targetPort = data.port;
+              console.log(`Target server set to ${session.targetHost}:${session.targetPort}`);
+              connectToMud(session);
             } else {
               console.log(`Rejected invalid server: ${data.host}:${data.port}`);
               ws.send(JSON.stringify({
@@ -879,7 +964,14 @@ wss.on('connection', (ws, req) => {
 
         case 'reconnect':
           console.log('Reconnect requested');
-          connectToMud();
+          connectToMud(session);
+          break;
+
+        case 'disconnect':
+          // Explicit disconnect - close MUD connection
+          console.log('Explicit disconnect requested');
+          session.explicitDisconnect = true;
+          closeSession(session, 'explicit disconnect');
           break;
       }
     } catch (e) {
@@ -889,25 +981,33 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     console.log('WebSocket closed');
-    if (mudSocket) {
-      mudSocket.destroy();
+    if (session) {
+      if (session.explicitDisconnect) {
+        // Already handled
+        return;
+      }
+
+      // Unexpected disconnect - keep MUD connection alive
+      session.ws = null;
+      session.disconnectedAt = Date.now();
+
+      if (session.mudSocket && !session.mudSocket.destroyed) {
+        console.log(`Browser disconnected, keeping MUD session for ${session.token.substring(0, 8)}...`);
+      }
     }
   });
 
   ws.on('error', (err) => {
     console.error('WebSocket error:', err.message);
-    if (mudSocket) {
-      mudSocket.destroy();
+    if (session) {
+      session.ws = null;
+      session.disconnectedAt = Date.now();
     }
   });
 });
 
 /**
  * Convert TinTin++ pattern to JavaScript regex
- * Full TinTin++ regexp support including:
- * %*, %+, %?, %., %d, %D, %w, %W, %s, %S, %a, %A, %c, %p, %P, %u, %U
- * %1-%99 capture groups, %!prefix for non-capturing, %i/%I for case
- * Range specifiers: %+1..5d (1-5 digits)
  */
 function tinTinToRegex(pattern) {
   let result = '';
@@ -917,33 +1017,27 @@ function tinTinToRegex(pattern) {
     const char = pattern[i];
 
     if (char === '\\' && i + 1 < pattern.length) {
-      // Escape sequence
       const next = pattern[i + 1];
       if (next === '%') {
-        // Literal percent
         result += '%';
         i += 2;
       } else {
-        // Pass through other escapes (for PCRE codes like \d, \w, \s)
         result += '\\' + next;
         i += 2;
       }
     } else if (char === '%') {
-      // TinTin++ wildcard
       if (i + 1 < pattern.length) {
         let next = pattern[i + 1];
         let nonCapturing = false;
 
-        // Check for %! (non-capturing prefix)
         if (next === '!' && i + 2 < pattern.length) {
           nonCapturing = true;
           next = pattern[i + 2];
-          i += 1; // Skip the !
+          i += 1;
         }
 
         const groupStart = nonCapturing ? '(?:' : '(';
 
-        // Check for range specifier: %+1..5d or %+3s etc
         if (next === '+' && i + 2 < pattern.length) {
           const rangeMatch = pattern.slice(i + 2).match(/^(\d+)(?:\.\.(\d+))?([dDwWsSaApPuU])?/);
           if (rangeMatch) {
@@ -958,78 +1052,59 @@ function tinTinToRegex(pattern) {
         }
 
         if (next === '*') {
-          // %* - Zero or more characters (non-greedy, no newlines)
           result += groupStart + '.*?)';
           i += 2;
         } else if (next === '+') {
-          // %+ - One or more characters (non-greedy)
           result += groupStart + '.+?)';
           i += 2;
         } else if (next === '?') {
-          // %? - Zero or one character
           result += groupStart + '.?)';
           i += 2;
         } else if (next === '.') {
-          // %. - Exactly one character
           result += groupStart + '.)';
           i += 2;
         } else if (next === 'd') {
-          // %d - Zero or more digits
           result += groupStart + '[0-9]*?)';
           i += 2;
         } else if (next === 'D') {
-          // %D - Zero or more non-digits
           result += groupStart + '[^0-9]*?)';
           i += 2;
         } else if (next === 'w') {
-          // %w - Zero or more word characters
           result += groupStart + '[A-Za-z0-9_]*?)';
           i += 2;
         } else if (next === 'W') {
-          // %W - Zero or more non-word characters
           result += groupStart + '[^A-Za-z0-9_]*?)';
           i += 2;
         } else if (next === 's') {
-          // %s - Zero or more whitespace
           result += groupStart + '\\s*?)';
           i += 2;
         } else if (next === 'S') {
-          // %S - Zero or more non-whitespace
           result += groupStart + '\\S*?)';
           i += 2;
         } else if (next === 'a') {
-          // %a - Zero or more characters including newlines
           result += groupStart + '[\\s\\S]*?)';
           i += 2;
         } else if (next === 'A') {
-          // %A - Zero or more newlines
           result += groupStart + '[\\r\\n]*?)';
           i += 2;
         } else if (next === 'c') {
-          // %c - Zero or more ANSI color codes (escape sequences)
           result += groupStart + '(?:\\x1b\\[[0-9;]*m)*?)';
           i += 2;
         } else if (next === 'p') {
-          // %p - Zero or more printable characters
           result += groupStart + '[\\x20-\\x7E]*?)';
           i += 2;
         } else if (next === 'P') {
-          // %P - Zero or more non-printable characters
           result += groupStart + '[^\\x20-\\x7E]*?)';
           i += 2;
         } else if (next === 'u') {
-          // %u - Zero or more unicode (any char)
           result += groupStart + '.*?)';
           i += 2;
         } else if (next === 'U') {
-          // %U - Zero or more non-unicode (ASCII only)
           result += groupStart + '[\\x00-\\x7F]*?)';
           i += 2;
         } else if (next === 'i' || next === 'I') {
-          // %i / %I - Case sensitivity flags (handled at regex level, skip here)
           i += 2;
         } else if (next >= '0' && next <= '9') {
-          // %1-%99 - Capture group reference (becomes a capture group)
           let j = i + 1;
           while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
             j++;
@@ -1037,25 +1112,20 @@ function tinTinToRegex(pattern) {
           result += '(.+?)';
           i = j;
         } else {
-          // Unknown % sequence, treat as literal
           result += '%';
           i += 1;
         }
       } else {
-        // % at end of string
         result += '%';
         i += 1;
       }
     } else if (char === '^' || char === '$') {
-      // Anchors - pass through
       result += char;
       i += 1;
     } else if ('[]{}()|+?*.\\'.includes(char)) {
-      // Regex special characters - escape them
       result += '\\' + char;
       i += 1;
     } else {
-      // Regular character
       result += char;
       i += 1;
     }
@@ -1064,9 +1134,6 @@ function tinTinToRegex(pattern) {
   return result;
 }
 
-/**
- * Get character class for range specifiers
- */
 function getCharClass(type) {
   switch (type) {
     case 'd': return '[0-9]';
@@ -1085,14 +1152,9 @@ function getCharClass(type) {
   }
 }
 
-/**
- * Replace TinTin++ variables (%0, %1, etc.) in a command string with matched values
- */
 function replaceTinTinVars(command, matches) {
   let result = command;
 
-  // Replace %0-%99 with matched groups
-  // matches[0] = full match, matches[1] = first capture, etc.
   if (matches && matches.length > 0) {
     for (let i = 0; i < matches.length && i < 100; i++) {
       const regex = new RegExp('%' + i + '(?![0-9])', 'g');
@@ -1100,9 +1162,7 @@ function replaceTinTinVars(command, matches) {
     }
   }
 
-  // Clean up any remaining unreplaced variables
   result = result.replace(/%\d+/g, '');
-
   return result;
 }
 
@@ -1150,7 +1210,6 @@ function processAliases(command, aliases) {
         break;
 
       case 'tintin':
-        // TinTin++ style pattern matching
         try {
           const regexPattern = tinTinToRegex(alias.pattern);
           const regex = new RegExp('^' + regexPattern + '$', 'i');
@@ -1165,7 +1224,6 @@ function processAliases(command, aliases) {
         break;
 
       case 'startsWith':
-        // Match command that starts with pattern (word boundary)
         const startsPattern = alias.pattern.toLowerCase();
         const cmdLower = command.toLowerCase();
         if (cmdLower === startsPattern || cmdLower.startsWith(startsPattern + ' ')) {
@@ -1177,7 +1235,6 @@ function processAliases(command, aliases) {
 
       case 'exact':
       default:
-        // Original behavior: match first word exactly
         const parts = command.split(' ');
         const cmd = parts[0];
         if (cmd.toLowerCase() === alias.pattern.toLowerCase()) {
@@ -1191,17 +1248,13 @@ function processAliases(command, aliases) {
       let replacement = alias.replacement;
 
       if (matchType === 'tintin') {
-        // For TinTin++: %0 = full match, %1, %2, etc. = capture groups
         replacement = replaceTinTinVars(replacement, matches);
       } else if (matchType === 'regex') {
-        // For regex, $0 = full match, $1, $2, etc. = capture groups
         matches.forEach((m, i) => {
           replacement = replacement.replace(new RegExp('\\$' + i, 'g'), m || '');
         });
-        // Clean up unused variables
         replacement = replacement.replace(/\$\d+/g, '');
       } else {
-        // For exact/startsWith: $* = all args, $1, $2 = individual args
         const args = matches.slice(1).join(' ');
         replacement = replacement.replace(/\$\*/g, args);
         const argParts = args.split(/\s+/).filter(p => p);
@@ -1256,7 +1309,6 @@ function processTriggers(line, triggers) {
         } catch (e) {}
         break;
       case 'tintin':
-        // TinTin++ style pattern matching
         try {
           const regexPattern = tinTinToRegex(trigger.pattern);
           const regex = new RegExp(regexPattern, 'i');
@@ -1280,7 +1332,6 @@ function processTriggers(line, triggers) {
             result.gag = true;
             break;
           case 'highlight':
-            // Apply inline highlighting to matched text
             const fgColor = action.fgColor || action.color || null;
             const bgColor = action.bgColor || null;
 
@@ -1289,7 +1340,6 @@ function processTriggers(line, triggers) {
               if (fgColor) styleStr += `color:${fgColor};`;
               if (bgColor) styleStr += `background:${bgColor};`;
 
-              // Find what to highlight based on match type
               let searchPattern;
               if (trigger.matchType === 'regex') {
                 searchPattern = new RegExp(`(${trigger.pattern})`, 'gi');
@@ -1297,12 +1347,10 @@ function processTriggers(line, triggers) {
                 const regexPattern = tinTinToRegex(trigger.pattern);
                 searchPattern = new RegExp(`(${regexPattern})`, 'gi');
               } else {
-                // Escape special regex chars for literal match
                 const escaped = trigger.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 searchPattern = new RegExp(`(${escaped})`, 'gi');
               }
 
-              // Wrap matched text in styled span
               result.line = result.line.replace(searchPattern, `<hl style="${styleStr}">$1</hl>`);
             }
             break;
@@ -1310,16 +1358,13 @@ function processTriggers(line, triggers) {
             let cmd = action.command || '';
             if (matches.length) {
               if (trigger.matchType === 'tintin') {
-                // Use TinTin++ variable replacement (%0, %1, etc.)
                 cmd = replaceTinTinVars(cmd, matches);
               } else {
-                // Use JavaScript-style replacement ($0, $1, etc.)
                 matches.forEach((m, i) => {
                   cmd = cmd.replace(new RegExp('\\$' + i, 'g'), m);
                 });
               }
             }
-            // Split on semicolons to handle multiple commands
             const cmds = cmd.split(';').map(c => c.trim()).filter(c => c);
             result.commands.push(...cmds);
             break;
