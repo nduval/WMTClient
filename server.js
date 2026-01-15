@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.4'; // Session takeover prevents reconnect loop
+const VERSION = '2.0.5'; // Fix %1 greedy matching in triggers
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -1142,7 +1142,8 @@ function tinTinToRegex(pattern) {
           while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
             j++;
           }
-          result += '(.+?)';
+          // Use greedy match - non-greedy (.+?) only captures 1 char when at end of pattern
+          result += '(.*)';
           i = j;
         } else {
           result += '%';
