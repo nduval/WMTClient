@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.3'; // Slower buffer replay with real delays
+const VERSION = '2.0.4'; // Session takeover prevents reconnect loop
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -884,9 +884,10 @@ wss.on('connection', (ws, req) => {
             if (session.ws && session.ws.readyState === WebSocket.OPEN) {
               console.log(`Taking over session ${token.substring(0, 8)}... from another browser`);
               try {
+                // Send session_taken so old client knows not to reconnect
                 session.ws.send(JSON.stringify({
-                  type: 'system',
-                  message: 'Session taken over by another browser.'
+                  type: 'session_taken',
+                  message: 'Session taken over by another device.'
                 }));
                 session.ws.close();
               } catch (e) {}
