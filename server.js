@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.1.0'; // TinTin++ greedy matching, PCRE embedding, auto-detection
+const VERSION = '2.2.0'; // Add #substitute action type
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -1465,6 +1465,24 @@ function processTriggers(line, triggers) {
             break;
           case 'sound':
             result.sound = action.sound || 'beep';
+            break;
+          case 'substitute':
+            // Replace matched text with replacement string
+            let replacement = action.replacement || '';
+            if (matches.length) {
+              replacement = replaceTinTinVars(replacement, matches);
+            }
+            // Find and replace the matched portion
+            if (useTinTin) {
+              const regexPattern = tinTinToRegex(pattern);
+              const searchPattern = new RegExp(regexPattern, 'gi');
+              result.line = result.line.replace(searchPattern, replacement);
+            } else {
+              // Simple contains - replace all occurrences
+              const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const searchPattern = new RegExp(escaped, 'gi');
+              result.line = result.line.replace(searchPattern, replacement);
+            }
             break;
         }
       }
