@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.6'; // Strip ANSI from captured trigger values
+const VERSION = '2.1.0'; // TinTin++ greedy matching, PCRE embedding, auto-detection
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -1041,6 +1041,10 @@ wss.on('connection', (ws, req) => {
 
 /**
  * Convert TinTin++ pattern to JavaScript regex
+ * Reference: https://tintin.mudhalla.net/manual/pcre.php
+ *
+ * All wildcards are GREEDY (capture as much as possible)
+ * PCRE can be embedded with { } braces (converted to parentheses)
  */
 function tinTinToRegex(pattern) {
   let result = '';
@@ -1050,45 +1054,100 @@ function tinTinToRegex(pattern) {
     const char = pattern[i];
 
     if (char === '\\' && i + 1 < pattern.length) {
+      // Escape sequences
       const next = pattern[i + 1];
       if (next === '%') {
         result += '%';
+        i += 2;
+      } else if (next === '{' || next === '}') {
+        // Escaped braces become literal
+        result += '\\' + next;
         i += 2;
       } else {
         result += '\\' + next;
         i += 2;
       }
+    } else if (char === '{') {
+      // PCRE embedding: { } becomes ( ) with content passed through
+      // Find matching closing brace
+      let depth = 1;
+      let j = i + 1;
+      let pcreContent = '';
+      while (j < pattern.length && depth > 0) {
+        if (pattern[j] === '{' && pattern[j-1] !== '\\') {
+          depth++;
+          pcreContent += pattern[j];
+        } else if (pattern[j] === '}' && pattern[j-1] !== '\\') {
+          depth--;
+          if (depth > 0) pcreContent += pattern[j];
+        } else {
+          pcreContent += pattern[j];
+        }
+        j++;
+      }
+      // Convert to capturing group (or non-capturing if preceded by %!)
+      result += '(' + pcreContent + ')';
+      i = j;
     } else if (char === '%') {
       if (i + 1 < pattern.length) {
         let next = pattern[i + 1];
         let nonCapturing = false;
 
+        // Check for non-capturing prefix %!
         if (next === '!' && i + 2 < pattern.length) {
           nonCapturing = true;
           next = pattern[i + 2];
           i += 1;
+
+          // Special case: %!{ for non-capturing PCRE group
+          if (next === '{') {
+            let depth = 1;
+            let j = i + 2;
+            let pcreContent = '';
+            while (j < pattern.length && depth > 0) {
+              if (pattern[j] === '{' && pattern[j-1] !== '\\') {
+                depth++;
+                pcreContent += pattern[j];
+              } else if (pattern[j] === '}' && pattern[j-1] !== '\\') {
+                depth--;
+                if (depth > 0) pcreContent += pattern[j];
+              } else {
+                pcreContent += pattern[j];
+              }
+              j++;
+            }
+            result += '(?:' + pcreContent + ')';
+            i = j;
+            continue;
+          }
         }
 
         const groupStart = nonCapturing ? '(?:' : '(';
 
+        // Range syntax: %+min..max[type] or %+min[type]
         if (next === '+' && i + 2 < pattern.length) {
           const rangeMatch = pattern.slice(i + 2).match(/^(\d+)(?:\.\.(\d+))?([dDwWsSaApPuU])?/);
           if (rangeMatch) {
             const min = rangeMatch[1];
-            const max = rangeMatch[2] || min;
+            const max = rangeMatch[2] || '';
             const type = rangeMatch[3] || '.';
             const charClass = getCharClass(type);
-            result += `${groupStart}${charClass}{${min},${max}})`;
+            if (max) {
+              result += `${groupStart}${charClass}{${min},${max}})`;
+            } else {
+              result += `${groupStart}${charClass}{${min},})`;
+            }
             i += 2 + rangeMatch[0].length;
             continue;
           }
         }
 
+        // All wildcards use GREEDY matching (no ? after quantifier)
         if (next === '*') {
-          result += groupStart + '.*?)';
+          result += groupStart + '.*)';
           i += 2;
         } else if (next === '+') {
-          result += groupStart + '.+?)';
+          result += groupStart + '.+)';
           i += 2;
         } else if (next === '?') {
           result += groupStart + '.?)';
@@ -1097,55 +1156,60 @@ function tinTinToRegex(pattern) {
           result += groupStart + '.)';
           i += 2;
         } else if (next === 'd') {
-          result += groupStart + '[0-9]*?)';
+          result += groupStart + '[0-9]*)';
           i += 2;
         } else if (next === 'D') {
-          result += groupStart + '[^0-9]*?)';
+          result += groupStart + '[^0-9]*)';
           i += 2;
         } else if (next === 'w') {
-          result += groupStart + '[A-Za-z0-9_]*?)';
+          result += groupStart + '[A-Za-z0-9_]*)';
           i += 2;
         } else if (next === 'W') {
-          result += groupStart + '[^A-Za-z0-9_]*?)';
+          result += groupStart + '[^A-Za-z0-9_]*)';
           i += 2;
         } else if (next === 's') {
-          result += groupStart + '\\s*?)';
+          result += groupStart + '\\s*)';
           i += 2;
         } else if (next === 'S') {
-          result += groupStart + '\\S*?)';
+          result += groupStart + '\\S*)';
           i += 2;
         } else if (next === 'a') {
-          result += groupStart + '[\\s\\S]*?)';
+          result += groupStart + '[\\s\\S]*)';
           i += 2;
         } else if (next === 'A') {
-          result += groupStart + '[\\r\\n]*?)';
+          result += groupStart + '[\\r\\n]*)';
           i += 2;
         } else if (next === 'c') {
-          result += groupStart + '(?:\\x1b\\[[0-9;]*m)*?)';
+          // ANSI color codes - always non-capturing
+          result += '(?:\\x1b\\[[0-9;]*m)*';
           i += 2;
         } else if (next === 'p') {
-          result += groupStart + '[\\x20-\\x7E]*?)';
+          result += groupStart + '[\\x20-\\x7E]*)';
           i += 2;
         } else if (next === 'P') {
-          result += groupStart + '[^\\x20-\\x7E]*?)';
+          result += groupStart + '[^\\x20-\\x7E]*)';
           i += 2;
         } else if (next === 'u') {
-          result += groupStart + '.*?)';
+          result += groupStart + '.*)';
           i += 2;
         } else if (next === 'U') {
-          result += groupStart + '[\\x00-\\x7F]*?)';
+          result += groupStart + '[\\x00-\\x7F]*)';
           i += 2;
         } else if (next === 'i' || next === 'I') {
+          // Case sensitivity modifiers - consumed but not converted
+          // (matching is case-insensitive by default in our implementation)
           i += 2;
         } else if (next >= '0' && next <= '9') {
+          // Numbered capture groups %0-%99
           let j = i + 1;
           while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
             j++;
           }
-          // Use greedy match - non-greedy (.+?) only captures 1 char when at end of pattern
+          // Use greedy match
           result += '(.*)';
           i = j;
         } else {
+          // Unknown % sequence - treat as literal
           result += '%';
           i += 1;
         }
@@ -1154,9 +1218,11 @@ function tinTinToRegex(pattern) {
         i += 1;
       }
     } else if (char === '^' || char === '$') {
+      // Anchors pass through
       result += char;
       i += 1;
-    } else if ('[]{}()|+?*.\\'.includes(char)) {
+    } else if ('[]())|+?*.\\'.includes(char)) {
+      // Escape regex metacharacters (except { } which are handled above)
       result += '\\' + char;
       i += 1;
     } else {
@@ -1308,6 +1374,22 @@ function processAliases(command, aliases) {
   return command;
 }
 
+/**
+ * Detect if a pattern uses TinTin++ syntax
+ * Returns true if pattern contains % wildcards, anchors, or { } braces
+ */
+function isTinTinPattern(pattern) {
+  // Check for % followed by wildcard chars or digits
+  if (/%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern)) return true;
+  // Check for ^ anchor at start
+  if (pattern.startsWith('^')) return true;
+  // Check for $ anchor at end
+  if (pattern.endsWith('$')) return true;
+  // Check for { } PCRE embedding (not escaped)
+  if (/(?<!\\)\{.*(?<!\\)\}/.test(pattern)) return true;
+  return false;
+}
+
 function processTriggers(line, triggers) {
   const result = {
     line: line,
@@ -1322,45 +1404,27 @@ function processTriggers(line, triggers) {
 
     let matched = false;
     let matches = [];
+    const pattern = trigger.pattern;
 
-    switch (trigger.matchType) {
-      case 'exact':
-        matched = line.toLowerCase() === trigger.pattern.toLowerCase();
-        break;
-      case 'contains':
-        matched = line.toLowerCase().includes(trigger.pattern.toLowerCase());
-        break;
-      case 'startsWith':
-        matched = line.toLowerCase().startsWith(trigger.pattern.toLowerCase());
-        break;
-      case 'endsWith':
-        matched = line.toLowerCase().endsWith(trigger.pattern.toLowerCase());
-        break;
-      case 'regex':
-        try {
-          const regex = new RegExp(trigger.pattern, 'i');
-          const match = line.match(regex);
-          if (match) {
-            matched = true;
-            matches = match;
-          }
-        } catch (e) {}
-        break;
-      case 'tintin':
-        try {
-          const regexPattern = tinTinToRegex(trigger.pattern);
-          const regex = new RegExp(regexPattern, 'i');
-          const match = line.match(regex);
-          if (match) {
-            matched = true;
-            matches = match;
-          }
-        } catch (e) {
-          console.error('TinTin pattern error:', e.message);
+    // Auto-detect pattern type: TinTin++ syntax or simple contains
+    const useTinTin = isTinTinPattern(pattern);
+
+    if (useTinTin) {
+      // TinTin++ pattern matching
+      try {
+        const regexPattern = tinTinToRegex(pattern);
+        const regex = new RegExp(regexPattern, 'i');
+        const match = line.match(regex);
+        if (match) {
+          matched = true;
+          matches = match;
         }
-        break;
-      default:
-        matched = line.toLowerCase().includes(trigger.pattern.toLowerCase());
+      } catch (e) {
+        console.error('TinTin pattern error:', e.message);
+      }
+    } else {
+      // Simple case-insensitive contains match
+      matched = line.toLowerCase().includes(pattern.toLowerCase());
     }
 
     if (matched && trigger.actions) {
@@ -1379,13 +1443,11 @@ function processTriggers(line, triggers) {
               if (bgColor) styleStr += `background:${bgColor};`;
 
               let searchPattern;
-              if (trigger.matchType === 'regex') {
-                searchPattern = new RegExp(`(${trigger.pattern})`, 'gi');
-              } else if (trigger.matchType === 'tintin') {
-                const regexPattern = tinTinToRegex(trigger.pattern);
+              if (useTinTin) {
+                const regexPattern = tinTinToRegex(pattern);
                 searchPattern = new RegExp(`(${regexPattern})`, 'gi');
               } else {
-                const escaped = trigger.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 searchPattern = new RegExp(`(${escaped})`, 'gi');
               }
 
@@ -1395,13 +1457,8 @@ function processTriggers(line, triggers) {
           case 'command':
             let cmd = action.command || '';
             if (matches.length) {
-              if (trigger.matchType === 'tintin') {
-                cmd = replaceTinTinVars(cmd, matches);
-              } else {
-                matches.forEach((m, i) => {
-                  cmd = cmd.replace(new RegExp('\\$' + i, 'g'), m);
-                });
-              }
+              // Always use TinTin var substitution for captured groups
+              cmd = replaceTinTinVars(cmd, matches);
             }
             const cmds = cmd.split(';').map(c => c.trim()).filter(c => c);
             result.commands.push(...cmds);
