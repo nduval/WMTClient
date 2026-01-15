@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.0.5'; // Fix %1 greedy matching in triggers
+const VERSION = '2.0.6'; // Strip ANSI from captured trigger values
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -1189,10 +1189,14 @@ function getCharClass(type) {
 function replaceTinTinVars(command, matches) {
   let result = command;
 
+  // Strip ANSI escape codes from captured values to prevent command corruption
+  const stripAnsi = (str) => str ? str.replace(/\x1b\[[0-9;]*m/g, '') : '';
+
   if (matches && matches.length > 0) {
     for (let i = 0; i < matches.length && i < 100; i++) {
       const regex = new RegExp('%' + i + '(?![0-9])', 'g');
-      result = result.replace(regex, matches[i] || '');
+      const cleanValue = stripAnsi(matches[i] || '');
+      result = result.replace(regex, cleanValue);
     }
   }
 
