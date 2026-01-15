@@ -17,7 +17,7 @@ const VERSION = '2.0.4'; // Session takeover prevents reconnect loop
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000;  // 30 minutes without browser = close MUD connection
+const SESSION_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes without browser = close MUD connection
 
 // Persistent sessions store: token -> session object
 const sessions = new Map();
