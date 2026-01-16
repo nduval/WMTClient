@@ -1274,6 +1274,7 @@ function parseCommands(input) {
   const commands = [];
   let current = '';
   let escaped = false;
+  let braceDepth = 0;
 
   for (let i = 0; i < input.length; i++) {
     const char = input[i];
@@ -1281,15 +1282,23 @@ function parseCommands(input) {
       current += char;
       escaped = false;
     } else if (char === '\\') {
+      current += char;
       escaped = true;
-    } else if (char === ';') {
-      commands.push(current);
+    } else if (char === '{') {
+      current += char;
+      braceDepth++;
+    } else if (char === '}') {
+      current += char;
+      braceDepth--;
+    } else if (char === ';' && braceDepth === 0) {
+      // Only split on semicolons outside of braces
+      if (current.trim()) commands.push(current.trim());
       current = '';
     } else {
       current += char;
     }
   }
-  if (current) commands.push(current);
+  if (current.trim()) commands.push(current.trim());
   return commands;
 }
 
@@ -1460,7 +1469,8 @@ function processTriggers(line, triggers) {
               // Always use TinTin var substitution for captured groups
               cmd = replaceTinTinVars(cmd, matches);
             }
-            const cmds = cmd.split(';').map(c => c.trim()).filter(c => c);
+            // Use parseCommands to respect brace depth when splitting
+            const cmds = parseCommands(cmd);
             result.commands.push(...cmds);
             break;
           case 'sound':
