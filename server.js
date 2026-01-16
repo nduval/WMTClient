@@ -1410,10 +1410,10 @@ function processTriggers(line, triggers) {
     const useTinTin = isTinTinPattern(pattern);
 
     if (useTinTin) {
-      // TinTin++ pattern matching
+      // TinTin++ pattern matching (case-sensitive by default)
       try {
         const regexPattern = tinTinToRegex(pattern);
-        const regex = new RegExp(regexPattern, 'i');
+        const regex = new RegExp(regexPattern);
         const match = line.match(regex);
         if (match) {
           matched = true;
@@ -1423,8 +1423,8 @@ function processTriggers(line, triggers) {
         console.error('TinTin pattern error:', e.message);
       }
     } else {
-      // Simple case-insensitive contains match
-      matched = line.toLowerCase().includes(pattern.toLowerCase());
+      // Simple case-sensitive contains match
+      matched = line.includes(pattern);
     }
 
     if (matched && trigger.actions) {
@@ -1445,10 +1445,10 @@ function processTriggers(line, triggers) {
               let searchPattern;
               if (useTinTin) {
                 const regexPattern = tinTinToRegex(pattern);
-                searchPattern = new RegExp(`(${regexPattern})`, 'gi');
+                searchPattern = new RegExp(`(${regexPattern})`, 'g');
               } else {
                 const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                searchPattern = new RegExp(`(${escaped})`, 'gi');
+                searchPattern = new RegExp(`(${escaped})`, 'g');
               }
 
               result.line = result.line.replace(searchPattern, `<hl style="${styleStr}">$1</hl>`);
@@ -1472,15 +1472,15 @@ function processTriggers(line, triggers) {
             if (matches.length) {
               replacement = replaceTinTinVars(replacement, matches);
             }
-            // Find and replace the matched portion
+            // Find and replace the matched portion (case-sensitive)
             if (useTinTin) {
               const regexPattern = tinTinToRegex(pattern);
-              const searchPattern = new RegExp(regexPattern, 'gi');
+              const searchPattern = new RegExp(regexPattern, 'g');
               result.line = result.line.replace(searchPattern, replacement);
             } else {
-              // Simple contains - replace all occurrences
+              // Simple contains - replace all occurrences (case-sensitive)
               const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const searchPattern = new RegExp(escaped, 'gi');
+              const searchPattern = new RegExp(escaped, 'g');
               result.line = result.line.replace(searchPattern, replacement);
             }
             break;
