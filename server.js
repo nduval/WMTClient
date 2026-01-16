@@ -1006,6 +1006,35 @@ wss.on('connection', (ws, req) => {
           connectToMud(session);
           break;
 
+        case 'test_line':
+          // Process text through triggers as if it came from MUD
+          // Used by #showme to test trigger patterns
+          if (data.line) {
+            const processed = processTriggers(data.line, session.triggers);
+
+            // Send to client (even if gagged, for testing)
+            sendToClient(session, {
+              type: 'mud',
+              line: processed.line,
+              highlight: processed.highlight,
+              sound: processed.sound,
+              test: true  // Flag so client knows this is test output
+            });
+
+            // Execute any trigger commands
+            processed.commands.forEach(cmd => {
+              if (cmd.startsWith('#')) {
+                sendToClient(session, {
+                  type: 'client_command',
+                  command: cmd
+                });
+              } else if (session.mudSocket && !session.mudSocket.destroyed) {
+                session.mudSocket.write(cmd + '\r\n');
+              }
+            });
+          }
+          break;
+
         case 'disconnect':
           // Explicit disconnect - close MUD connection
           console.log('Explicit disconnect requested');
