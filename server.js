@@ -944,12 +944,18 @@ wss.on('connection', (ws, req) => {
         case 'command':
           if (session.mudSocket && !session.mudSocket.destroyed) {
             const cmd = processAliases(data.command || '', session.aliases);
-            const commands = parseCommands(cmd);
-            commands.forEach(c => {
-              session.mudSocket.write(c.trim() + '\r\n');
-            });
-            if (commands.length === 0) {
-              session.mudSocket.write('\r\n');
+            // If raw flag is set, send as-is without semicolon splitting
+            // (used by #send for ANSI codes containing semicolons)
+            if (data.raw) {
+              session.mudSocket.write(cmd + '\r\n');
+            } else {
+              const commands = parseCommands(cmd);
+              commands.forEach(c => {
+                session.mudSocket.write(c.trim() + '\r\n');
+              });
+              if (commands.length === 0) {
+                session.mudSocket.write('\r\n');
+              }
             }
           }
           break;
