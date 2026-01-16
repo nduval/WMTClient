@@ -839,8 +839,13 @@ function connectToMud(session) {
       type: 'system',
       message: 'Connection to MUD closed.'
     });
-    // Clean up session when MUD disconnects
-    closeSession(session, 'MUD connection closed');
+    // Don't delete session - user might want to reconnect
+    // Just clean up the socket reference so reconnect works cleanly
+    session.mudSocket = null;
+    // If this was an explicit disconnect request, clean up the whole session
+    if (session.explicitDisconnect) {
+      closeSession(session, 'explicit disconnect');
+    }
   });
 
   session.mudSocket.on('error', (err) => {
