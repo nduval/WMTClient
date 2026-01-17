@@ -1007,6 +1007,11 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({ type: 'keepalive_ack' }));
           break;
 
+        case 'health_check':
+          // Respond immediately - proves connection is alive
+          ws.send(JSON.stringify({ type: 'health_ok' }));
+          break;
+
         case 'reconnect':
           console.log('Reconnect requested');
           connectToMud(session);
