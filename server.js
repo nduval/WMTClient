@@ -914,8 +914,9 @@ wss.on('connection', (ws, req) => {
               mudConnected: session.mudSocket && !session.mudSocket.destroyed
             }));
 
-            // Replay buffered content
-            replayBuffer(session);
+            // Clear buffer - user doesn't need history replay, just resume receiving new lines
+            session.buffer = [];
+            session.bufferOverflow = false;
 
             // Send current MIP stats if available
             if (session.mipStats.hp.max > 0) {
