@@ -13,7 +13,8 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.3.0'; // Add health_check for zombie connection detection
+const VERSION = '2.4.0'; // Add broadcast endpoint for admin announcements
+const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -183,8 +184,19 @@ setInterval(() => {
   }
 }, 60000);
 
-// Create HTTP server for health checks
+// Create HTTP server for health checks and admin endpoints
 const server = http.createServer((req, res) => {
+  // Enable CORS for admin endpoints
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Key');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+
   if (req.url === '/') {
     const activeSessions = Array.from(sessions.values()).filter(s => s.mudSocket && !s.mudSocket.destroyed).length;
     const connectedBrowsers = Array.from(sessions.values()).filter(s => s.ws).length;
@@ -201,6 +213,72 @@ const server = http.createServer((req, res) => {
       mud: `${MUD_HOST}:${MUD_PORT}`,
       activeSessions: sessions.size
     }));
+  } else if (req.url === '/broadcast' && req.method === 'POST') {
+    // Admin broadcast endpoint
+    const adminKey = req.headers['x-admin-key'];
+
+    if (!ADMIN_KEY) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Broadcast not configured (ADMIN_KEY not set)' }));
+      return;
+    }
+
+    if (adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+
+    // Read POST body
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+      if (body.length > 10000) {
+        req.destroy();
+      }
+    });
+
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const message = data.message;
+
+        if (!message || typeof message !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Message is required' }));
+          return;
+        }
+
+        // Broadcast to all connected browsers
+        let sentCount = 0;
+        for (const [token, session] of sessions) {
+          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+            try {
+              session.ws.send(JSON.stringify({
+                type: 'broadcast',
+                message: message,
+                timestamp: Date.now()
+              }));
+              sentCount++;
+            } catch (e) {
+              console.error('Error sending broadcast to session:', e.message);
+            }
+          }
+        }
+
+        console.log(`Broadcast sent to ${sentCount} clients: ${message.substring(0, 50)}...`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          sentTo: sentCount,
+          message: 'Broadcast sent'
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+      }
+    });
   } else {
     res.writeHead(404);
     res.end('Not found');
