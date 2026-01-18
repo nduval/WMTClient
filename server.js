@@ -1035,7 +1035,18 @@ wss.on('connection', (ws, req) => {
             } else {
               const commands = parseCommands(cmd);
               commands.forEach(c => {
-                session.mudSocket.write(c.trim() + '\r\n');
+                const trimmed = c.trim();
+                // Check for #N command pattern (e.g., #15 e) - repeat command N times
+                const repeatMatch = trimmed.match(/^#(\d+)\s+(.+)$/);
+                if (repeatMatch) {
+                  const count = Math.min(parseInt(repeatMatch[1]), 100); // Cap at 100 for safety
+                  const repeatCmd = repeatMatch[2];
+                  for (let i = 0; i < count; i++) {
+                    session.mudSocket.write(repeatCmd + '\r\n');
+                  }
+                } else if (trimmed) {
+                  session.mudSocket.write(trimmed + '\r\n');
+                }
               });
               if (commands.length === 0) {
                 session.mudSocket.write('\r\n');
