@@ -13,7 +13,7 @@ const http = require('http');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.4.0'; // Add broadcast endpoint for admin announcements
+const VERSION = '2.5.0'; // Multi-device session management - close old sessions when same user+character connects from different device
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -22,6 +22,10 @@ const SESSION_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes without browser = clos
 
 // Persistent sessions store: token -> session object
 const sessions = new Map();
+
+// User+character session tracking: "userId:characterId" -> token
+// Used to close old sessions when same user+character connects from different device
+const userCharacterSessions = new Map();
 
 // Telnet protocol constants
 const TELNET = {
@@ -451,6 +455,15 @@ function closeSession(session, reason) {
   if (session.lineBufferTimeout) {
     clearTimeout(session.lineBufferTimeout);
   }
+
+  // Clean up user+character tracking (only if this session is still the registered one)
+  if (session.userId && session.characterId) {
+    const userCharKey = `${session.userId}:${session.characterId}`;
+    if (userCharacterSessions.get(userCharKey) === session.token) {
+      userCharacterSessions.delete(userCharKey);
+    }
+  }
+
   sessions.delete(session.token);
 }
 
@@ -953,13 +966,45 @@ wss.on('connection', (ws, req) => {
       if (!authenticated) {
         if (data.type === 'auth') {
           const token = data.token;
+          const userId = data.userId;
+          const characterId = data.characterId;
+
           if (!token || token.length !== 64) {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid auth token' }));
             ws.close();
             return;
           }
 
-          // Check for existing session
+          // Check for existing session with same user+character but different token
+          // This handles the case where user logs in from a different device/browser
+          if (userId && characterId) {
+            const userCharKey = `${userId}:${characterId}`;
+            const existingToken = userCharacterSessions.get(userCharKey);
+
+            if (existingToken && existingToken !== token && sessions.has(existingToken)) {
+              const oldSession = sessions.get(existingToken);
+              console.log(`Closing old session for user ${userId} character ${characterId} (different device)`);
+
+              // Notify old client and close its MUD connection
+              if (oldSession.ws && oldSession.ws.readyState === WebSocket.OPEN) {
+                try {
+                  oldSession.ws.send(JSON.stringify({
+                    type: 'session_taken',
+                    message: 'Session taken over by another device.'
+                  }));
+                  oldSession.ws.close();
+                } catch (e) {}
+              }
+
+              // Close the old MUD connection
+              closeSession(oldSession, 'replaced by new device');
+            }
+
+            // Register this token for this user+character
+            userCharacterSessions.set(userCharKey, token);
+          }
+
+          // Check for existing session with same token
           if (sessions.has(token)) {
             session = sessions.get(token);
 
@@ -1007,9 +1052,11 @@ wss.on('connection', (ws, req) => {
             // Create new session
             session = createSession(token);
             session.ws = ws;
+            session.userId = userId;
+            session.characterId = characterId;
             sessions.set(token, session);
 
-            console.log(`New session ${token.substring(0, 8)}...`);
+            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterId})`);
 
             ws.send(JSON.stringify({
               type: 'session_new'
