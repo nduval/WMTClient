@@ -96,6 +96,13 @@ function stripTelnetSequences(buffer) {
 }
 
 /**
+ * Strip ANSI escape codes from text
+ */
+function stripAnsi(str) {
+  return str ? str.replace(/\x1b\[[0-9;]*m/g, '') : '';
+}
+
+/**
  * Convert MIP color codes to HTML spans
  */
 function convertMipColors(text) {
@@ -278,6 +285,94 @@ const server = http.createServer((req, res) => {
           sentTo: sentCount,
           message: 'Broadcast sent'
         }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+      }
+    });
+  } else if (req.url === '/discord-webhook' && req.method === 'POST') {
+    // Discord webhook proxy - forwards messages to Discord safely
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+      if (body.length > 10000) {
+        req.destroy();
+      }
+    });
+
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        const { webhookUrl, message, username } = data;
+
+        // Validate webhook URL is actually Discord
+        if (!webhookUrl ||
+            (!webhookUrl.startsWith('https://discord.com/api/webhooks/') &&
+             !webhookUrl.startsWith('https://discordapp.com/api/webhooks/'))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Invalid Discord webhook URL' }));
+          return;
+        }
+
+        if (!message || typeof message !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Message is required' }));
+          return;
+        }
+
+        // Sanitize message for Discord
+        const sanitizedMessage = message
+          // Already stripped ANSI on client, but double-check
+          .replace(/\x1b\[[0-9;]*m/g, '')
+          // Escape @everyone and @here
+          .replace(/@(everyone|here)/gi, '@\u200b$1')
+          // Escape user/role mentions
+          .replace(/<@[!&]?\d+>/g, '[mention]')
+          // Truncate to Discord limit
+          .substring(0, 1997) + (message.length > 1997 ? '...' : '');
+
+        // Forward to Discord
+        const https = require('https');
+        const discordPayload = JSON.stringify({
+          content: sanitizedMessage,
+          username: username || '3K ChatMon'
+        });
+
+        const urlObj = new URL(webhookUrl);
+        const options = {
+          hostname: urlObj.hostname,
+          port: 443,
+          path: urlObj.pathname + urlObj.search,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(discordPayload)
+          }
+        };
+
+        const discordReq = https.request(options, (discordRes) => {
+          if (discordRes.statusCode === 204 || discordRes.statusCode === 200) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+          } else {
+            let responseBody = '';
+            discordRes.on('data', chunk => responseBody += chunk);
+            discordRes.on('end', () => {
+              console.error('Discord webhook error:', discordRes.statusCode, responseBody);
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, error: `Discord returned ${discordRes.statusCode}` }));
+            });
+          }
+        });
+
+        discordReq.on('error', (e) => {
+          console.error('Discord webhook request error:', e.message);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Failed to reach Discord' }));
+        });
+
+        discordReq.write(discordPayload);
+        discordReq.end();
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
@@ -522,21 +617,28 @@ function parseMipMessage(session, msgType, msgData) {
       {
         const parts = msgData.split('~');
         let formatted;
+        let channel = 'tell';
+        let rawText = '';
         if (parts[0] === '' && parts.length >= 3) {
           const sender = parts[1];
           const message = parts.slice(2).join('~');
           formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
+          rawText = `[${sender}]: ${stripAnsi(message)}`;
         } else if (parts[0] === 'x' && parts.length >= 3) {
           const recipient = parts[1];
           const message = parts.slice(2).join('~');
           formatted = `<span style="color:#88ff88">[To ${recipient}]:</span> ${convertMipColors(message)}`;
+          rawText = `[To ${recipient}]: ${stripAnsi(message)}`;
         } else {
           formatted = convertMipColors(msgData);
+          rawText = stripAnsi(msgData);
         }
         sendToClient(session, {
           type: 'mip_chat',
           chatType: 'tell',
+          channel: channel,
           raw: msgData,
+          rawText: rawText,
           message: formatted
         });
       }
@@ -550,21 +652,28 @@ function parseMipMessage(session, msgType, msgData) {
         }
 
         let formatted;
+        let channel = 'chat';
+        let rawText = '';
         if (parts.length >= 4) {
-          const channel = parts[0];
+          channel = parts[0];
           const message = parts.slice(3).join('~');
           formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
+          rawText = `[${channel}] ${stripAnsi(message)}`;
         } else if (parts.length >= 2) {
-          const channel = parts[0];
+          channel = parts[0];
           const message = parts.slice(1).join('~');
           formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
+          rawText = `[${channel}] ${stripAnsi(message)}`;
         } else {
           formatted = convertMipColors(msgData);
+          rawText = stripAnsi(msgData);
         }
         sendToClient(session, {
           type: 'mip_chat',
           chatType: 'channel',
+          channel: channel,
           raw: msgData,
+          rawText: rawText,
           message: formatted
         });
       }
