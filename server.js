@@ -946,6 +946,19 @@ function connectToMud(session) {
       message: 'MUD connection error: ' + err.message
     });
   });
+
+  // Handle remote close (MUD closes connection, e.g., idle timeout)
+  session.mudSocket.on('end', () => {
+    console.log('MUD connection ended (remote close)');
+    sendToClient(session, {
+      type: 'system',
+      message: 'MUD has closed the connection (idle timeout or linkdead).'
+    });
+    if (session.mudSocket) {
+      session.mudSocket.destroy();
+      session.mudSocket = null;
+    }
+  });
 }
 
 /**
@@ -1030,11 +1043,12 @@ wss.on('connection', (ws, req) => {
               session.timeoutHandle = null;
             }
 
-            console.log(`Resumed session ${token.substring(0, 8)}... (MUD ${session.mudSocket && !session.mudSocket.destroyed ? 'connected' : 'disconnected'})`);
+            const mudConnected = session.mudSocket && !session.mudSocket.destroyed && session.mudSocket.writable;
+            console.log(`Resumed session ${token.substring(0, 8)}... (MUD ${mudConnected ? 'connected' : 'disconnected'})`);
 
             ws.send(JSON.stringify({
               type: 'session_resumed',
-              mudConnected: session.mudSocket && !session.mudSocket.destroyed
+              mudConnected: mudConnected
             }));
 
             // Clear buffer - user doesn't need history replay, just resume receiving new lines
