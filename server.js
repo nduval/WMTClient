@@ -335,7 +335,7 @@ const server = http.createServer((req, res) => {
         const https = require('https');
         const discordPayload = JSON.stringify({
           content: sanitizedMessage,
-          username: username || '3K ChatMon'
+          username: username || 'WMT Client'
         });
 
         const urlObj = new URL(webhookUrl);
