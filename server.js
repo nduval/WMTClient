@@ -1019,12 +1019,15 @@ function connectToMud(session) {
     if (!text.endsWith('\n') && parts.length > 0) {
       session.lineBuffer = parts.pop();
       if (session.lineBuffer) {
+        // Packet patch timeout - wait for more data before processing incomplete lines
+        // Similar to TinTin++ #config {packet patch} - recommended 0.5-1.0 seconds
+        // GA (Go Ahead) signal flushes immediately, so this only affects prompts on MUDs without GA
         session.lineBufferTimeout = setTimeout(() => {
           if (session.lineBuffer) {
             processLine(session, session.lineBuffer);
             session.lineBuffer = '';
           }
-        }, 100);
+        }, 500);
       }
     } else {
       session.lineBuffer = '';
