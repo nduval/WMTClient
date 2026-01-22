@@ -1197,28 +1197,57 @@ wss.on('connection', (ws, req) => {
       switch (data.type) {
         case 'command':
           if (session.mudSocket && !session.mudSocket.destroyed) {
-            const cmd = processAliases(data.command || '', session.aliases);
-            // If raw flag is set, send as-is without semicolon splitting
+            // If raw flag is set, send as-is without semicolon splitting or alias processing
             // (used by #send for ANSI codes containing semicolons)
             if (data.raw) {
-              session.mudSocket.write(cmd + '\r\n');
+              session.mudSocket.write((data.command || '') + '\r\n');
             } else {
-              const commands = parseCommands(cmd);
+              // Recursively expand aliases and handle semicolons
+              // expandCommand handles a single command, recursively expanding aliases
+              const expandCommand = (cmd, depth = 0) => {
+                if (depth > 10) return [cmd];  // Prevent infinite loops
+                const trimmed = cmd.trim();
+                if (!trimmed) return [];
+
+                const expanded = processAliases(trimmed, session.aliases);
+                if (expanded === trimmed) {
+                  // No alias matched, return as-is
+                  return [trimmed];
+                }
+
+                // Alias matched - the result might contain semicolons
+                // Split and recursively expand each part
+                const parts = parseCommands(expanded);
+                const results = [];
+                parts.forEach(part => {
+                  results.push(...expandCommand(part, depth + 1));
+                });
+                return results;
+              };
+
+              // Split initial command by semicolons, expand each part
+              const commands = parseCommands(data.command || '');
+              const allExpanded = [];
               commands.forEach(c => {
-                const trimmed = c.trim();
+                allExpanded.push(...expandCommand(c));
+              });
+
+              // Send all expanded commands to MUD
+              allExpanded.forEach(ec => {
                 // Check for #N command pattern (e.g., #15 e) - repeat command N times
-                const repeatMatch = trimmed.match(/^#(\d+)\s+(.+)$/);
+                const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
                 if (repeatMatch) {
                   const count = Math.min(parseInt(repeatMatch[1]), 100); // Cap at 100 for safety
                   const repeatCmd = repeatMatch[2];
                   for (let i = 0; i < count; i++) {
                     session.mudSocket.write(repeatCmd + '\r\n');
                   }
-                } else if (trimmed) {
-                  session.mudSocket.write(trimmed + '\r\n');
+                } else {
+                  session.mudSocket.write(ec + '\r\n');
                 }
               });
-              if (commands.length === 0) {
+
+              if (allExpanded.length === 0) {
                 session.mudSocket.write('\r\n');
               }
             }
