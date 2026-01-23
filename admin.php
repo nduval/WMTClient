@@ -114,6 +114,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $messageType = 'error';
                 }
                 break;
+
+            case 'reset_password':
+                $targetUserId = $_POST['user_id'] ?? '';
+                $newPassword = $_POST['new_password'] ?? '';
+                if ($targetUserId && $newPassword) {
+                    $result = adminResetPassword($targetUserId, $newPassword);
+                    if ($result['success']) {
+                        $message = 'Password reset for: ' . $result['username'];
+                        $messageType = 'success';
+                    } else {
+                        $message = 'Reset failed: ' . $result['error'];
+                        $messageType = 'error';
+                    }
+                } else {
+                    $message = 'User ID and new password are required';
+                    $messageType = 'error';
+                }
+                break;
+
+            case 'send_reset_email':
+                require_once __DIR__ . '/includes/email.php';
+                $targetUserId = $_POST['user_id'] ?? '';
+                if ($targetUserId) {
+                    $result = adminSendResetEmail($targetUserId, getAdminEmail());
+                    if ($result['success']) {
+                        $message = 'Reset email sent to ' . $result['email'] . ' for user: ' . $result['username'];
+                        if ($result['bcc']) {
+                            $message .= ' (BCC sent to you)';
+                        }
+                        $messageType = 'success';
+                    } else {
+                        $message = 'Send failed: ' . $result['error'];
+                        $messageType = 'error';
+                    }
+                } else {
+                    $message = 'User ID is required';
+                    $messageType = 'error';
+                }
+                break;
         }
     }
 }
@@ -425,6 +464,105 @@ function deleteUserAccount(string $userId, string $confirmUsername): array {
     return ['success' => true, 'username' => $username];
 }
 
+function adminResetPassword(string $userId, string $newPassword): array {
+    if (strlen($newPassword) < 6) {
+        return ['success' => false, 'error' => 'Password must be at least 6 characters'];
+    }
+
+    // Find user in index
+    $users = loadUsersIndex();
+    $userIndex = -1;
+    $username = '';
+
+    foreach ($users as $i => $user) {
+        if ($user['id'] === $userId) {
+            $userIndex = $i;
+            $username = $user['username'];
+            break;
+        }
+    }
+
+    if ($userIndex === -1) {
+        return ['success' => false, 'error' => 'User not found'];
+    }
+
+    // Hash the new password
+    $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
+
+    // Update in users index
+    $users[$userIndex]['password'] = $passwordHash;
+    if (!saveUsersIndex($users)) {
+        return ['success' => false, 'error' => 'Failed to update users index'];
+    }
+
+    // Also update in user's profile.json for consistency
+    $profilePath = getUserDataPath($userId) . '/profile.json';
+    if (file_exists($profilePath)) {
+        $profile = loadJsonFile($profilePath);
+        $profile['password_hash'] = $passwordHash;
+        saveJsonFile($profilePath, $profile);
+    }
+
+    return ['success' => true, 'username' => $username];
+}
+
+function getAdminEmail(): string {
+    $adminUser = findUserByUsername(getCurrentUsername());
+    return $adminUser['email'] ?? '';
+}
+
+function adminSendResetEmail(string $userId, string $bccEmail): array {
+    // Find user
+    $users = loadUsersIndex();
+    $targetUser = null;
+
+    foreach ($users as $user) {
+        if ($user['id'] === $userId) {
+            $targetUser = $user;
+            break;
+        }
+    }
+
+    if (!$targetUser) {
+        return ['success' => false, 'error' => 'User not found'];
+    }
+
+    if (empty($targetUser['email'])) {
+        return ['success' => false, 'error' => 'User has no email address registered'];
+    }
+
+    // Create reset token
+    $tokenData = createPasswordResetToken($targetUser['email']);
+    if (!$tokenData) {
+        return ['success' => false, 'error' => 'Failed to create reset token'];
+    }
+
+    // Determine base URL
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'];
+    $baseUrl = $protocol . '://' . $host;
+
+    // Send email with BCC to admin
+    $result = sendPasswordResetEmail(
+        $tokenData['email'],
+        $tokenData['username'],
+        $tokenData['token'],
+        $baseUrl,
+        $bccEmail
+    );
+
+    if ($result['success']) {
+        return [
+            'success' => true,
+            'username' => $targetUser['username'],
+            'email' => $targetUser['email'],
+            'bcc' => !empty($bccEmail)
+        ];
+    }
+
+    return ['success' => false, 'error' => $result['error'] ?? 'Failed to send email'];
+}
+
 function getBackupFiles(): array {
     $backupDir = USERS_PATH . '/backups';
     if (!is_dir($backupDir)) {
@@ -462,7 +600,7 @@ $backups = getBackupFiles();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <title>Admin Panel - <?= APP_NAME ?></title>
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?= filemtime('assets/css/style.css') ?>">
     <style>
         body {
             overflow-y: auto;
@@ -719,6 +857,26 @@ $backups = getBackupFiles();
             </div>
         </div>
 
+        <!-- Broadcast Section -->
+        <div class="section">
+            <h2>Broadcast Message</h2>
+            <p style="color: #888; font-size: 13px; margin-bottom: 15px;">
+                Send a message to all currently connected users. Useful for announcing updates or scheduled maintenance.
+            </p>
+            <?php if (!defined('RENDER_ADMIN_KEY') || !RENDER_ADMIN_KEY): ?>
+                <p style="color: #ff6600;">Broadcast is not configured. Set up config/render_admin_key.php and ADMIN_KEY on Render.</p>
+            <?php else: ?>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <textarea id="broadcast-message" placeholder="Enter your message here..."
+                              style="width: 100%; height: 80px; padding: 12px; border: 1px solid #333; border-radius: 4px; background: #222; color: #fff; font-size: 14px; resize: vertical;"></textarea>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <button type="button" class="btn btn-primary" onclick="sendBroadcast()">Send Broadcast</button>
+                        <span id="broadcast-status" style="color: #888; font-size: 13px;"></span>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+
         <!-- Maintenance Section -->
         <div class="section">
             <h2>Maintenance</h2>
@@ -826,14 +984,26 @@ $backups = getBackupFiles();
                                         <span style="color: #666;">Never</span>
                                     <?php endif; ?>
                                 </td>
-                                <td>
+                                <td style="white-space: nowrap;">
+                                    <?php if (!empty($user['email'])): ?>
+                                        <form method="post" style="display: inline;" onsubmit="return confirm('Send password reset email to <?= htmlspecialchars($user['email']) ?>?');">
+                                            <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+                                            <input type="hidden" name="action" value="send_reset_email">
+                                            <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
+                                            <button type="submit" class="btn btn-primary" style="margin-right: 5px;" title="Send reset email to <?= htmlspecialchars($user['email']) ?>">
+                                                Email Reset
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
+                                    <button type="button" class="btn btn-warning" style="margin-right: 5px;"
+                                            onclick="showResetPasswordModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">
+                                        Set PW
+                                    </button>
                                     <?php if (!$isAdmin): ?>
                                         <button type="button" class="btn btn-danger"
                                                 onclick="showDeleteModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">
                                             Delete
                                         </button>
-                                    <?php else: ?>
-                                        <span style="color: #666;">-</span>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -934,6 +1104,31 @@ $backups = getBackupFiles();
         </div>
     </div>
 
+    <!-- Reset Password Modal -->
+    <div id="resetPasswordModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: #1a1a1a; border: 1px solid #ff9900; border-radius: 8px; padding: 25px; width: 100%; max-width: 450px;">
+            <h3 style="margin: 0 0 20px 0; color: #ff9900;">Reset User Password</h3>
+            <p style="color: #ccc; margin-bottom: 15px;">
+                Reset password for: <strong id="resetModalUsername" style="color: #fff;"></strong>
+            </p>
+            <form method="post" id="resetPasswordForm">
+                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+                <input type="hidden" name="action" value="reset_password">
+                <input type="hidden" name="user_id" id="resetModalUserId">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; color: #ccc;">New Password:</label>
+                    <input type="text" name="new_password" id="resetModalPassword" required autocomplete="off"
+                           style="width: 100%; padding: 12px; border: 1px solid #333; border-radius: 4px; background: #222; color: #fff; font-size: 14px;"
+                           placeholder="Enter new password (min 6 characters)">
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="hideResetPasswordModal()">Cancel</button>
+                    <button type="submit" class="btn btn-warning">Reset Password</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         let deleteUsername = '';
 
@@ -950,6 +1145,18 @@ $backups = getBackupFiles();
             document.getElementById('deleteModal').style.display = 'none';
         }
 
+        function showResetPasswordModal(userId, username) {
+            document.getElementById('resetModalUserId').value = userId;
+            document.getElementById('resetModalUsername').textContent = username;
+            document.getElementById('resetModalPassword').value = '';
+            document.getElementById('resetPasswordModal').style.display = 'flex';
+            document.getElementById('resetModalPassword').focus();
+        }
+
+        function hideResetPasswordModal() {
+            document.getElementById('resetPasswordModal').style.display = 'none';
+        }
+
         // Validate username before submit
         document.getElementById('deleteForm').addEventListener('submit', function(e) {
             const confirm = document.getElementById('modalConfirmUsername').value;
@@ -963,6 +1170,7 @@ $backups = getBackupFiles();
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 hideDeleteModal();
+                hideResetPasswordModal();
             }
         });
 
@@ -972,6 +1180,59 @@ $backups = getBackupFiles();
                 hideDeleteModal();
             }
         });
+
+        document.getElementById('resetPasswordModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                hideResetPasswordModal();
+            }
+        });
+
+        // Broadcast functionality
+        async function sendBroadcast() {
+            const messageEl = document.getElementById('broadcast-message');
+            const statusEl = document.getElementById('broadcast-status');
+            const message = messageEl.value.trim();
+
+            if (!message) {
+                statusEl.textContent = 'Please enter a message';
+                statusEl.style.color = '#ff6600';
+                return;
+            }
+
+            if (!confirm('Send this broadcast to all connected users?')) {
+                return;
+            }
+
+            statusEl.textContent = 'Sending...';
+            statusEl.style.color = '#888';
+
+            try {
+                // Convert wss:// to https:// for HTTP endpoint
+                const proxyUrl = '<?= WS_CLIENT_URL ?>'.replace('wss://', 'https://').replace('ws://', 'http://');
+                const response = await fetch(proxyUrl + '/broadcast', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Key': '<?= RENDER_ADMIN_KEY ?? '' ?>'
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    statusEl.textContent = `Sent to ${result.sentTo} user(s)`;
+                    statusEl.style.color = '#00ff00';
+                    messageEl.value = '';
+                } else {
+                    statusEl.textContent = 'Error: ' + (result.error || 'Unknown error');
+                    statusEl.style.color = '#ff3333';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                statusEl.style.color = '#ff3333';
+            }
+        }
     </script>
 </body>
 </html>

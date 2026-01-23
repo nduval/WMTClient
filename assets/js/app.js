@@ -7,7 +7,11 @@ class WMTClient {
         this.connection = null;
         this.commandHistory = [];
         this.historyIndex = -1;
-        this.maxHistorySize = 100;
+        this.maxHistorySize = 500;  // Default, can be changed in settings
+        this.historySearchPrefix = '';  // For filtered history search
+        this.historySearchMatches = [];  // Filtered matches
+        this.historySearchIndex = -1;  // Index within filtered matches
+        this.pendingScroll = false;  // For throttled scroll updates
         this.triggers = [];
         this.aliases = [];
         this.classes = [];
@@ -33,6 +37,8 @@ class WMTClient {
 
         // Smart auto-scroll state
         this.userScrolledUp = false;  // Tracks if user manually scrolled up
+        this.lastScrollTop = 0;  // Track scroll position to detect user scrolling UP vs content growing
+        this.ignoreScrollEvents = false;  // Temporarily ignore scroll events (for mobile keyboard)
 
         // MIP Variables - auto-populated from MIP data
         this.mipVars = {
@@ -51,9 +57,18 @@ class WMTClient {
         this.mipConditionCooldown = 5000;  // Minimum ms between same condition firing
         this.pendingSubConditions = [];  // Sub-conditions being added in the modal
 
+        // Wake Lock API - keeps screen awake
+        this.wakeLockSentinel = null;
+        this.wakeLockVisibilityHandlerAdded = false;
+
         // Split screen configuration (TinTin++ #split)
         this.splitConfig = { top: 0, bottom: 0 };
         this.splitRows = { top: [], bottom: [] };
+
+        // Health check for detecting zombie WebSocket connections
+        this.healthCheckTimeout = null;
+        this.healthCheckPending = false;
+        this.healthCheckInterval = null;
 
         // Chat window state
         this.chatWindowOpen = false;
@@ -61,6 +76,11 @@ class WMTClient {
         this.chatPopoutWindow = null;
         this.chatDragOffset = { x: 0, y: 0 };
         this.chatIsDragging = false;
+
+        // Channel preferences for ChatMon
+        // Format: { channelName: { sound: bool, hidden: bool, discord: bool } }
+        this.channelPrefs = {};
+        this.discordWebhookUrl = '';
 
         // Current class being filled when reading scripts
         this.currentScriptClass = null;
@@ -108,6 +128,9 @@ class WMTClient {
             const prefsData = await prefsRes.json();
             if (prefsData.success) {
                 this.preferences = prefsData.preferences || {};
+                // Load channel preferences
+                this.channelPrefs = this.preferences.channelPrefs || {};
+                this.discordWebhookUrl = this.preferences.discordWebhookUrl || '';
             }
 
             // Load character password for auto-login
@@ -157,6 +180,150 @@ class WMTClient {
 
         // Update MIP-dependent UI (HP bar, ChatMon button)
         this.updateMipDependentUI(prefs.mipEnabled !== false);
+
+        // Apply individual MIP element visibility (room name, exits, guild, etc.)
+        this.updateMipElementVisibility();
+
+        // Handle wake lock preference
+        if (prefs.wakeLock) {
+            this.requestWakeLock();
+        } else {
+            this.releaseWakeLock();
+        }
+
+        // Apply history size
+        if (prefs.historySize) {
+            this.maxHistorySize = prefs.historySize;
+            // Trim history if it exceeds new size
+            while (this.commandHistory.length > this.maxHistorySize) {
+                this.commandHistory.pop();
+            }
+        }
+    }
+
+    // Wake Lock API - prevents screen from sleeping
+    async requestWakeLock() {
+        if (!('wakeLock' in navigator)) {
+            console.log('Wake Lock API not supported');
+            return;
+        }
+
+        // Set up visibility handler only once
+        if (!this.wakeLockVisibilityHandlerAdded) {
+            this.wakeLockVisibilityHandlerAdded = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && this.preferences.wakeLock) {
+                    // Delay wake lock request slightly to avoid conflicts on PWA resume
+                    setTimeout(() => this.requestWakeLock(), 100);
+                }
+            });
+        }
+
+        try {
+            this.wakeLockSentinel = await navigator.wakeLock.request('screen');
+            console.log('Wake lock acquired');
+        } catch (err) {
+            console.log('Wake lock request failed:', err.message);
+        }
+    }
+
+    releaseWakeLock() {
+        if (this.wakeLockSentinel) {
+            this.wakeLockSentinel.release();
+            this.wakeLockSentinel = null;
+            console.log('Wake lock released manually');
+        }
+    }
+
+    // Health check to detect zombie WebSocket connections
+    // Sends a ping, expects a response within timeout
+    // If no response, connection is dead - force reconnect
+    verifyConnectionHealth() {
+        // Don't stack health checks
+        if (this.healthCheckPending) {
+            console.log('Health check already pending, skipping');
+            return;
+        }
+
+        // Only check if fully connected and authenticated
+        if (!this.connection || !this.connection.socket ||
+            this.connection.socket.readyState !== WebSocket.OPEN ||
+            !this.connection.authenticated) {
+            console.log('Not fully connected, skipping health check');
+            return;
+        }
+
+        console.log('Starting health check...');
+        this.healthCheckPending = true;
+
+        const sent = this.connection.send('health_check');
+        if (!sent) {
+            console.log('Failed to send health check');
+            this.healthCheckPending = false;
+            return;
+        }
+
+        // If no response within 5 seconds, connection is zombie
+        this.healthCheckTimeout = setTimeout(() => {
+            console.log('Health check timeout - connection is zombie, reconnecting...');
+            this.healthCheckPending = false;
+            this.healthCheckTimeout = null;
+
+            // Prevent onclose from also trying to reconnect
+            if (this.connection) {
+                this.connection.intentionalDisconnect = true;
+                this.connection.stopKeepAlive();
+
+                // Force close the zombie socket
+                if (this.connection.socket) {
+                    try {
+                        this.connection.socket.close();
+                    } catch (e) {
+                        console.log('Error closing socket:', e);
+                    }
+                }
+
+                // Now manually reconnect (reset flag first)
+                this.connection.intentionalDisconnect = false;
+                this.connection.reconnectAttempts = 0;
+                setTimeout(() => {
+                    if (this.connection) {
+                        this.connection.connect();
+                    }
+                }, 200);
+            }
+        }, 5000);
+    }
+
+    // Called when server responds to health check
+    onHealthCheckResponse() {
+        if (this.healthCheckTimeout) {
+            clearTimeout(this.healthCheckTimeout);
+            this.healthCheckTimeout = null;
+        }
+        this.healthCheckPending = false;
+    }
+
+    // Start periodic health checks (every 30 seconds)
+    startPeriodicHealthCheck() {
+        this.stopPeriodicHealthCheck();
+        this.healthCheckInterval = setInterval(() => {
+            this.verifyConnectionHealth();
+        }, 30000);
+    }
+
+    // Stop periodic health checks
+    stopPeriodicHealthCheck() {
+        if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = null;
+        }
+        // Also clear any pending health check
+        if (this.healthCheckTimeout) {
+            clearTimeout(this.healthCheckTimeout);
+            this.healthCheckTimeout = null;
+        }
+        this.healthCheckPending = false;
     }
 
     // Get set of enabled class IDs
@@ -198,14 +365,21 @@ class WMTClient {
     setupConnection() {
         // Use configured WebSocket URL or fall back to default
         const wsUrl = window.WMT_CONFIG?.wsUrl || `ws://${window.location.hostname}:8080`;
+        const wsToken = window.WMT_CONFIG?.wsToken || null;
+        const userId = window.WMT_CONFIG?.userId || null;
+        const characterId = window.WMT_CONFIG?.characterId || null;
 
         this.connection = new MudConnection({
             wsUrl: wsUrl,
+            wsToken: wsToken,
+            userId: userId,
+            characterId: characterId,
             onConnect: () => this.onConnect(),
             onDisconnect: () => this.onDisconnect(),
             onMessage: (data) => this.onMessage(data),
             onError: (error) => this.onError(error),
-            onStatusChange: (status) => this.updateConnectionStatus(status)
+            onStatusChange: (status) => this.updateConnectionStatus(status),
+            onSessionResumed: (mudConnected) => this.onSessionResumed(mudConnected)
         });
 
         this.connection.connect();
@@ -215,6 +389,9 @@ class WMTClient {
         this.appendOutput('Connected to WebSocket server.', 'system');
         this.passwordSent = false; // Reset for new connection
         this.mipStarted = false; // Reset MIP flag
+
+        // Start periodic health checks to detect zombie connections
+        this.startPeriodicHealthCheck();
 
         // Tell the proxy which server to connect to
         const mudHost = window.WMT_CONFIG.mudHost || '3k.org';
@@ -250,9 +427,37 @@ class WMTClient {
         }
     }
 
+    onSessionResumed(mudConnected) {
+        // Called when reconnecting to an existing session (e.g., after app switch)
+        // Restart periodic health checks
+        this.startPeriodicHealthCheck();
+
+        if (mudConnected) {
+            this.appendOutput('Session resumed - MUD connection active.', 'system');
+            // Re-send triggers and aliases in case they changed
+            this.sendFilteredTriggersAndAliases();
+            // MIP state is preserved server-side, but re-enable client tracking
+            if (this.preferences.mipEnabled !== false) {
+                this.mipEnabled = true;
+            }
+        } else {
+            this.appendOutput('Session resumed - MUD was disconnected.', 'system');
+            // MUD connection closed while we were away, treat like fresh connect
+            this.onConnect();
+        }
+    }
+
     onDisconnect() {
-        this.appendOutput('Disconnected from server.', 'system');
         this.mipReady = false;  // Reset so conditions don't fire on stale data after reconnect
+        // Stop health checks when disconnected
+        this.stopPeriodicHealthCheck();
+
+        // Only show disconnect message if it was intentional or we've given up reconnecting
+        // Otherwise, stay quiet and let the reconnect happen - session resume will confirm success
+        if (this.connection && (this.connection.intentionalDisconnect ||
+            this.connection.reconnectAttempts >= this.connection.maxReconnectAttempts)) {
+            this.appendOutput('Disconnected from server.', 'system');
+        }
     }
 
     onMessage(data) {
@@ -351,8 +556,30 @@ class WMTClient {
                 this.appendOutput(data.message, 'error');
                 break;
 
+            case 'session_taken':
+                // Another device took over this session
+                this.appendOutput('Session taken over by another device. Refresh to reconnect.', 'system');
+                this.updateConnectionStatus('disconnected');
+                break;
+
+            case 'broadcast':
+                // Admin broadcast message - display prominently
+                this.appendOutput('', 'system');
+                this.appendOutput('==================== BROADCAST ====================', 'system');
+                this.appendOutput(data.message, 'system');
+                this.appendOutput('===================================================', 'system');
+                this.appendOutput('', 'system');
+                // Play notification sound if available
+                this.playSound('beep');
+                break;
+
             case 'keepalive_ack':
                 // Keepalive acknowledged
+                break;
+
+            case 'health_ok':
+                // Health check response - connection is alive
+                this.onHealthCheckResponse();
                 break;
 
             case 'client_command':
@@ -383,7 +610,7 @@ class WMTClient {
             case 'mip_chat':
                 // Handle MIP chat/tell messages
                 if (data.message) {
-                    this.appendChatMessage(data.message, data.chatType);
+                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText);
                 }
                 break;
 
@@ -431,11 +658,11 @@ class WMTClient {
             }
         }
 
-        // Guild lines
+        // Guild lines - wrap each stat item for smart flexbox wrapping
         const gline1 = document.getElementById('mip-gline1');
         const gline2 = document.getElementById('mip-gline2');
-        if (gline1) gline1.innerHTML = stats.gline1 || '';
-        if (gline2) gline2.innerHTML = stats.gline2 || '';
+        if (gline1) gline1.innerHTML = this.wrapGuildStats(stats.gline1 || '');
+        if (gline2) gline2.innerHTML = this.wrapGuildStats(stats.gline2 || '');
 
         // Room name
         const room = document.getElementById('mip-room');
@@ -452,6 +679,56 @@ class WMTClient {
 
         // Check MIP conditions after updating
         this.checkMipConditions();
+    }
+
+    // Wrap guild stats in spans for smart flexbox wrapping on mobile
+    // Parses patterns like "Ammo:[0]", "Gxp: 53.4464%", "[....|.]"
+    wrapGuildStats(html) {
+        if (!html) return '';
+
+        // First, protect any existing HTML spans (color formatting)
+        // by replacing them with placeholders
+        const spans = [];
+        let safeHtml = html.replace(/<span[^>]*>.*?<\/span>/gi, (match) => {
+            spans.push(match);
+            return `\x00SPAN${spans.length - 1}\x00`;
+        });
+
+        // Pattern to match stat items:
+        // - Word:[value] or Word: [value]
+        // - Word: value (including %, /, decimals)
+        // - Standalone [brackets] like [....|.]
+        const items = [];
+
+        // Match patterns and split into items
+        // Regex: captures "Label:[val]", "Label: val", or standalone "[...]"
+        const pattern = /(\w+:\s*\[[^\]]+\]|\w+:\s*[\w.%\/]+(?:\s+\w+)?|\[[^\]]+\])/g;
+
+        let lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(safeHtml)) !== null) {
+            // Add any text before this match
+            if (match.index > lastIndex) {
+                const before = safeHtml.slice(lastIndex, match.index).trim();
+                if (before) items.push(before);
+            }
+            items.push(match[1]);
+            lastIndex = pattern.lastIndex;
+        }
+        // Add remaining text
+        if (lastIndex < safeHtml.length) {
+            const remaining = safeHtml.slice(lastIndex).trim();
+            if (remaining) items.push(remaining);
+        }
+
+        // Wrap each item in a span and restore protected spans
+        const wrapped = items.map(item => {
+            // Restore any protected spans in this item
+            let restored = item.replace(/\x00SPAN(\d+)\x00/g, (_, idx) => spans[parseInt(idx)]);
+            return `<span class="guild-stat-item">${restored}</span>`;
+        }).join('');
+
+        return wrapped || html;
     }
 
     // Update server info display (uptime/reboot)
@@ -498,6 +775,20 @@ class WMTClient {
         // Location
         this.mipVars.room = stats.room || '';
         this.mipVars.exits = stats.exits || '';
+
+        // Guild variables (parsed from guild lines)
+        if (stats.guildVars) {
+            // Clear old guild vars first
+            for (const key of Object.keys(this.mipVars)) {
+                if (key.startsWith('guild_')) {
+                    delete this.mipVars[key];
+                }
+            }
+            // Copy new guild vars with 'guild_' prefix to avoid collisions
+            for (const [key, value] of Object.entries(stats.guildVars)) {
+                this.mipVars['guild_' + key] = value;
+            }
+        }
 
         // Mark MIP as ready once we receive valid stats (hp_max > 0 indicates real data)
         if (stats.hp.max > 0 && !this.mipReady) {
@@ -638,6 +929,22 @@ class WMTClient {
             { value: 'round', label: 'Combat Round' }
         );
 
+        // Add guild variables dynamically
+        const guildVars = [];
+        for (const key of Object.keys(this.mipVars)) {
+            if (key.startsWith('guild_')) {
+                guildVars.push(key);
+            }
+        }
+        // Sort guild vars and add to options
+        guildVars.sort();
+        for (const key of guildVars) {
+            // Create readable label from key: guild_nukes_current -> Nukes Current
+            const labelParts = key.replace('guild_', '').split('_');
+            const label = labelParts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+            baseOptions.push({ value: key, label: label });
+        }
+
         // Populate dropdown
         baseOptions.forEach(opt => {
             const option = document.createElement('option');
@@ -649,9 +956,17 @@ class WMTClient {
         // Set default variable selection
         varSelect.value = defaultVar;
 
-        // Clear any pending sub-conditions
+        // Clear any pending sub-conditions and reset editing state
         this.pendingSubConditions = [];
+        this.editingConditionId = null;
         this.renderSubConditions();
+
+        // Reset form UI
+        document.getElementById('mip-cond-command').value = '';
+        document.getElementById('mip-cond-value').value = '50';
+        document.getElementById('mip-form-title').textContent = 'Add Condition';
+        document.getElementById('mip-save-btn').textContent = 'Add';
+        document.getElementById('mip-cancel-btn').textContent = 'Close';
 
         // Update current value display
         this.updateConditionValueDisplay();
@@ -666,6 +981,7 @@ class WMTClient {
     closeMipConditionsModal() {
         document.getElementById('mip-conditions-modal').classList.remove('open');
         this.currentConditionStat = null;
+        this.editingConditionId = null;
     }
 
     // Get variable options HTML based on available stats
@@ -697,6 +1013,20 @@ class WMTClient {
             { value: 'enemy', label: 'Enemy %' },
             { value: 'round', label: 'Combat Round' }
         );
+
+        // Add guild variables dynamically
+        const guildVars = [];
+        for (const key of Object.keys(this.mipVars)) {
+            if (key.startsWith('guild_')) {
+                guildVars.push(key);
+            }
+        }
+        guildVars.sort();
+        for (const key of guildVars) {
+            const labelParts = key.replace('guild_', '').split('_');
+            const label = labelParts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+            options.push({ value: key, label: label });
+        }
 
         return options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
     }
@@ -814,6 +1144,7 @@ class WMTClient {
                     <div class="mip-condition-expr">${expr}${subsHtml}</div>
                     <div class="mip-condition-cmd" title="${this.escapeHtml(c.command)}">${this.escapeHtml(c.command)}</div>
                     <div class="mip-condition-actions">
+                        <button onclick="wmtClient.editMipCondition('${c.id}')">Edit</button>
                         <button onclick="wmtClient.toggleMipCondition('${c.id}')">${c.enabled ? 'On' : 'Off'}</button>
                         <button class="delete" onclick="wmtClient.deleteMipCondition('${c.id}')">X</button>
                     </div>
@@ -822,7 +1153,51 @@ class WMTClient {
         }).join('');
     }
 
-    addMipCondition() {
+    editMipCondition(id) {
+        const cond = this.mipConditions.find(c => c.id === id);
+        if (!cond) return;
+
+        this.editingConditionId = id;
+
+        // Populate form with condition values
+        document.getElementById('mip-cond-variable').value = cond.variable;
+        document.getElementById('mip-cond-operator').value = cond.operator;
+        document.getElementById('mip-cond-value').value = cond.value;
+        document.getElementById('mip-cond-command').value = cond.command;
+
+        // Load sub-conditions
+        this.pendingSubConditions = cond.subConditions ? [...cond.subConditions] : [];
+        this.renderSubConditions();
+
+        // Update UI to show edit mode
+        document.getElementById('mip-form-title').textContent = 'Edit Condition';
+        document.getElementById('mip-save-btn').textContent = 'Update';
+        document.getElementById('mip-cancel-btn').textContent = 'Cancel';
+
+        // Update current value display
+        this.updateConditionValueDisplay();
+    }
+
+    cancelMipConditionEdit() {
+        if (this.editingConditionId) {
+            // Cancel edit - reset form
+            this.editingConditionId = null;
+            document.getElementById('mip-cond-command').value = '';
+            document.getElementById('mip-cond-value').value = '50';
+            this.pendingSubConditions = [];
+            this.renderSubConditions();
+
+            // Reset UI
+            document.getElementById('mip-form-title').textContent = 'Add Condition';
+            document.getElementById('mip-save-btn').textContent = 'Add';
+            document.getElementById('mip-cancel-btn').textContent = 'Close';
+        } else {
+            // Just close the modal
+            this.closeMipConditionsModal();
+        }
+    }
+
+    saveMipCondition() {
         const variable = document.getElementById('mip-cond-variable').value;
         const operator = document.getElementById('mip-cond-operator').value;
         const value = document.getElementById('mip-cond-value').value;
@@ -833,36 +1208,56 @@ class WMTClient {
             return;
         }
 
-        const condition = {
-            id: Date.now().toString(),
-            variable,
-            operator,
-            value: parseFloat(value),
-            command,
-            enabled: true,
-            lastTriggered: null,
-            subConditions: this.pendingSubConditions.length > 0 ? [...this.pendingSubConditions] : []
-        };
+        if (this.editingConditionId) {
+            // Update existing condition
+            const cond = this.mipConditions.find(c => c.id === this.editingConditionId);
+            if (cond) {
+                cond.variable = variable;
+                cond.operator = operator;
+                cond.value = parseFloat(value);
+                cond.command = command;
+                cond.subConditions = this.pendingSubConditions.length > 0 ? [...this.pendingSubConditions] : [];
+                this.appendOutput(`Updated condition: ${variable} ${operator} ${value} -> ${command}`, 'system');
+            }
+            this.editingConditionId = null;
+        } else {
+            // Add new condition
+            const condition = {
+                id: Date.now().toString(),
+                variable,
+                operator,
+                value: parseFloat(value),
+                command,
+                enabled: true,
+                lastTriggered: null,
+                subConditions: this.pendingSubConditions.length > 0 ? [...this.pendingSubConditions] : []
+            };
+            this.mipConditions.push(condition);
 
-        this.mipConditions.push(condition);
+            // Build condition description for output
+            let condDesc = `${variable} ${operator} ${value}`;
+            if (condition.subConditions.length > 0) {
+                condDesc += ' ' + condition.subConditions.map(s => `${s.logic} ${s.variable} ${s.operator} ${s.value}`).join(' ');
+            }
+            this.appendOutput(`Added condition: ${condDesc} -> ${command}`, 'system');
+        }
+
         this.saveMipConditions();
 
-        // Clear inputs
+        // Clear inputs and reset UI
         document.getElementById('mip-cond-command').value = '';
+        document.getElementById('mip-cond-value').value = '50';
         this.pendingSubConditions = [];
         this.renderSubConditions();
+
+        document.getElementById('mip-form-title').textContent = 'Add Condition';
+        document.getElementById('mip-save-btn').textContent = 'Add';
+        document.getElementById('mip-cancel-btn').textContent = 'Close';
 
         // Re-render
         if (this.currentConditionStat) {
             this.renderMipConditions(this.currentConditionStat);
         }
-
-        // Build condition description for output
-        let condDesc = `${variable} ${operator} ${value}`;
-        if (condition.subConditions.length > 0) {
-            condDesc += ' ' + condition.subConditions.map(s => `${s.logic} ${s.variable} ${s.operator} ${s.value}`).join(' ');
-        }
-        this.appendOutput(`Added condition: ${condDesc} -> ${command}`, 'system');
     }
 
     toggleMipCondition(id) {
@@ -920,14 +1315,16 @@ class WMTClient {
 
         if (this.chatWindowOpen) {
             chatWindow.classList.remove('hidden');
-            this.setChatMode(this.chatWindowMode);
+            // On mobile, always use docked mode
+            const isMobile = window.innerWidth <= 768;
+            const mode = isMobile ? 'docked' : this.chatWindowMode;
+            this.setChatMode(mode);
             document.getElementById('chat-toggle-btn')?.classList.add('active');
             this.clearChatNotification();
-            // Focus chat input
-            document.getElementById('chat-input')?.focus();
         } else {
             chatWindow.classList.add('hidden');
-            document.querySelector('.terminal-area')?.classList.remove('chat-docked');
+            const terminalArea = document.querySelector('.terminal-area');
+            terminalArea?.classList.remove('chat-docked', 'chat-docked-left', 'chat-docked-right');
             document.getElementById('chat-toggle-btn')?.classList.remove('active');
         }
     }
@@ -938,8 +1335,8 @@ class WMTClient {
         if (!chatWindow) return;
 
         // Remove all mode classes
-        chatWindow.classList.remove('docked', 'floating');
-        terminalArea?.classList.remove('chat-docked');
+        chatWindow.classList.remove('docked', 'docked-left', 'docked-right', 'floating');
+        terminalArea?.classList.remove('chat-docked', 'chat-docked-left', 'chat-docked-right');
 
         // Update button states
         document.getElementById('chat-dock-btn')?.classList.remove('active');
@@ -951,21 +1348,97 @@ class WMTClient {
             chatWindow.classList.add('docked');
             terminalArea?.classList.add('chat-docked');
             document.getElementById('chat-dock-btn')?.classList.add('active');
+            this.updateDockButtonTitle('top');
             // Reset position for docked mode
             chatWindow.style.top = '';
             chatWindow.style.left = '';
+            chatWindow.style.width = '';
+        } else if (mode === 'docked-left') {
+            chatWindow.classList.add('docked-left');
+            terminalArea?.classList.add('chat-docked-left');
+            document.getElementById('chat-dock-btn')?.classList.add('active');
+            this.updateDockButtonTitle('left');
+            // Reset position for docked mode
+            chatWindow.style.top = '';
+            chatWindow.style.left = '';
+            chatWindow.style.height = '';
+        } else if (mode === 'docked-right') {
+            chatWindow.classList.add('docked-right');
+            terminalArea?.classList.add('chat-docked-right');
+            document.getElementById('chat-dock-btn')?.classList.add('active');
+            this.updateDockButtonTitle('right');
+            // Reset position for docked mode
+            chatWindow.style.top = '';
+            chatWindow.style.left = '';
+            chatWindow.style.height = '';
         } else if (mode === 'floating') {
             chatWindow.classList.add('floating');
             document.getElementById('chat-float-btn')?.classList.add('active');
+            this.updateDockButtonTitle('none');
         }
     }
 
-    appendChatMessage(message, chatType = 'channel') {
+    // Cycle through dock positions: floating -> top -> left -> right -> floating
+    cycleDockPosition() {
+        // Only cycle docked positions on desktop
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile) {
+            // On mobile, just toggle docked
+            this.setChatMode(this.chatWindowMode === 'docked' ? 'floating' : 'docked');
+            return;
+        }
+
+        const positions = ['floating', 'docked', 'docked-left', 'docked-right'];
+        const currentIndex = positions.indexOf(this.chatWindowMode);
+        const nextIndex = (currentIndex + 1) % positions.length;
+        this.setChatMode(positions[nextIndex]);
+    }
+
+    // Update dock button tooltip based on current position
+    updateDockButtonTitle(position) {
+        const dockBtn = document.getElementById('chat-dock-btn');
+        if (!dockBtn) return;
+
+        const titles = {
+            'none': 'Dock to top',
+            'top': 'Dock to left',
+            'left': 'Dock to right',
+            'right': 'Float window'
+        };
+        dockBtn.title = titles[position] || 'Dock window';
+    }
+
+    appendChatMessage(message, chatType = 'channel', channel = '', rawText = '') {
+        // Get channel preferences
+        const channelKey = channel.toLowerCase();
+        const prefs = this.channelPrefs[channelKey] || {};
+
+        // Check if channel is hidden
+        if (prefs.hidden) {
+            return; // Don't display hidden channels
+        }
+
+        // Play sound if enabled for this channel
+        if (prefs.sound) {
+            this.playBell();
+        }
+
+        // Send to Discord if enabled for this channel
+        if (prefs.discord && this.discordWebhookUrl && rawText) {
+            this.sendToDiscord(rawText);
+        }
+
+        // Track this channel for the settings UI
+        if (channel && !this.channelPrefs[channelKey]) {
+            this.channelPrefs[channelKey] = { sound: false, hidden: false, discord: false };
+        }
+
         // Append to chat window
         const chatOutput = document.getElementById('chat-output');
         if (chatOutput) {
             const line = document.createElement('div');
             line.className = `chat-line ${chatType}`;
+            line.dataset.channel = channelKey;
             line.innerHTML = message;
             chatOutput.appendChild(line);
 
@@ -979,6 +1452,7 @@ class WMTClient {
             if (popoutOutput) {
                 const line = this.chatPopoutWindow.document.createElement('div');
                 line.className = `chat-line ${chatType}`;
+                line.dataset.channel = channelKey;
                 line.innerHTML = message;
                 popoutOutput.appendChild(line);
                 popoutOutput.scrollTop = popoutOutput.scrollHeight;
@@ -1004,6 +1478,120 @@ class WMTClient {
                 chatWindow.classList.add('has-new');
             }
         }
+    }
+
+    // Send message to Discord webhook
+    async sendToDiscord(message) {
+        if (!this.discordWebhookUrl) return;
+
+        try {
+            const proxyUrl = typeof WMT_CONFIG !== 'undefined' && WMT_CONFIG.wsUrl
+                ? WMT_CONFIG.wsUrl.replace('wss://', 'https://').replace('ws://', 'http://')
+                : '';
+
+            if (!proxyUrl) {
+                console.error('Cannot determine proxy URL for Discord webhook');
+                return;
+            }
+
+            const response = await fetch(proxyUrl + '/discord-webhook', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    webhookUrl: this.discordWebhookUrl,
+                    message: message,
+                    username: '3K ChatMon'
+                })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                console.error('Discord webhook failed:', data.error);
+            }
+        } catch (e) {
+            console.error('Failed to send to Discord:', e);
+        }
+    }
+
+    // Save channel preferences
+    async saveChannelPrefs() {
+        try {
+            this.preferences.channelPrefs = this.channelPrefs;
+            this.preferences.discordWebhookUrl = this.discordWebhookUrl;
+            await fetch('api/preferences.php?action=save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    preferences: {
+                        channelPrefs: this.channelPrefs,
+                        discordWebhookUrl: this.discordWebhookUrl
+                    }
+                })
+            });
+        } catch (e) {
+            console.error('Failed to save channel preferences:', e);
+        }
+    }
+
+    // Open channel settings modal
+    openChannelSettingsModal() {
+        const modal = document.getElementById('channel-settings-modal');
+        if (!modal) return;
+
+        // Render the channel list
+        const channelList = document.getElementById('channel-list');
+        if (channelList) {
+            const channels = Object.keys(this.channelPrefs);
+            if (channels.length === 0) {
+                channelList.innerHTML = '<p class="no-channels">No channels detected yet. Chat messages will appear here as they arrive.</p>';
+            } else {
+                channelList.innerHTML = channels.sort().map(channel => {
+                    const prefs = this.channelPrefs[channel] || {};
+                    return `
+                        <div class="channel-row" data-channel="${channel}">
+                            <span class="channel-name">${channel}</span>
+                            <label class="channel-option" title="Play sound on message">
+                                <input type="checkbox" class="channel-sound" ${prefs.sound ? 'checked' : ''}>
+                                <span class="channel-icon">🔔</span>
+                            </label>
+                            <label class="channel-option" title="Hide this channel">
+                                <input type="checkbox" class="channel-hidden" ${prefs.hidden ? 'checked' : ''}>
+                                <span class="channel-icon">👁️</span>
+                            </label>
+                            <label class="channel-option" title="Send to Discord">
+                                <input type="checkbox" class="channel-discord" ${prefs.discord ? 'checked' : ''}>
+                                <span class="channel-icon">📤</span>
+                            </label>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        modal.classList.add('open');
+    }
+
+    // Close channel settings modal
+    closeChannelSettingsModal() {
+        const modal = document.getElementById('channel-settings-modal');
+        if (modal) {
+            modal.classList.remove('open');
+        }
+    }
+
+    // Save channel settings from modal
+    saveChannelSettings() {
+        const channelRows = document.querySelectorAll('#channel-list .channel-row');
+        channelRows.forEach(row => {
+            const channel = row.dataset.channel;
+            const sound = row.querySelector('.channel-sound')?.checked || false;
+            const hidden = row.querySelector('.channel-hidden')?.checked || false;
+            const discord = row.querySelector('.channel-discord')?.checked || false;
+            this.channelPrefs[channel] = { sound, hidden, discord };
+        });
+        this.saveChannelPrefs();
+        this.closeChannelSettingsModal();
+        this.appendOutput('Channel settings saved.', 'system');
     }
 
     // Clear chat notification when chat is focused
@@ -1139,7 +1727,7 @@ class WMTClient {
         // Hide main chat window
         this.chatWindowOpen = false;
         document.getElementById('chat-window')?.classList.add('hidden');
-        document.querySelector('.terminal-area')?.classList.remove('chat-docked');
+        document.querySelector('.terminal-area')?.classList.remove('chat-docked', 'chat-docked-left', 'chat-docked-right');
         document.getElementById('chat-toggle-btn')?.classList.remove('active');
     }
 
@@ -1223,7 +1811,12 @@ class WMTClient {
 
     onError(error) {
         console.error('=== CONNECTION ERROR ===', error);
-        this.appendOutput('Error: ' + error, 'error');
+        // Don't show alarming error messages if we're going to auto-reconnect
+        // The session resume message will confirm everything is fine
+        if (this.connection && this.connection.intentionalDisconnect) {
+            this.appendOutput('Error: ' + error, 'error');
+        }
+        // Otherwise stay quiet - reconnect will either succeed (session resumed) or fail (then show error)
     }
 
     updateConnectionStatus(status) {
@@ -1239,6 +1832,7 @@ class WMTClient {
             const statusMap = {
                 'connected': `Connected to ${mudHost}`,
                 'connecting': 'Connecting...',
+                'authenticating': 'Authenticating...',
                 'disconnected': 'Disconnected',
                 'mud_disconnected': `Disconnected from ${mudHost}`
             };
@@ -1263,9 +1857,33 @@ class WMTClient {
 
         output.appendChild(line);
 
+        // Scrollback limit - remove old lines to prevent memory issues
+        // Use efficient batch removal to minimize layout thrashing (which can reset mobile zoom)
+        const maxLines = this.preferences.scrollbackLimit || 5000;
+        const trimAmount = 500; // Remove in batches for efficiency
+        if (output.children.length > maxLines + trimAmount) {
+            // Use Range API for efficient batch removal (single reflow)
+            const range = document.createRange();
+            range.setStartBefore(output.firstChild);
+            range.setEndAfter(output.children[trimAmount - 1]);
+            range.deleteContents();
+        }
+
         // Smart auto-scroll: scroll to bottom if enabled AND user hasn't scrolled up
+        // Use requestAnimationFrame to batch scroll updates (prevents mobile zoom reset)
         if (this.preferences.scrollOnOutput !== false && !this.userScrolledUp) {
-            output.scrollTop = output.scrollHeight;
+            if (!this.pendingScroll) {
+                this.pendingScroll = true;
+                requestAnimationFrame(() => {
+                    this.pendingScroll = false;
+                    const out = document.getElementById('mud-output');
+                    if (out) {
+                        out.scrollTop = out.scrollHeight;
+                        // Update lastScrollTop so scroll detection doesn't think user scrolled
+                        this.lastScrollTop = out.scrollTop;
+                    }
+                });
+            }
         }
 
         // Play sound if specified
@@ -1280,8 +1898,7 @@ class WMTClient {
                    .replace(/</g, '&lt;')
                    .replace(/>/g, '&gt;');
 
-        const ansiColors = {
-            '0': '</span>',
+        const ansiSpans = {
             '1': '<span style="font-weight:bold">',
             '4': '<span style="text-decoration:underline">',
             '30': '<span style="color:#555555">',  // dark gray (visible on black)
@@ -1302,33 +1919,128 @@ class WMTClient {
             '97': '<span style="color:#ffffff">'   // bright white
         };
 
+        // Track open spans so we can close them all on reset
+        let openSpans = 0;
+
         return text.replace(/\x1b\[([0-9;]+)m/g, (match, codes) => {
-            return codes.split(';').map(code => ansiColors[code] || '').join('');
+            const codeList = codes.split(';');
+            let result = '';
+
+            for (const code of codeList) {
+                if (code === '0' || code === '') {
+                    // Reset: close ALL open spans
+                    result += '</span>'.repeat(openSpans);
+                    openSpans = 0;
+                } else if (ansiSpans[code]) {
+                    result += ansiSpans[code];
+                    openSpans++;
+                }
+            }
+
+            return result;
         });
     }
 
     playSound(sound) {
-        // Simple beep implementation
-        try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
+        // Use the same notification sound settings as playBell
+        this.playBell();
+    }
 
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
+    // Pinch-to-zoom font size on mobile
+    setupPinchZoom(element) {
+        let initialDistance = null;
+        let initialFontSize = null;
 
-            oscillator.frequency.value = 800;
-            oscillator.type = 'sine';
-            gainNode.gain.value = 0.1;
+        const getDistance = (touches) => {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        };
 
-            oscillator.start();
-            setTimeout(() => {
-                oscillator.stop();
-                audioContext.close();
-            }, 100);
-        } catch (e) {
-            console.log('Could not play sound');
+        element.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                initialDistance = getDistance(e.touches);
+                initialFontSize = this.preferences.fontSize || 14;
+                e.preventDefault(); // Prevent browser zoom
+            }
+        }, { passive: false });
+
+        element.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2 && initialDistance !== null) {
+                e.preventDefault(); // Prevent browser zoom
+
+                const currentDistance = getDistance(e.touches);
+                const scale = currentDistance / initialDistance;
+
+                // Calculate new font size with some dampening
+                let newSize = Math.round(initialFontSize * scale);
+
+                // Clamp to valid range (matches settings slider)
+                newSize = Math.max(6, Math.min(24, newSize));
+
+                // Only update if changed
+                if (newSize !== this.preferences.fontSize) {
+                    this.preferences.fontSize = newSize;
+
+                    // Apply to output and MIP bar
+                    const output = document.getElementById('mud-output');
+                    const mipBar = document.querySelector('.mip-status-bar');
+                    if (output) output.style.setProperty('--mud-font-size', newSize + 'px');
+                    if (mipBar) mipBar.style.setProperty('--mud-font-size', newSize + 'px');
+
+                    // Show indicator
+                    this.showFontSizeIndicator(newSize);
+                }
+            }
+        }, { passive: false });
+
+        element.addEventListener('touchend', (e) => {
+            if (initialDistance !== null && e.touches.length < 2) {
+                // Gesture ended - save the preference immediately without reading from DOM
+                this.saveCurrentPreferences();
+                initialDistance = null;
+                initialFontSize = null;
+            }
+        });
+    }
+
+    // Show brief font size indicator during pinch zoom
+    showFontSizeIndicator(size) {
+        let indicator = document.getElementById('font-size-indicator');
+
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.id = 'font-size-indicator';
+            indicator.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: #00ff00;
+                padding: 15px 25px;
+                border-radius: 8px;
+                font-size: 24px;
+                font-weight: bold;
+                z-index: 10000;
+                pointer-events: none;
+                transition: opacity 0.3s;
+            `;
+            document.body.appendChild(indicator);
         }
+
+        indicator.textContent = size + 'px';
+        indicator.style.opacity = '1';
+
+        // Clear existing timeout
+        if (this.fontSizeIndicatorTimeout) {
+            clearTimeout(this.fontSizeIndicatorTimeout);
+        }
+
+        // Hide after delay
+        this.fontSizeIndicatorTimeout = setTimeout(() => {
+            indicator.style.opacity = '0';
+        }, 800);
     }
 
     bindEvents() {
@@ -1348,9 +2060,25 @@ class WMTClient {
         // Smart auto-scroll: detect when user scrolls up manually
         if (output) {
             output.addEventListener('scroll', () => {
-                // Check if user is near the bottom (within 50px)
-                const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 50;
-                this.userScrolledUp = !atBottom;
+                // Ignore scroll events briefly after sending command (mobile keyboard causes false triggers)
+                if (this.ignoreScrollEvents) return;
+
+                const currentScrollTop = output.scrollTop;
+                const atBottom = output.scrollHeight - currentScrollTop - output.clientHeight < 50;
+
+                // Only set userScrolledUp=true if user actually scrolled UP (scrollTop decreased)
+                // This prevents false triggers when new content increases scrollHeight
+                if (currentScrollTop < this.lastScrollTop - 10) {
+                    // User scrolled up - stop auto-scroll
+                    this.userScrolledUp = true;
+                } else if (atBottom) {
+                    // User scrolled to bottom - resume auto-scroll
+                    this.userScrolledUp = false;
+                }
+                // If scrollTop increased or stayed same, don't change the flag
+                // (content was added, or user scrolled down)
+
+                this.lastScrollTop = currentScrollTop;
             });
 
             // Click anywhere on output to focus command input
@@ -1362,6 +2090,9 @@ class WMTClient {
                 // Focus the command input
                 document.getElementById('command-input')?.focus();
             });
+
+            // Pinch-to-zoom for font size on mobile
+            this.setupPinchZoom(output);
         }
 
         // Also allow clicking on the output container (outside the output itself)
@@ -1390,19 +2121,11 @@ class WMTClient {
 
         // Chat window buttons
         document.getElementById('chat-toggle-btn')?.addEventListener('click', () => this.toggleChatWindow());
-        document.getElementById('chat-dock-btn')?.addEventListener('click', () => this.setChatMode('docked'));
+        document.getElementById('chat-settings-btn')?.addEventListener('click', () => this.openChannelSettingsModal());
+        document.getElementById('chat-dock-btn')?.addEventListener('click', () => this.cycleDockPosition());
         document.getElementById('chat-float-btn')?.addEventListener('click', () => this.setChatMode('floating'));
         document.getElementById('chat-popout-btn')?.addEventListener('click', () => this.popOutChatWindow());
         document.getElementById('chat-close-btn')?.addEventListener('click', () => this.toggleChatWindow());
-        document.getElementById('chat-send-btn')?.addEventListener('click', () => this.sendChatCommand());
-        document.getElementById('chat-input')?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.sendChatCommand();
-        });
-
-        // Clear notification when chat input is focused
-        document.getElementById('chat-input')?.addEventListener('focus', () => {
-            this.clearChatNotification();
-        });
 
         // Clear notification when clicking on chat window
         document.getElementById('chat-window')?.addEventListener('click', () => {
@@ -1475,10 +2198,39 @@ class WMTClient {
         document.getElementById('disconnect-btn')?.addEventListener('click', () => this.disconnect());
         document.getElementById('logout-btn')?.addEventListener('click', () => this.logout());
 
+        // Handle app returning from background (mobile app switching)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                // PWA on iOS needs a moment to stabilize after unfreeze
+                const isPWA = window.navigator.standalone === true;
+                const delay = isPWA ? 500 : 50;
+
+                setTimeout(() => {
+                    // App came back to foreground - check if WebSocket is still alive
+                    if (this.connection && this.connection.socket) {
+                        const state = this.connection.socket.readyState;
+                        if (state === WebSocket.CLOSED || state === WebSocket.CLOSING) {
+                            // Obviously dead - reconnect immediately
+                            if (!this.connection.socket || this.connection.socket.readyState !== WebSocket.CONNECTING) {
+                                console.log('WebSocket dead after app resume, reconnecting...');
+                                this.connection.reconnectAttempts = 0;
+                                this.connection.connect();
+                            }
+                        } else if (state === WebSocket.OPEN) {
+                            // Connection looks alive - use health check to verify
+                            // This will auto-reconnect if no response within 5 seconds
+                            this.verifyConnectionHealth();
+                        }
+                    }
+                }, delay);
+            }
+        });
+
         // MIP is now controlled via Settings panel, auto-enabled on connect
 
         // Scripts sidebar
         document.getElementById('scripts-sidebar-close')?.addEventListener('click', () => this.closeScriptsSidebar());
+        document.getElementById('close-scripts-btn')?.addEventListener('click', () => this.closeScriptsSidebar());
         document.getElementById('add-class-btn')?.addEventListener('click', () => this.promptAddClass());
         document.getElementById('upload-script-btn')?.addEventListener('click', () => {
             document.getElementById('script-file-input')?.click();
@@ -1507,14 +2259,7 @@ class WMTClient {
             }
         });
 
-        // Match type help toggles
-        document.getElementById('trigger-match-type')?.addEventListener('change', (e) => {
-            const regexHelp = document.getElementById('trigger-regex-help');
-            const tintinHelp = document.getElementById('trigger-tintin-help');
-            if (regexHelp) regexHelp.style.display = e.target.value === 'regex' ? 'block' : 'none';
-            if (tintinHelp) tintinHelp.style.display = e.target.value === 'tintin' ? 'block' : 'none';
-        });
-
+        // Alias match type help toggle
         document.getElementById('alias-match-type')?.addEventListener('change', () => {
             this.updateAliasHelp();
         });
@@ -1559,7 +2304,7 @@ class WMTClient {
                 this.commandHistory.pop();
             }
         }
-        this.historyIndex = -1;
+        this.resetHistorySearch();
 
         // Echo command if enabled (show empty as just ">")
         if (this.preferences.echoCommands !== false) {
@@ -1568,18 +2313,31 @@ class WMTClient {
 
         // Check for client-side # commands
         if (command.startsWith('#')) {
-            this.processClientCommand(command);
+            this.executeCommandString(command);
         } else {
+            // Substitute variables before sending (allows alias names with $vars like celstep$num)
+            const expandedCommand = this.substituteVariables(command);
             // Send to server (empty commands are allowed - e.g., "press enter to continue")
-            this.connection.sendCommand(command);
+            this.connection.sendCommand(expandedCommand);
         }
 
         // Scroll to bottom and resume auto-scroll when sending a command
         this.userScrolledUp = false;
+        this.ignoreScrollEvents = true;  // Ignore scroll events from keyboard hide
         const output = document.getElementById('mud-output');
         if (output) {
             output.scrollTop = output.scrollHeight;
+            this.lastScrollTop = output.scrollTop;
         }
+        // Re-enable scroll detection after keyboard animation completes
+        setTimeout(() => {
+            this.ignoreScrollEvents = false;
+            // Scroll to bottom again in case content came in during the delay
+            if (output && !this.userScrolledUp) {
+                output.scrollTop = output.scrollHeight;
+                this.lastScrollTop = output.scrollTop;
+            }
+        }, 500);
 
         // Clear input unless retainLastCommand is enabled
         if (!this.preferences.retainLastCommand) {
@@ -1594,21 +2352,50 @@ class WMTClient {
         const input = document.getElementById('command-input');
         if (!input || this.commandHistory.length === 0) return;
 
-        const newIndex = this.historyIndex + direction;
+        // If starting a new search (index is -1 and going up)
+        if (this.historyIndex === -1 && direction === 1) {
+            const currentInput = input.value;
+            this.historySearchPrefix = currentInput;
+
+            // Build filtered matches list
+            if (currentInput) {
+                // Filter history to commands starting with the prefix
+                this.historySearchMatches = this.commandHistory.filter(cmd =>
+                    cmd.toLowerCase().startsWith(currentInput.toLowerCase())
+                );
+            } else {
+                // No prefix - use full history
+                this.historySearchMatches = [...this.commandHistory];
+            }
+            this.historySearchIndex = -1;
+        }
+
+        // Navigate within filtered matches
+        const newIndex = this.historySearchIndex + direction;
 
         if (newIndex < -1) return;
-        if (newIndex >= this.commandHistory.length) return;
+        if (newIndex >= this.historySearchMatches.length) return;
 
-        this.historyIndex = newIndex;
+        this.historySearchIndex = newIndex;
+        this.historyIndex = newIndex;  // Keep in sync for reset
 
-        if (this.historyIndex === -1) {
-            input.value = '';
+        if (this.historySearchIndex === -1) {
+            // Back to original input
+            input.value = this.historySearchPrefix;
         } else {
-            input.value = this.commandHistory[this.historyIndex];
+            input.value = this.historySearchMatches[this.historySearchIndex];
         }
 
         // Move cursor to end
         input.setSelectionRange(input.value.length, input.value.length);
+    }
+
+    // Reset history search state (called when input changes or command is sent)
+    resetHistorySearch() {
+        this.historyIndex = -1;
+        this.historySearchIndex = -1;
+        this.historySearchPrefix = '';
+        this.historySearchMatches = [];
     }
 
     reconnect() {
@@ -1942,13 +2729,15 @@ class WMTClient {
 
         let html = '';
 
-        // Add buttons at top
+        // Add buttons at top (paired: Trigger/Alias, Gag/Highlight, Substitute/Ticker)
         html += `
             <div class="sidebar-add-buttons">
                 <button class="btn btn-sm btn-secondary" onclick="wmtClient.openTriggerModal()">+ Trigger</button>
                 <button class="btn btn-sm btn-secondary" onclick="wmtClient.openAliasModal()">+ Alias</button>
                 <button class="btn btn-sm btn-secondary" onclick="wmtClient.openGagModal()">+ Gag</button>
                 <button class="btn btn-sm btn-secondary" onclick="wmtClient.openHighlightModal()">+ Highlight</button>
+                <button class="btn btn-sm btn-secondary" onclick="wmtClient.openSubstituteModal()">+ Substitute</button>
+                <button class="btn btn-sm btn-secondary" onclick="wmtClient.openTickerModal()">+ Ticker</button>
             </div>
         `;
 
@@ -2012,7 +2801,7 @@ class WMTClient {
             const isEnabled = t.enabled !== false;
             // Determine trigger type for icon
             const triggerType = this.getTriggerType(t);
-            const iconMap = { gag: 'G', highlight: 'H', trigger: 'T' };
+            const iconMap = { gag: 'G', highlight: 'H', substitute: 'S', trigger: 'T' };
             const icon = iconMap[triggerType] || 'T';
 
             html += `
@@ -2051,12 +2840,15 @@ class WMTClient {
         // Check what actions the trigger has
         const hasGag = trigger.actions.some(a => a.type === 'gag');
         const hasHighlight = trigger.actions.some(a => a.type === 'highlight');
+        const hasSubstitute = trigger.actions.some(a => a.type === 'substitute');
         const hasCommand = trigger.actions.some(a => a.type === 'command');
 
         // If only gag action, it's a gag
-        if (hasGag && !hasHighlight && !hasCommand) return 'gag';
+        if (hasGag && !hasHighlight && !hasSubstitute && !hasCommand) return 'gag';
         // If only highlight action, it's a highlight
-        if (hasHighlight && !hasGag && !hasCommand) return 'highlight';
+        if (hasHighlight && !hasGag && !hasSubstitute && !hasCommand) return 'highlight';
+        // If only substitute action, it's a substitute
+        if (hasSubstitute && !hasGag && !hasHighlight && !hasCommand) return 'substitute';
         // Otherwise it's a regular trigger
         return 'trigger';
     }
@@ -2137,6 +2929,8 @@ class WMTClient {
                 this.openGagModal(index);
             } else if (type === 'highlight') {
                 this.openHighlightModal(index);
+            } else if (type === 'substitute') {
+                this.openSubstituteModal(index);
             } else {
                 this.openTriggerModal(index);
             }
@@ -2322,19 +3116,12 @@ class WMTClient {
         // Populate form
         document.getElementById('trigger-name').value = trigger?.name || '';
         document.getElementById('trigger-pattern').value = trigger?.pattern || '';
-        document.getElementById('trigger-match-type').value = trigger?.matchType || 'contains';
 
         // Populate class dropdown
         const classSelect = document.getElementById('trigger-class');
         if (classSelect) {
             classSelect.innerHTML = this.renderClassOptions(trigger?.class);
         }
-
-        // Show/hide pattern help based on match type
-        const regexHelp = document.getElementById('trigger-regex-help');
-        const tintinHelp = document.getElementById('trigger-tintin-help');
-        if (regexHelp) regexHelp.style.display = (trigger?.matchType === 'regex') ? 'block' : 'none';
-        if (tintinHelp) tintinHelp.style.display = (trigger?.matchType === 'tintin') ? 'block' : 'none';
 
         // Populate actions
         const actionsContainer = document.getElementById('trigger-actions');
@@ -2360,9 +3147,10 @@ class WMTClient {
                 <option value="command" ${action?.type === 'command' ? 'selected' : ''}>Send Command</option>
                 <option value="highlight" ${action?.type === 'highlight' ? 'selected' : ''}>Highlight</option>
                 <option value="gag" ${action?.type === 'gag' ? 'selected' : ''}>Gag (Hide)</option>
+                <option value="substitute" ${action?.type === 'substitute' ? 'selected' : ''}>Substitute</option>
                 <option value="sound" ${action?.type === 'sound' ? 'selected' : ''}>Play Sound</option>
             </select>
-            <input type="text" class="action-value" placeholder="Value" value="${this.escapeHtml(action?.command || action?.color || '')}">
+            <input type="text" class="action-value" placeholder="Value" value="${this.escapeHtml(action?.command || action?.color || action?.replacement || '')}">
             <button type="button" class="btn btn-sm btn-danger remove-action">X</button>
         `;
 
@@ -2370,10 +3158,26 @@ class WMTClient {
         container.appendChild(div);
     }
 
+    /**
+     * Detect if a pattern uses TinTin++ syntax
+     * Returns 'tintin' if pattern contains % wildcards, anchors, or { } braces
+     * Returns 'contains' for simple text patterns
+     */
+    detectPatternType(pattern) {
+        // Check for % followed by wildcard chars or digits
+        if (/%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern)) return 'tintin';
+        // Check for ^ anchor at start
+        if (pattern.startsWith('^')) return 'tintin';
+        // Check for $ anchor at end
+        if (pattern.endsWith('$')) return 'tintin';
+        // Check for { } PCRE embedding
+        if (/\{.*\}/.test(pattern)) return 'tintin';
+        return 'contains';
+    }
+
     async saveTrigger() {
         const name = document.getElementById('trigger-name').value.trim();
         const pattern = document.getElementById('trigger-pattern').value.trim();
-        const matchType = document.getElementById('trigger-match-type').value;
         const classId = document.getElementById('trigger-class')?.value || null;
 
         if (!pattern) {
@@ -2381,15 +3185,8 @@ class WMTClient {
             return;
         }
 
-        // Validate regex if regex mode
-        if (matchType === 'regex') {
-            try {
-                new RegExp(pattern);
-            } catch (e) {
-                alert('Invalid regular expression: ' + e.message);
-                return;
-            }
-        }
+        // Auto-detect pattern type
+        const matchType = this.detectPatternType(pattern);
 
         const actions = [];
         document.querySelectorAll('#trigger-actions .action-item').forEach(item => {
@@ -2399,6 +3196,7 @@ class WMTClient {
             const action = { type };
             if (type === 'command') action.command = value;
             if (type === 'highlight') action.color = value || '#ffff00';
+            if (type === 'substitute') action.replacement = value;
             if (type === 'sound') action.sound = value || 'beep';
 
             actions.push(action);
@@ -2579,8 +3377,13 @@ class WMTClient {
         const existing = editIndex !== null ? this.triggers[editIndex] : null;
 
         // Populate form
+        // For name, strip auto-generated "Gag: " prefix if present
+        let displayName = existing?.name || '';
+        if (displayName.startsWith('Gag: ')) {
+            displayName = '';  // Don't show auto-generated names
+        }
+        document.getElementById('gag-name').value = displayName;
         document.getElementById('gag-pattern').value = existing?.pattern || '';
-        document.getElementById('gag-match-type').value = existing?.matchType || 'contains';
 
         // Populate class dropdown
         const classSelect = document.getElementById('gag-class');
@@ -2597,8 +3400,8 @@ class WMTClient {
 
     // Save gag from modal
     async saveGag() {
+        const name = document.getElementById('gag-name').value.trim();
         const pattern = document.getElementById('gag-pattern').value.trim();
-        const matchType = document.getElementById('gag-match-type').value;
         const classId = document.getElementById('gag-class')?.value || null;
 
         if (!pattern) {
@@ -2606,19 +3409,25 @@ class WMTClient {
             return;
         }
 
+        // Auto-detect pattern type
+        const matchType = this.detectPatternType(pattern);
+
+        // Use provided name or auto-generate from pattern
+        const displayName = name || `Gag: ${pattern.substring(0, 20)}`;
+
         if (this.editingGagIndex !== null) {
             // Update existing
             const trigger = this.triggers[this.editingGagIndex];
             trigger.pattern = pattern;
             trigger.matchType = matchType;
-            trigger.name = `Gag: ${pattern.substring(0, 20)}`;
+            trigger.name = displayName;
             trigger.class = classId || null;
             this.appendOutput(`Gag updated: ${pattern}`, 'system');
         } else {
             // Create new gag trigger
             const trigger = {
                 id: this.generateId(),
-                name: `Gag: ${pattern.substring(0, 20)}`,
+                name: displayName,
                 pattern: pattern,
                 matchType: matchType,
                 actions: [{ type: 'gag' }],
@@ -2646,7 +3455,6 @@ class WMTClient {
 
         // Populate form
         document.getElementById('highlight-pattern').value = existing?.pattern || '';
-        document.getElementById('highlight-match-type').value = existing?.matchType || 'contains';
 
         // Handle colors - check for old 'color' field as well as new fgColor/bgColor
         const hasFgColor = existingAction.fgColor || existingAction.color;
@@ -2751,7 +3559,6 @@ class WMTClient {
     // Save highlight from modal
     async saveHighlight() {
         const pattern = document.getElementById('highlight-pattern').value.trim();
-        const matchType = document.getElementById('highlight-match-type').value;
         const fgEnabled = document.getElementById('highlight-fg-enabled')?.checked;
         const bgEnabled = document.getElementById('highlight-bg-enabled')?.checked;
         const fgColor = document.getElementById('highlight-fg-color')?.value;
@@ -2767,6 +3574,9 @@ class WMTClient {
             alert('Please enable at least one color (foreground or background)');
             return;
         }
+
+        // Auto-detect pattern type
+        const matchType = this.detectPatternType(pattern);
 
         // Build action with fg/bg colors
         const action = { type: 'highlight' };
@@ -2939,7 +3749,7 @@ class WMTClient {
                 </div>
                 <div class="form-group">
                     <label>Font Size: <span id="font-size-value">${prefs.fontSize || 14}px</span></label>
-                    <input type="range" id="pref-font-size" min="10" max="24" value="${prefs.fontSize || 14}">
+                    <input type="range" id="pref-font-size" min="6" max="24" value="${prefs.fontSize || 14}">
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -2969,12 +3779,65 @@ class WMTClient {
                         <span class="settings-toggle-slider"></span>
                     </label>
                 </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Scrollback Limit (lines)</label>
+                    <select id="pref-scrollback" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px;">
+                        <option value="2000" ${(prefs.scrollbackLimit || 5000) == 2000 ? 'selected' : ''}>2,000</option>
+                        <option value="5000" ${(prefs.scrollbackLimit || 5000) == 5000 ? 'selected' : ''}>5,000</option>
+                        <option value="10000" ${(prefs.scrollbackLimit || 5000) == 10000 ? 'selected' : ''}>10,000</option>
+                        <option value="20000" ${(prefs.scrollbackLimit || 5000) == 20000 ? 'selected' : ''}>20,000</option>
+                    </select>
+                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">Older lines are removed to prevent slowdown</p>
+                </div>
                 <div class="settings-toggle">
                     <span class="settings-toggle-label">Retain Last Command</span>
                     <label class="settings-toggle-switch">
                         <input type="checkbox" id="pref-retain" ${prefs.retainLastCommand ? 'checked' : ''}>
                         <span class="settings-toggle-slider"></span>
                     </label>
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Command History Size</label>
+                    <select id="pref-history-size" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px;">
+                        <option value="100" ${(prefs.historySize || 500) == 100 ? 'selected' : ''}>100</option>
+                        <option value="250" ${(prefs.historySize || 500) == 250 ? 'selected' : ''}>250</option>
+                        <option value="500" ${(prefs.historySize || 500) == 500 ? 'selected' : ''}>500</option>
+                        <option value="1000" ${(prefs.historySize || 500) == 1000 ? 'selected' : ''}>1,000</option>
+                        <option value="2000" ${(prefs.historySize || 500) == 2000 ? 'selected' : ''}>2,000</option>
+                    </select>
+                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">Type a prefix and press Up to search history</p>
+                </div>
+                <div class="settings-toggle">
+                    <span class="settings-toggle-label">Keep Screen Awake</span>
+                    <label class="settings-toggle-switch">
+                        <input type="checkbox" id="pref-wake-lock" ${prefs.wakeLock ? 'checked' : ''}>
+                        <span class="settings-toggle-slider"></span>
+                    </label>
+                </div>
+                <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: -5px;">Prevents phone from sleeping while connected</p>
+            </div>
+
+            <div class="settings-section">
+                <h4>Notifications</h4>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Alert Sound</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="pref-notification-sound" style="flex: 1; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px;">
+                            <option value="classic" ${(prefs.notificationSound || 'classic') == 'classic' ? 'selected' : ''}>Classic Beep</option>
+                            <option value="ping" ${prefs.notificationSound == 'ping' ? 'selected' : ''}>Soft Ping</option>
+                            <option value="double" ${prefs.notificationSound == 'double' ? 'selected' : ''}>Double Beep</option>
+                            <option value="chime" ${prefs.notificationSound == 'chime' ? 'selected' : ''}>Chime</option>
+                            <option value="alert" ${prefs.notificationSound == 'alert' ? 'selected' : ''}>Alert</option>
+                            <option value="gentle" ${prefs.notificationSound == 'gentle' ? 'selected' : ''}>Gentle</option>
+                        </select>
+                        <button id="test-sound-btn" class="settings-btn" style="padding: 8px 12px; white-space: nowrap;">Test</button>
+                    </div>
+                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">Used for #bell command and channel alerts</p>
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Alert Volume: <span id="volume-display">${prefs.notificationVolume ?? 30}%</span></label>
+                    <input type="range" id="pref-notification-volume" min="0" max="100" value="${prefs.notificationVolume ?? 30}"
+                        style="width: 100%; cursor: pointer;">
                 </div>
             </div>
 
@@ -3037,6 +3900,20 @@ class WMTClient {
             </div>
 
             <div class="settings-section">
+                <h4>ChatMon</h4>
+                <div class="form-group">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Discord Webhook URL</label>
+                    <input type="text" id="pref-discord-webhook" placeholder="https://discord.com/api/webhooks/..."
+                        value="${this.discordWebhookUrl || ''}"
+                        style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px; font-size: 12px;">
+                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">
+                        Forward chat channels to Discord. Configure per-channel settings via the gear icon in ChatMon.
+                    </p>
+                </div>
+                <button class="settings-btn" id="channel-settings-btn" style="margin-top: 5px;">Channel Settings</button>
+            </div>
+
+            <div class="settings-section">
                 <h4>Export Settings</h4>
                 <div class="export-options">
                     <label class="checkbox-label"><input type="checkbox" id="export-triggers" checked> Triggers</label>
@@ -3068,9 +3945,8 @@ class WMTClient {
             </div>
 
             <div class="settings-sticky-footer">
-                <button class="btn btn-primary" id="save-settings-btn">
-                    Save Settings
-                </button>
+                <button class="btn btn-primary" id="save-settings-btn">Save</button>
+                <button class="btn btn-danger" id="close-settings-btn">Close</button>
             </div>
         `;
     }
@@ -3141,8 +4017,40 @@ class WMTClient {
             this.cmdMip(['reload']);
         });
 
+        // Discord webhook URL - save on blur
+        document.getElementById('pref-discord-webhook')?.addEventListener('blur', (e) => {
+            this.discordWebhookUrl = e.target.value.trim();
+            this.saveChannelPrefs();
+        });
+
+        // Notification sound dropdown
+        document.getElementById('pref-notification-sound')?.addEventListener('change', (e) => {
+            this.preferences.notificationSound = e.target.value;
+        });
+
+        // Notification volume slider
+        document.getElementById('pref-notification-volume')?.addEventListener('input', (e) => {
+            const volume = parseInt(e.target.value);
+            this.preferences.notificationVolume = volume;
+            document.getElementById('volume-display').textContent = volume + '%';
+        });
+
+        // Test sound button
+        document.getElementById('test-sound-btn')?.addEventListener('click', () => {
+            const soundType = document.getElementById('pref-notification-sound')?.value || 'classic';
+            this.playBell(soundType);
+        });
+
+        // Channel settings button
+        document.getElementById('channel-settings-btn')?.addEventListener('click', () => {
+            this.openChannelSettingsModal();
+        });
+
         // Save settings
         document.getElementById('save-settings-btn')?.addEventListener('click', () => this.savePreferences());
+
+        // Close settings
+        document.getElementById('close-settings-btn')?.addEventListener('click', () => this.closePanel());
 
         // Export selected
         document.getElementById('export-btn')?.addEventListener('click', () => this.exportSettings(false));
@@ -3165,25 +4073,45 @@ class WMTClient {
         this.loadScriptFilesList();
     }
 
+    // Quick save of current preferences (used by pinch-zoom, etc.)
+    // Does NOT read from DOM - just saves what's in this.preferences
+    async saveCurrentPreferences() {
+        try {
+            await fetch('api/preferences.php?action=save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preferences: this.preferences })
+            });
+        } catch (e) {
+            console.error('Failed to save preferences:', e);
+        }
+    }
+
+    // Full save from settings panel (reads all values from DOM)
     async savePreferences() {
         const saveBtn = document.getElementById('save-settings-btn');
         const originalText = saveBtn?.textContent;
 
         this.preferences = {
-            fontFamily: document.getElementById('pref-font-family').value,
-            fontSize: parseInt(document.getElementById('pref-font-size').value),
-            textColor: document.getElementById('pref-text-color').value,
-            backgroundColor: document.getElementById('pref-bg-color').value,
-            echoCommands: document.getElementById('pref-echo').checked,
-            scrollOnOutput: document.getElementById('pref-scroll').checked,
-            retainLastCommand: document.getElementById('pref-retain').checked,
-            mipEnabled: document.getElementById('pref-mip-enabled').checked,
-            mipHpBar: document.getElementById('pref-mip-hpbar').checked,
-            mipShowStatBars: document.getElementById('pref-mip-statbars')?.checked ?? true,
-            mipShowGuild: document.getElementById('pref-mip-guild')?.checked ?? true,
-            mipShowRoom: document.getElementById('pref-mip-room')?.checked ?? true,
-            mipShowExits: document.getElementById('pref-mip-exits')?.checked ?? true,
-            mipDebug: document.getElementById('pref-mip-debug')?.checked || false
+            fontFamily: document.getElementById('pref-font-family')?.value || this.preferences.fontFamily || 'Consolas',
+            fontSize: parseInt(document.getElementById('pref-font-size')?.value) || this.preferences.fontSize || 14,
+            textColor: document.getElementById('pref-text-color')?.value || this.preferences.textColor || '#00ff00',
+            backgroundColor: document.getElementById('pref-bg-color')?.value || this.preferences.backgroundColor || '#000000',
+            echoCommands: document.getElementById('pref-echo')?.checked ?? this.preferences.echoCommands ?? true,
+            scrollOnOutput: document.getElementById('pref-scroll')?.checked ?? this.preferences.scrollOnOutput ?? true,
+            scrollbackLimit: parseInt(document.getElementById('pref-scrollback')?.value) || this.preferences.scrollbackLimit || 5000,
+            retainLastCommand: document.getElementById('pref-retain')?.checked ?? this.preferences.retainLastCommand ?? false,
+            historySize: parseInt(document.getElementById('pref-history-size')?.value) || this.preferences.historySize || 500,
+            wakeLock: document.getElementById('pref-wake-lock')?.checked ?? this.preferences.wakeLock ?? false,
+            mipEnabled: document.getElementById('pref-mip-enabled')?.checked ?? this.preferences.mipEnabled ?? true,
+            mipHpBar: document.getElementById('pref-mip-hpbar')?.checked ?? this.preferences.mipHpBar ?? true,
+            mipShowStatBars: document.getElementById('pref-mip-statbars')?.checked ?? this.preferences.mipShowStatBars ?? true,
+            mipShowGuild: document.getElementById('pref-mip-guild')?.checked ?? this.preferences.mipShowGuild ?? true,
+            mipShowRoom: document.getElementById('pref-mip-room')?.checked ?? this.preferences.mipShowRoom ?? true,
+            mipShowExits: document.getElementById('pref-mip-exits')?.checked ?? this.preferences.mipShowExits ?? true,
+            mipDebug: document.getElementById('pref-mip-debug')?.checked ?? this.preferences.mipDebug ?? false,
+            notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
+            notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30
         };
 
         try {
@@ -3550,6 +4478,7 @@ class WMTClient {
                 break;
             case 'scripts':
             case 'script':
+            case 'files':
                 this.cmdScripts(args);
                 break;
 
@@ -3571,6 +4500,16 @@ class WMTClient {
                 this.cmdUnhighlight(args);
                 break;
 
+            // Substitute command (text replacement)
+            case 'substitute':
+            case 'sub':
+                this.cmdSubstitute(args);
+                break;
+            case 'unsubstitute':
+            case 'unsub':
+                this.cmdUnsubstitute(args);
+                break;
+
             // Variable commands
             case 'var':
             case 'variable':
@@ -3584,6 +4523,12 @@ class WMTClient {
             // Math command
             case 'math':
                 this.cmdMath(args);
+                break;
+
+            // Regexp command
+            case 'regexp':
+            case 'regex':
+                this.cmdRegexp(args);
                 break;
 
             // Conditional commands
@@ -3654,6 +4599,7 @@ class WMTClient {
     }
 
     // #alias {pattern} {replacement}
+    // Supports: #alias {name} {command} or #alias name command with multiple words
     cmdAlias(args) {
         if (args.length < 2) {
             // List aliases
@@ -3670,7 +4616,8 @@ class WMTClient {
         }
 
         const pattern = args[0];
-        const replacement = args[1];
+        // Join all remaining args as the replacement (allows "alias test say hello" without braces)
+        const replacement = args.slice(1).join(' ');
 
         // Check if alias already exists
         const existing = this.aliases.findIndex(a => a.pattern.toLowerCase() === pattern.toLowerCase());
@@ -3713,12 +4660,13 @@ class WMTClient {
     // #action {pattern} {command}
     cmdAction(args) {
         if (args.length < 2) {
-            // List triggers
-            if (this.triggers.length === 0) {
-                this.appendOutput('No triggers/actions defined.', 'system');
+            // List only triggers that have command actions (not gags/highlights/substitutes)
+            const actions = this.triggers.filter(t => t.actions?.some(a => a.type === 'command'));
+            if (actions.length === 0) {
+                this.appendOutput('No actions defined.', 'system');
             } else {
-                this.appendOutput('Triggers/Actions:', 'system');
-                this.triggers.forEach(t => {
+                this.appendOutput('Actions:', 'system');
+                actions.forEach(t => {
                     const status = t.enabled === false ? ' [disabled]' : '';
                     const cmds = t.actions?.filter(a => a.type === 'command').map(a => a.command).join('; ') || '';
                     this.appendOutput(`  ${t.pattern} = ${cmds}${status}`, 'system');
@@ -4289,6 +5237,36 @@ class WMTClient {
             case 'unhigh':
                 this.cmdUnhighlight(args);
                 break;
+            case 'substitute':
+            case 'sub':
+                this.cmdSubstitute(args);
+                break;
+            case 'unsubstitute':
+            case 'unsub':
+                this.cmdUnsubstitute(args);
+                break;
+            case 'regexp':
+            case 'regex':
+                this.cmdRegexp(args);
+                break;
+            case 'var':
+            case 'variable':
+                this.cmdVar(args);
+                break;
+            case 'unvar':
+            case 'unvariable':
+                this.cmdUnvar(args);
+                break;
+            case 'math':
+                this.cmdMath(args);
+                break;
+            case 'if':
+                this.cmdIf(args);
+                break;
+            case 'showme':
+            case 'show':
+                this.cmdShowme(args);
+                break;
             case 'ticker':
             case 'tick':
                 this.cmdTicker(args);
@@ -4305,6 +5283,9 @@ class WMTClient {
                 break;
             case 'read':
                 await this.cmdRead(args);
+                break;
+            case 'send':
+                this.cmdSend(args);
                 break;
             case 'nop':
                 // Comment - do nothing
@@ -4461,15 +5442,19 @@ class WMTClient {
 
     // Convert trigger to TinTin++ format
     triggerToTinTin(trigger) {
-        // Check for gag or highlight actions
+        // Check for gag, highlight, or substitute actions
         const hasGag = trigger.actions?.some(a => a.type === 'gag');
         const highlight = trigger.actions?.find(a => a.type === 'highlight');
+        const substitute = trigger.actions?.find(a => a.type === 'substitute');
         const command = trigger.actions?.find(a => a.type === 'command');
 
         if (hasGag && !command) {
             return `#gag {${trigger.pattern}}\n`;
         }
-        if (highlight && !command && !hasGag) {
+        if (substitute && !command && !hasGag) {
+            return `#sub {${trigger.pattern}} {${substitute.replacement || ''}}\n`;
+        }
+        if (highlight && !command && !hasGag && !substitute) {
             return `#highlight {${highlight.color || 'yellow'}} {${trigger.pattern}}\n`;
         }
         if (command) {
@@ -4731,6 +5716,143 @@ class WMTClient {
         }
     }
 
+    // #substitute/#sub {pattern} {replacement} - Create substitute trigger (TinTin++ style)
+    cmdSubstitute(args) {
+        if (args.length < 2) {
+            // List substitutes
+            const subs = this.triggers.filter(t => t.actions?.some(a => a.type === 'substitute'));
+            if (subs.length === 0) {
+                this.appendOutput('No substitutes defined.', 'system');
+            } else {
+                this.appendOutput('Substitutes:', 'system');
+                subs.forEach(s => {
+                    const replacement = s.actions.find(a => a.type === 'substitute')?.replacement || '';
+                    const status = s.enabled === false ? ' [disabled]' : '';
+                    this.appendOutput(`  ${s.pattern} → ${replacement}${status}`, 'system');
+                });
+            }
+            return;
+        }
+
+        // TinTin++ syntax: #sub {pattern} {replacement}
+        const pattern = args[0];
+        const replacement = args[1];
+
+        // Check if substitute already exists
+        const existing = this.triggers.findIndex(t =>
+            t.pattern === pattern &&
+            t.actions?.some(a => a.type === 'substitute')
+        );
+
+        if (existing >= 0) {
+            // Update existing
+            const action = this.triggers[existing].actions.find(a => a.type === 'substitute');
+            if (action) action.replacement = replacement;
+            this.triggers[existing].matchType = 'tintin';
+            this.appendOutput(`Substitute updated: ${pattern} → ${replacement}`, 'system');
+        } else {
+            // Create new with TinTin++ pattern matching
+            this.triggers.push({
+                id: this.generateId(),
+                name: `Sub: ${pattern.substring(0, 20)}`,
+                pattern: pattern,
+                matchType: 'tintin',
+                actions: [{ type: 'substitute', replacement: replacement }],
+                enabled: true,
+                class: this.currentScriptClass || null
+            });
+            this.appendOutput(`Substitute created: ${pattern} → ${replacement}`, 'system');
+        }
+
+        this.saveTriggers();
+    }
+
+    // #unsubstitute/#unsub {pattern}
+    cmdUnsubstitute(args) {
+        if (args.length < 1) {
+            this.appendOutput('Usage: #unsub {pattern}', 'error');
+            return;
+        }
+
+        const pattern = args[0];
+        const index = this.triggers.findIndex(t =>
+            t.pattern === pattern &&
+            t.actions?.some(a => a.type === 'substitute')
+        );
+
+        if (index >= 0) {
+            this.triggers.splice(index, 1);
+            this.appendOutput(`Substitute removed: ${pattern}`, 'system');
+            this.saveTriggers();
+        } else {
+            this.appendOutput(`Substitute not found: ${pattern}`, 'error');
+        }
+    }
+
+    // Open substitute modal
+    openSubstituteModal(editIndex = null) {
+        const modal = document.getElementById('substitute-modal');
+        if (!modal) return;
+        this.editingSubstituteIndex = editIndex;
+
+        const existing = editIndex !== null ? this.triggers[editIndex] : null;
+        const action = existing?.actions?.find(a => a.type === 'substitute');
+
+        document.getElementById('substitute-pattern').value = existing?.pattern || '';
+        document.getElementById('substitute-replacement').value = action?.replacement || '';
+
+        // Populate class dropdown
+        const classSelect = document.getElementById('substitute-class');
+        if (classSelect) {
+            classSelect.innerHTML = this.renderClassOptions(existing?.class || null);
+        }
+
+        const title = modal.querySelector('.modal-header h3');
+        if (title) title.textContent = existing ? 'Edit Substitute' : 'New Substitute';
+
+        modal.classList.add('open');
+    }
+
+    // Save substitute from modal
+    async saveSubstitute() {
+        const pattern = document.getElementById('substitute-pattern').value.trim();
+        const replacement = document.getElementById('substitute-replacement').value;
+        const classId = document.getElementById('substitute-class')?.value || null;
+
+        if (!pattern) {
+            this.appendOutput('Pattern is required', 'error');
+            return;
+        }
+
+        if (this.editingSubstituteIndex !== null) {
+            // Update existing
+            const trigger = this.triggers[this.editingSubstituteIndex];
+            trigger.pattern = pattern;
+            trigger.name = `Sub: ${pattern.substring(0, 20)}`;
+            trigger.class = classId || null;
+            const action = trigger.actions?.find(a => a.type === 'substitute');
+            if (action) action.replacement = replacement;
+            this.appendOutput(`Substitute updated: ${pattern} → ${replacement}`, 'system');
+        } else {
+            // Create new
+            this.triggers.push({
+                id: this.generateId(),
+                name: `Sub: ${pattern.substring(0, 20)}`,
+                pattern: pattern,
+                matchType: 'tintin',
+                actions: [{ type: 'substitute', replacement: replacement }],
+                enabled: true,
+                class: classId || null
+            });
+            this.appendOutput(`Substitute created: ${pattern} → ${replacement}`, 'system');
+        }
+
+        await this.saveTriggers();
+        this.closeModal();
+        this.renderScriptsSidebar();
+        this.editingSubstituteIndex = null;
+    }
+
     // #var {name} {value} - Set a variable
     cmdVar(args) {
         if (args.length < 1) {
@@ -4749,18 +5871,28 @@ class WMTClient {
 
         const name = args[0];
         if (args.length < 2) {
-            // Show single variable
+            // Show single variable or variables matching prefix
             if (this.variables[name] !== undefined) {
                 this.appendOutput(`$${name} = ${this.variables[name]}`, 'system');
             } else {
-                this.appendOutput(`Variable not found: $${name}`, 'error');
+                // Try prefix match (TinTin++ behavior)
+                const matches = Object.keys(this.variables).filter(v => v.startsWith(name));
+                if (matches.length > 0) {
+                    this.appendOutput(`Variables matching '${name}':`, 'system');
+                    matches.forEach(v => {
+                        this.appendOutput(`  $${v} = ${this.variables[v]}`, 'system');
+                    });
+                } else {
+                    this.appendOutput(`Variable not found: $${name}`, 'error');
+                }
             }
             return;
         }
 
-        const value = args[1];
+        // Join all remaining args as the value (handles spaces in captured text)
+        const value = args.slice(1).join(' ');
         this.variables[name] = value;
-        this.appendOutput(`Variable set: $${name} = ${value}`, 'system');
+        // Silent - no confirmation message (TinTin++ behavior)
     }
 
     // #unvar {name} - Remove a variable
@@ -4780,6 +5912,7 @@ class WMTClient {
     }
 
     // #math {variable} {expression} - Calculate and store result
+    // Supports TinTin++ operators: arithmetic, bitwise, logical, comparison, dice, ternary
     cmdMath(args) {
         if (args.length < 2) {
             this.appendOutput('Usage: #math {variable} {expression}', 'error');
@@ -4793,25 +5926,259 @@ class WMTClient {
         expression = this.substituteVariables(expression);
 
         try {
-            // Safe math evaluation - only allow numbers and math operators
-            // Remove anything that isn't a number, operator, parentheses, or space
-            const safeExpr = expression.replace(/[^0-9+\-*/%().:\s]/g, '');
-
-            // Handle TinTin++ style dice: 1d6, 2d10, etc
-            const diceExpr = safeExpr.replace(/(\d+)d(\d+)/g, (match, count, sides) => {
-                let total = 0;
-                for (let i = 0; i < parseInt(count); i++) {
-                    total += Math.floor(Math.random() * parseInt(sides)) + 1;
-                }
-                return total.toString();
-            });
-
-            // eslint-disable-next-line no-eval
-            const result = eval(diceExpr);
+            const result = this.evaluateMathExpression(expression);
             this.variables[varName] = result;
             this.appendOutput(`#math: $${varName} = ${result}`, 'system');
         } catch (e) {
             this.appendOutput(`Math error: ${e.message}`, 'error');
+        }
+    }
+
+    // Evaluate a TinTin++ math expression
+    // Supports: +, -, *, /, %, ** (power), // (roots), d (dice)
+    // Bitwise: ~, <<, >>, &, ^, |
+    // Logical: !, &&, ||, ^^ (xor)
+    // Comparison: <, >, <=, >=, ==, !=, ===, !==
+    // Ternary: ? :
+    evaluateMathExpression(expression) {
+        let expr = expression.trim();
+
+        // Handle TinTin++ style dice: 1d6, 2d10, etc. (must be done before other processing)
+        expr = expr.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
+            let total = 0;
+            const c = parseInt(count);
+            const s = parseInt(sides);
+            for (let i = 0; i < c; i++) {
+                total += Math.floor(Math.random() * s) + 1;
+            }
+            return total.toString();
+        });
+
+        // Handle TinTin++ // operator for roots: //2 = sqrt, //3 = cbrt, //n = nth root
+        // Convert "number //n" to "Math.pow(number, 1/n)"
+        expr = expr.replace(/(\d+(?:\.\d+)?)\s*\/\/\s*(\d+)/g, (match, num, root) => {
+            return `Math.pow(${num}, 1/${root})`;
+        });
+
+        // Handle ^^ (logical XOR) - convert to != for boolean context
+        expr = expr.replace(/\^\^/g, '!=');
+
+        // Validate expression - only allow safe characters
+        // Numbers, operators, parentheses, spaces, decimal points, Math functions
+        const safePattern = /^[\d\s+\-*/%<>=!&|^~?:().]+$|Math\.(pow|sqrt|abs|floor|ceil|round|min|max|random)/;
+
+        // Remove string literals for validation (they're allowed in comparisons)
+        const exprNoStrings = expr.replace(/"[^"]*"|'[^']*'/g, '0');
+
+        if (!safePattern.test(exprNoStrings) && !/^[\d\s+\-*/%<>=!&|^~?:()."']+$/.test(expr)) {
+            throw new Error('Invalid characters in expression');
+        }
+
+        // Prevent dangerous patterns
+        if (/\b(function|eval|require|import|window|document|fetch|XMLHttp)\b/i.test(expr)) {
+            throw new Error('Invalid expression');
+        }
+
+        // eslint-disable-next-line no-eval
+        const result = eval(expr);
+
+        // Return number or boolean as appropriate
+        if (typeof result === 'boolean') {
+            return result ? 1 : 0;
+        }
+        return result;
+    }
+
+    /**
+     * Convert TinTin++ pattern to JavaScript regex (client-side version)
+     * This mirrors the server-side implementation for #regexp
+     */
+    tinTinToRegex(pattern) {
+        let result = '';
+        let i = 0;
+
+        while (i < pattern.length) {
+            const char = pattern[i];
+
+            if (char === '\\' && i + 1 < pattern.length) {
+                const next = pattern[i + 1];
+                if (next === '%') {
+                    result += '%';
+                    i += 2;
+                } else if (next === '{' || next === '}') {
+                    result += '\\' + next;
+                    i += 2;
+                } else {
+                    result += '\\' + next;
+                    i += 2;
+                }
+            } else if (char === '{') {
+                // PCRE embedding: { } becomes ( )
+                let depth = 1;
+                let j = i + 1;
+                let pcreContent = '';
+                while (j < pattern.length && depth > 0) {
+                    if (pattern[j] === '{' && pattern[j-1] !== '\\') {
+                        depth++;
+                        pcreContent += pattern[j];
+                    } else if (pattern[j] === '}' && pattern[j-1] !== '\\') {
+                        depth--;
+                        if (depth > 0) pcreContent += pattern[j];
+                    } else {
+                        pcreContent += pattern[j];
+                    }
+                    j++;
+                }
+                result += '(' + pcreContent + ')';
+                i = j;
+            } else if (char === '%') {
+                if (i + 1 < pattern.length) {
+                    let next = pattern[i + 1];
+                    let nonCapturing = false;
+
+                    if (next === '!' && i + 2 < pattern.length) {
+                        nonCapturing = true;
+                        next = pattern[i + 2];
+                        i += 1;
+
+                        if (next === '{') {
+                            let depth = 1;
+                            let j = i + 2;
+                            let pcreContent = '';
+                            while (j < pattern.length && depth > 0) {
+                                if (pattern[j] === '{' && pattern[j-1] !== '\\') {
+                                    depth++;
+                                    pcreContent += pattern[j];
+                                } else if (pattern[j] === '}' && pattern[j-1] !== '\\') {
+                                    depth--;
+                                    if (depth > 0) pcreContent += pattern[j];
+                                } else {
+                                    pcreContent += pattern[j];
+                                }
+                                j++;
+                            }
+                            result += '(?:' + pcreContent + ')';
+                            i = j;
+                            continue;
+                        }
+                    }
+
+                    const groupStart = nonCapturing ? '(?:' : '(';
+
+                    if (next === '*') {
+                        result += groupStart + '.*)';
+                        i += 2;
+                    } else if (next === '+') {
+                        result += groupStart + '.+)';
+                        i += 2;
+                    } else if (next === '?') {
+                        result += groupStart + '.?)';
+                        i += 2;
+                    } else if (next === '.') {
+                        result += groupStart + '.)';
+                        i += 2;
+                    } else if (next === 'd') {
+                        result += groupStart + '[0-9]*)';
+                        i += 2;
+                    } else if (next === 'D') {
+                        result += groupStart + '[^0-9]*)';
+                        i += 2;
+                    } else if (next === 'w') {
+                        result += groupStart + '[A-Za-z0-9_]*)';
+                        i += 2;
+                    } else if (next === 'W') {
+                        result += groupStart + '[^A-Za-z0-9_]*)';
+                        i += 2;
+                    } else if (next === 's') {
+                        result += groupStart + '\\s*)';
+                        i += 2;
+                    } else if (next === 'S') {
+                        result += groupStart + '\\S*)';
+                        i += 2;
+                    } else if (next === 'a') {
+                        result += groupStart + '[\\s\\S]*)';
+                        i += 2;
+                    } else if (next === 'A') {
+                        result += groupStart + '[\\r\\n]*)';
+                        i += 2;
+                    } else if (next === 'i' || next === 'I') {
+                        i += 2;
+                    } else if (next >= '0' && next <= '9') {
+                        let j = i + 1;
+                        while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
+                            j++;
+                        }
+                        result += '(.*)';
+                        i = j;
+                    } else {
+                        result += '%';
+                        i += 1;
+                    }
+                } else {
+                    result += '%';
+                    i += 1;
+                }
+            } else if (char === '^' || char === '$') {
+                result += char;
+                i += 1;
+            } else if ('[]())|+?*.\\'.includes(char)) {
+                result += '\\' + char;
+                i += 1;
+            } else {
+                result += char;
+                i += 1;
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Substitute &0-&99 variables in a command string
+     */
+    substituteRegexpVars(command, matches) {
+        let result = command;
+        if (matches && matches.length > 0) {
+            for (let i = 0; i < matches.length && i < 100; i++) {
+                const regex = new RegExp('&' + i + '(?![0-9])', 'g');
+                result = result.replace(regex, matches[i] || '');
+            }
+        }
+        // Clean up any unreplaced &N
+        result = result.replace(/&\d+/g, '');
+        return result;
+    }
+
+    // #regexp {string} {expression} {true_commands} {false_commands}
+    // Also aliased as #regex
+    cmdRegexp(args) {
+        if (args.length < 3) {
+            this.appendOutput('Usage: #regexp {string} {expression} {true_cmds} {false_cmds}', 'error');
+            return;
+        }
+
+        // Substitute variables in the string argument (e.g., $hpbar -> actual value)
+        const string = this.substituteVariables(args[0]);
+        const expression = args[1];
+        const trueCmd = args[2];
+        const falseCmd = args[3] || '';
+
+        try {
+            // Convert TinTin++ pattern to regex (case-sensitive)
+            const regexPattern = this.tinTinToRegex(expression);
+            const regex = new RegExp(regexPattern);
+            const match = string.match(regex);
+
+            if (match) {
+                // Substitute &0, &1, etc. with captured groups
+                const cmd = this.substituteRegexpVars(trueCmd, match);
+                // Execute the command(s)
+                this.executeCommandString(cmd);
+            } else if (falseCmd) {
+                this.executeCommandString(falseCmd);
+            }
+        } catch (e) {
+            this.appendOutput(`Regexp error: ${e.message}`, 'error');
         }
     }
 
@@ -4899,45 +6266,237 @@ class WMTClient {
         }
     }
 
-    // Evaluate a TinTin++ style condition
+    /**
+     * Evaluate a TinTin++ style condition
+     *
+     * String comparison (quoted): #if {"$var" == "value"} or {"$var" == "{pat1|pat2}"}
+     * Numeric comparison (unquoted): #if {$var > 5000}
+     *
+     * Operators: == != < > <= >= === !== && || ^^ !
+     * Regex matching: == and != can use {pattern|alt} syntax when comparing strings
+     */
     evaluateCondition(condition) {
         if (!condition) return false;
 
-        // Substitute variables
+        // Substitute variables first
         let cond = this.substituteVariables(condition);
 
-        // Handle TinTin++ comparison operators
-        // == != < > <= >= are standard
-        // Also handle string comparison
+        // Replace word-based logical operators
+        cond = cond.replace(/\band\b/gi, '&&');
+        cond = cond.replace(/\bor\b/gi, '||');
+        cond = cond.replace(/\bxor\b/gi, '^^');
+        cond = cond.replace(/\bnot\b/gi, '!');
+
+        // Try to evaluate as a simple comparison first
+        const result = this.evaluateSimpleCondition(cond);
+        if (result !== null) return result;
+
+        // Try compound conditions with && || ^^
+        // Split by logical operators while respecting quotes
+        const parts = this.splitConditionByLogic(cond);
+        if (parts) {
+            return this.evaluateCompoundCondition(parts);
+        }
+
+        // Fallback: try direct eval for simple numeric expressions
         try {
-            // Replace TinTin++ operators with JS equivalents
-            cond = cond.replace(/\band\b/gi, '&&');
-            cond = cond.replace(/\bor\b/gi, '||');
-            cond = cond.replace(/\bnot\b/gi, '!');
-
-            // Safe evaluation - only allow comparison operations
-            // eslint-disable-next-line no-eval
-            return !!eval(cond);
+            // Only allow safe characters
+            const safeExpr = cond.replace(/[^0-9+\-*/%().&|^!<>=\s]/g, '');
+            if (safeExpr.trim()) {
+                // eslint-disable-next-line no-eval
+                return !!eval(safeExpr);
+            }
         } catch (e) {
-            // If eval fails, try string comparison
-            const match = cond.match(/^["']?(.+?)["']?\s*(==|!=|<|>|<=|>=)\s*["']?(.+?)["']?$/);
-            if (match) {
-                const [, left, op, right] = match;
-                const lnum = parseFloat(left);
-                const rnum = parseFloat(right);
-                const isNumeric = !isNaN(lnum) && !isNaN(rnum);
+            // Ignore eval errors
+        }
 
-                switch (op) {
-                    case '==': return isNumeric ? lnum === rnum : left === right;
-                    case '!=': return isNumeric ? lnum !== rnum : left !== right;
-                    case '<': return isNumeric ? lnum < rnum : left < right;
-                    case '>': return isNumeric ? lnum > rnum : left > right;
-                    case '<=': return isNumeric ? lnum <= rnum : left <= right;
-                    case '>=': return isNumeric ? lnum >= rnum : left >= right;
+        return false;
+    }
+
+    /**
+     * Evaluate a simple comparison (no && || ^^)
+     * Returns null if not a simple comparison
+     */
+    evaluateSimpleCondition(cond) {
+        cond = cond.trim();
+
+        // Check for negation
+        if (cond.startsWith('!') && !cond.startsWith('!=') && !cond.startsWith('!==')) {
+            const inner = cond.substring(1).trim();
+            // Remove parentheses if present
+            const innerCond = inner.startsWith('(') && inner.endsWith(')')
+                ? inner.slice(1, -1)
+                : inner;
+            const result = this.evaluateCondition(innerCond);
+            return !result;
+        }
+
+        // Match comparison: "string" op "string" or number op number
+        // Regex to capture: left side, operator, right side
+        // Supports both quoted strings and unquoted values
+        const comparisonMatch = cond.match(
+            /^(["'].*?["']|\S+)\s*(===|!==|==|!=|<=|>=|<|>)\s*(["'].*?["']|\S+)$/
+        );
+
+        if (comparisonMatch) {
+            let [, leftRaw, op, rightRaw] = comparisonMatch;
+
+            // Extract values, removing quotes if present
+            const isLeftQuoted = /^["']/.test(leftRaw);
+            const isRightQuoted = /^["']/.test(rightRaw);
+            const left = isLeftQuoted ? leftRaw.slice(1, -1) : leftRaw;
+            const right = isRightQuoted ? rightRaw.slice(1, -1) : rightRaw;
+
+            // Determine if this is a string or numeric comparison
+            // Quoted = string, Unquoted with valid number = numeric
+            const leftNum = parseFloat(left);
+            const rightNum = parseFloat(right);
+            const isNumeric = !isLeftQuoted && !isRightQuoted && !isNaN(leftNum) && !isNaN(rightNum);
+
+            // For == and != with strings, check if right side is a regex pattern {a|b}
+            const canUseRegex = (op === '==' || op === '!=') && (isLeftQuoted || isRightQuoted);
+            const isRegexPattern = canUseRegex && /^\{.*\}$/.test(right);
+
+            switch (op) {
+                case '===':
+                    // Strict equal - never regex
+                    return isNumeric ? leftNum === rightNum : left === right;
+                case '!==':
+                    // Strict not equal - never regex
+                    return isNumeric ? leftNum !== rightNum : left !== right;
+                case '==':
+                    if (isRegexPattern) {
+                        // Convert {a|b|c} to regex (a|b|c) - case-sensitive
+                        const pattern = right.slice(1, -1);
+                        try {
+                            const regex = new RegExp(`^(${pattern})$`);
+                            return regex.test(left);
+                        } catch (e) {
+                            return left === right;
+                        }
+                    }
+                    return isNumeric ? leftNum === rightNum : left === right;
+                case '!=':
+                    if (isRegexPattern) {
+                        const pattern = right.slice(1, -1);
+                        try {
+                            const regex = new RegExp(`^(${pattern})$`);
+                            return !regex.test(left);
+                        } catch (e) {
+                            return left !== right;
+                        }
+                    }
+                    return isNumeric ? leftNum !== rightNum : left !== right;
+                case '<':
+                    return isNumeric ? leftNum < rightNum : left < right;
+                case '>':
+                    return isNumeric ? leftNum > rightNum : left > right;
+                case '<=':
+                    return isNumeric ? leftNum <= rightNum : left <= right;
+                case '>=':
+                    return isNumeric ? leftNum >= rightNum : left >= right;
+            }
+        }
+
+        // Check for simple truthy value (non-zero number or non-empty string)
+        const num = parseFloat(cond);
+        if (!isNaN(num)) {
+            return num !== 0;
+        }
+
+        // Non-empty string is truthy
+        return cond.length > 0 && cond !== '0' && cond.toLowerCase() !== 'false';
+    }
+
+    /**
+     * Split condition by && || ^^ while respecting quotes and parentheses
+     */
+    splitConditionByLogic(cond) {
+        const parts = [];
+        let current = '';
+        let depth = 0;
+        let inQuote = null;
+        let lastOp = null;
+
+        for (let i = 0; i < cond.length; i++) {
+            const char = cond[i];
+            const next = cond[i + 1];
+
+            // Track quotes
+            if ((char === '"' || char === "'") && cond[i - 1] !== '\\') {
+                if (inQuote === char) {
+                    inQuote = null;
+                } else if (!inQuote) {
+                    inQuote = char;
                 }
             }
-            return false;
+
+            // Track parentheses depth
+            if (!inQuote) {
+                if (char === '(' || char === '{') depth++;
+                if (char === ')' || char === '}') depth--;
+            }
+
+            // Check for logical operators at depth 0, outside quotes
+            if (depth === 0 && !inQuote) {
+                if (char === '&' && next === '&') {
+                    parts.push({ value: current.trim(), op: lastOp });
+                    lastOp = '&&';
+                    current = '';
+                    i++; // Skip next &
+                    continue;
+                }
+                if (char === '|' && next === '|') {
+                    parts.push({ value: current.trim(), op: lastOp });
+                    lastOp = '||';
+                    current = '';
+                    i++; // Skip next |
+                    continue;
+                }
+                if (char === '^' && next === '^') {
+                    parts.push({ value: current.trim(), op: lastOp });
+                    lastOp = '^^';
+                    current = '';
+                    i++; // Skip next ^
+                    continue;
+                }
+            }
+
+            current += char;
         }
+
+        if (current.trim()) {
+            parts.push({ value: current.trim(), op: lastOp });
+        }
+
+        return parts.length > 1 ? parts : null;
+    }
+
+    /**
+     * Evaluate compound condition with && || ^^
+     */
+    evaluateCompoundCondition(parts) {
+        let result = this.evaluateCondition(parts[0].value);
+
+        for (let i = 1; i < parts.length; i++) {
+            const part = parts[i];
+            const partResult = this.evaluateCondition(part.value);
+
+            switch (part.op) {
+                case '&&':
+                    result = result && partResult;
+                    break;
+                case '||':
+                    result = result || partResult;
+                    break;
+                case '^^':
+                    // XOR: true if exactly one is true
+                    result = (result && !partResult) || (!result && partResult);
+                    break;
+            }
+        }
+
+        return result;
     }
 
     // Substitute $variables in a string
@@ -4994,34 +6553,54 @@ class WMTClient {
         });
     }
 
-    // #showme/#show {message} [row] - Display message locally (or in split row)
+    // #showme/#show {message} [row] - Display message and process through triggers
     cmdShowme(args, rest) {
         if (args.length < 1 && !rest) {
             this.appendOutput('Usage: #showme {message} [row]', 'error');
             return;
         }
 
-        let message = args[0] || rest;
-        message = this.substituteVariables(message);
-
-        // Check for row parameter (2nd arg or negative number in message)
+        // Check if last arg is a row number (for split screen)
         let row = null;
+        let messageArgs = [...args];
         if (args.length >= 2) {
-            row = parseInt(args[1]);
+            const lastArg = args[args.length - 1];
+            const possibleRow = parseInt(lastArg);
+            // If last arg is a number (positive or negative), treat as row
+            if (!isNaN(possibleRow) && String(possibleRow) === lastArg) {
+                row = possibleRow;
+                messageArgs = args.slice(0, -1);
+            }
         }
 
-        if (row !== null && !isNaN(row) && (this.splitConfig.top > 0 || this.splitConfig.bottom > 0)) {
-            // Display in split area
+        // Join all message arguments (supports both braced and unbraced input)
+        let message = messageArgs.join(' ') || rest;
+        message = this.substituteVariables(message);
+
+        if (row !== null && (this.splitConfig.top > 0 || this.splitConfig.bottom > 0)) {
+            // Display in split area (local only, no trigger processing)
             this.updateSplitRow(row, message);
         } else {
-            // Normal display in main output
-            this.appendOutput(message, 'system');
+            // Send to server for trigger processing, then display result
+            // This allows testing triggers with #showme
+            if (this.connection && this.connection.isConnected()) {
+                this.connection.send('test_line', { line: message });
+            } else {
+                // Fallback to local display if not connected
+                this.appendOutput(message, 'system');
+            }
         }
     }
 
-    // #echo {message} - Display message locally (same as showme)
+    // #echo {message} - Display message locally (no trigger processing)
     cmdEcho(args, rest) {
-        this.cmdShowme(args, rest);
+        if (args.length < 1 && !rest) {
+            this.appendOutput('Usage: #echo {message}', 'error');
+            return;
+        }
+        let message = args.join(' ') || rest;
+        message = this.substituteVariables(message);
+        this.appendOutput(message, 'system');
     }
 
     // #bell - Play alert sound
@@ -5031,28 +6610,75 @@ class WMTClient {
     }
 
     // Play bell/alert sound
-    playBell() {
+    playBell(soundType = null) {
         try {
-            // Create a simple beep using Web Audio API
+            const sound = soundType || this.preferences.notificationSound || 'classic';
+            const volume = (this.preferences.notificationVolume ?? 30) / 100;
+
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
 
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
+            switch (sound) {
+                case 'classic':
+                    this.playTone(audioContext, 800, 'sine', volume, 150);
+                    break;
 
-            oscillator.frequency.value = 800; // Hz
-            oscillator.type = 'sine';
-            gainNode.gain.value = 0.3;
+                case 'ping':
+                    // Higher, softer ping
+                    this.playTone(audioContext, 1200, 'sine', volume * 0.7, 100);
+                    break;
 
-            oscillator.start();
-            setTimeout(() => {
-                oscillator.stop();
-                audioContext.close();
-            }, 150);
+                case 'double':
+                    // Two quick beeps
+                    this.playTone(audioContext, 800, 'sine', volume, 80);
+                    setTimeout(() => {
+                        this.playTone(audioContext, 800, 'sine', volume, 80);
+                    }, 120);
+                    break;
+
+                case 'chime':
+                    // Pleasant multi-tone chime
+                    this.playTone(audioContext, 523, 'sine', volume * 0.6, 150); // C5
+                    setTimeout(() => this.playTone(audioContext, 659, 'sine', volume * 0.5, 150), 100); // E5
+                    setTimeout(() => this.playTone(audioContext, 784, 'sine', volume * 0.4, 200), 200); // G5
+                    break;
+
+                case 'alert':
+                    // More urgent sound
+                    this.playTone(audioContext, 880, 'square', volume * 0.4, 100);
+                    setTimeout(() => this.playTone(audioContext, 988, 'square', volume * 0.4, 100), 120);
+                    break;
+
+                case 'gentle':
+                    // Soft low tone
+                    this.playTone(audioContext, 440, 'sine', volume * 0.5, 200);
+                    break;
+
+                default:
+                    this.playTone(audioContext, 800, 'sine', volume, 150);
+            }
         } catch (e) {
             console.error('Failed to play bell:', e);
         }
+    }
+
+    // Helper to play a single tone
+    playTone(audioContext, frequency, type, volume, duration) {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.value = frequency;
+        oscillator.type = type;
+        gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+        // Fade out to avoid click
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration / 1000);
+
+        oscillator.start();
+        setTimeout(() => {
+            oscillator.stop();
+        }, duration);
     }
 
     // #send {text} - Send raw text to MUD
@@ -5062,9 +6688,13 @@ class WMTClient {
             return;
         }
 
-        let text = args[0];
+        // Join all arguments (supports both #send {text} and #send text without braces)
+        let text = args.join(' ');
+        // Handle TinTin++ escape sequences: \; becomes ;
+        text = text.replace(/\\;/g, ';');
         text = this.substituteVariables(text);
-        this.connection.sendCommand(text);
+        // Use raw=true to bypass semicolon splitting (ANSI codes contain semicolons)
+        this.connection.sendCommand(text, true);
     }
 
     // #loop {start} {end} {variable} {commands}
@@ -5099,7 +6729,11 @@ class WMTClient {
         }
     }
 
-    // #format {variable} {format} [args...] - Format a string
+    // #format {variable} {format} [args...] - Format a string (TinTin++ compatible)
+    // Specifiers: %s string, %d int, %f float, %m math, %g grouping, %u upper, %l lower,
+    // %n capitalize, %r reverse, %p strip spaces, %t time, %a/%c char, %A char value,
+    // %x/%X hex, %D hex2dec, %L length, %T epoch, %U microseconds, %H hash, %M metric
+    // Padding: %+9s (pre-pad), %-9s (post-pad), %.8s (max length)
     cmdFormat(args) {
         if (args.length < 2) {
             this.appendOutput('Usage: #format {variable} {format} [args...]', 'error');
@@ -5108,32 +6742,196 @@ class WMTClient {
 
         const varName = args[0];
         let format = args[1];
-
-        // TinTin++ format specifiers: %s (string), %d (number), %c (char), etc.
-        // Also supports %1, %2, etc. for positional args
         let argIndex = 2;
-        format = format.replace(/%(\d+|[sdcfx%])/g, (match, spec) => {
+
+        // Helper to get next argument
+        const getArg = () => {
+            if (argIndex < args.length) {
+                return this.substituteVariables(args[argIndex++]);
+            }
+            return '';
+        };
+
+        // Process format specifiers with optional padding: %+9s, %-9s, %.8s, %9s
+        format = format.replace(/%([+\-]?)(\d*)(?:\.(\d+))?(\d+|[sdcfxXaAmMgulnrphDLTUH%])/g, (match, padDir, padWidth, maxLen, spec) => {
+            // Handle %% escape
             if (spec === '%') return '%';
+
+            // Handle positional args like %1, %2
             if (/^\d+$/.test(spec)) {
                 const idx = parseInt(spec) + 1; // %1 = args[2]
-                return args[idx] !== undefined ? this.substituteVariables(args[idx]) : match;
+                let val = args[idx] !== undefined ? this.substituteVariables(args[idx]) : '';
+                return this.applyFormatPadding(val, padDir, padWidth, maxLen);
             }
-            if (argIndex < args.length) {
-                const val = this.substituteVariables(args[argIndex++]);
-                switch (spec) {
-                    case 'd': return parseInt(val) || 0;
-                    case 'f': return parseFloat(val) || 0;
-                    case 'x': return (parseInt(val) || 0).toString(16);
-                    case 'c': return String.fromCharCode(parseInt(val) || 0);
-                    case 's':
-                    default: return val;
-                }
+
+            let val = getArg();
+            let result;
+
+            switch (spec) {
+                case 's': // String
+                    result = String(val);
+                    break;
+                case 'd': // Integer
+                    result = String(parseInt(val) || 0);
+                    break;
+                case 'f': // Float
+                    result = String(parseFloat(val) || 0);
+                    break;
+                case 'm': // Math expression
+                    try {
+                        result = String(this.evaluateMathExpression(val));
+                    } catch (e) {
+                        result = '0';
+                    }
+                    break;
+                case 'g': // Thousand grouping (1234567 -> 1,234,567)
+                    const num = parseFloat(val) || 0;
+                    result = num.toLocaleString('en-US');
+                    break;
+                case 'u': // Uppercase
+                    result = String(val).toUpperCase();
+                    break;
+                case 'l': // Lowercase
+                    result = String(val).toLowerCase();
+                    break;
+                case 'n': // Capitalize first letter
+                    result = String(val).charAt(0).toUpperCase() + String(val).slice(1).toLowerCase();
+                    break;
+                case 'r': // Reverse string
+                    result = String(val).split('').reverse().join('');
+                    break;
+                case 'p': // Strip leading/trailing spaces
+                    result = String(val).trim();
+                    break;
+                case 'h': // Header line (fill with dashes)
+                    const hdrLen = parseInt(padWidth) || 78;
+                    const hdrText = String(val);
+                    if (hdrText) {
+                        const side = Math.floor((hdrLen - hdrText.length - 2) / 2);
+                        result = '-'.repeat(Math.max(0, side)) + ' ' + hdrText + ' ' + '-'.repeat(Math.max(0, side));
+                    } else {
+                        result = '-'.repeat(hdrLen);
+                    }
+                    break;
+                case 'a': // Character from charset value (same as %c)
+                case 'c': // Character from value
+                    result = String.fromCharCode(parseInt(val) || 0);
+                    break;
+                case 'A': // Character's numeric value
+                    result = String(val).charCodeAt(0) || 0;
+                    break;
+                case 'x': // Decimal to hex (lowercase)
+                    result = (parseInt(val) || 0).toString(16);
+                    break;
+                case 'X': // Decimal to hex (uppercase)
+                    result = (parseInt(val) || 0).toString(16).toUpperCase();
+                    break;
+                case 'D': // Hex to decimal
+                    result = String(parseInt(val, 16) || 0);
+                    break;
+                case 'L': // String length
+                    result = String(String(val).length);
+                    break;
+                case 'T': // Current epoch time (seconds)
+                    result = String(Math.floor(Date.now() / 1000));
+                    break;
+                case 'U': // Current epoch time (microseconds)
+                    result = String(Date.now() * 1000);
+                    break;
+                case 'H': // 64-bit hash of string
+                    result = String(this.simpleHash(String(val)));
+                    break;
+                case 'M': // Metric format (1000 -> 1K, 1000000 -> 1M)
+                    result = this.formatMetric(parseFloat(val) || 0);
+                    break;
+                case 't': // Time format (strftime-like)
+                    result = this.formatTime(val);
+                    break;
+                default:
+                    result = val;
             }
-            return match;
+
+            return this.applyFormatPadding(String(result), padDir, padWidth, maxLen);
         });
 
-        this.variables[varName] = this.substituteVariables(format);
+        this.variables[varName] = format;
         this.appendOutput(`#format: $${varName} = ${this.variables[varName]}`, 'system');
+    }
+
+    // Apply padding to formatted value
+    applyFormatPadding(val, padDir, padWidth, maxLen) {
+        let result = val;
+
+        // Apply max length truncation first
+        if (maxLen) {
+            result = result.substring(0, parseInt(maxLen));
+        }
+
+        // Apply padding
+        if (padWidth) {
+            const width = parseInt(padWidth);
+            if (padDir === '-') {
+                // Post-pad (left align)
+                result = result.padEnd(width);
+            } else {
+                // Pre-pad (right align) - default or '+'
+                result = result.padStart(width);
+            }
+        }
+
+        return result;
+    }
+
+    // Simple hash function for %H
+    simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit integer
+        }
+        return Math.abs(hash);
+    }
+
+    // Format number in metric notation for %M
+    formatMetric(num) {
+        const units = ['', 'K', 'M', 'G', 'T', 'P'];
+        let unitIndex = 0;
+        let value = Math.abs(num);
+
+        while (value >= 1000 && unitIndex < units.length - 1) {
+            value /= 1000;
+            unitIndex++;
+        }
+
+        const formatted = value.toFixed(value < 10 && unitIndex > 0 ? 1 : 0);
+        return (num < 0 ? '-' : '') + formatted + units[unitIndex];
+    }
+
+    // Format time for %t (simplified strftime)
+    formatTime(formatStr) {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+
+        return formatStr
+            .replace(/%Y/g, now.getFullYear())
+            .replace(/%y/g, String(now.getFullYear()).slice(-2))
+            .replace(/%m/g, pad(now.getMonth() + 1))
+            .replace(/%d/g, pad(now.getDate()))
+            .replace(/%H/g, pad(now.getHours()))
+            .replace(/%M/g, pad(now.getMinutes()))
+            .replace(/%S/g, pad(now.getSeconds()))
+            .replace(/%I/g, pad(now.getHours() % 12 || 12))
+            .replace(/%p/g, now.getHours() >= 12 ? 'PM' : 'AM')
+            .replace(/%A/g, ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][now.getDay()])
+            .replace(/%a/g, ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][now.getDay()])
+            .replace(/%B/g, ['January','February','March','April','May','June','July','August','September','October','November','December'][now.getMonth()])
+            .replace(/%b/g, ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][now.getMonth()])
+            .replace(/%j/g, String(Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 86400000)).padStart(3, '0'))
+            .replace(/%W/g, pad(Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000)))
+            .replace(/%w/g, now.getDay())
+            .replace(/%Z/g, Intl.DateTimeFormat().resolvedOptions().timeZone)
+            .replace(/%%/g, '%');
     }
 
     // #replace {variable} {old} {new} - Replace text in variable

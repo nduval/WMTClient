@@ -6,6 +6,11 @@
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/functions.php';
 
+// Prevent aggressive caching (especially for iOS PWA)
+header('Cache-Control: no-cache, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+
 // Require authentication and character selection
 initSession();
 requireAuth();
@@ -28,15 +33,29 @@ if ($characterServer === '3s') {
 
 // Check if this is a new MUD character creation
 $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
+
+// Generate or retrieve WebSocket session token for reconnection
+// This token allows the proxy to identify this user/character session
+if (!isset($_SESSION['ws_token']) || !isset($_SESSION['ws_token_char']) || $_SESSION['ws_token_char'] !== $characterId) {
+    // Generate new token for this character session
+    $_SESSION['ws_token'] = bin2hex(random_bytes(32));
+    $_SESSION['ws_token_char'] = $characterId;
+}
+$wsToken = $_SESSION['ws_token'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <!-- iOS PWA meta tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="<?= APP_NAME ?>">
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
     <title><?= APP_NAME ?> - <?= $mudHost ?></title>
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?= filemtime('assets/css/style.css') ?>">
 </head>
 <body>
     <div class="app-container">
@@ -59,12 +78,11 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                         <button onclick="wmtClient.openAliasModal()">Alias</button>
                         <button onclick="wmtClient.openGagModal()">Gag</button>
                         <button onclick="wmtClient.openHighlightModal()">Highlight</button>
+                        <button onclick="wmtClient.openSubstituteModal()">Substitute</button>
                         <button onclick="wmtClient.openTickerModal()">Ticker</button>
                     </div>
                 </div>
                 <button class="header-btn" id="settings-btn">Settings</button>
-                <button class="header-btn" id="reconnect-btn">Reconnect</button>
-                <button class="header-btn" id="disconnect-btn">Disconnect</button>
 
                 <!-- Hamburger Menu (visible on small screens) -->
                 <div class="header-dropdown hamburger-container">
@@ -82,6 +100,8 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                         <button onclick="wmtClient.openAliasModal()">+ Alias</button>
                         <button onclick="wmtClient.openGagModal()">+ Gag</button>
                         <button onclick="wmtClient.openHighlightModal()">+ Highlight</button>
+                        <button onclick="wmtClient.openSubstituteModal()">+ Substitute</button>
+                        <button onclick="wmtClient.openTickerModal()">+ Ticker</button>
                         <div class="menu-divider"></div>
                         <button onclick="wmtClient.reconnect()">Reconnect</button>
                         <button onclick="wmtClient.disconnect()">Disconnect</button>
@@ -91,16 +111,20 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                 </div>
                 <div class="header-dropdown character-dropdown">
                     <button class="character-btn" id="character-btn">
-                        <?= htmlspecialchars($characterName) ?>
+                        <?= htmlspecialchars(ucfirst($characterName)) ?> ▾
                     </button>
                     <div class="character-menu" id="character-menu">
                         <a href="characters.php">Character Selection</a>
+                        <div class="menu-divider"></div>
+                        <button onclick="wmtClient.reconnect()">Reconnect</button>
+                        <button onclick="wmtClient.disconnect()">Disconnect</button>
+                        <div class="menu-divider"></div>
+                        <button onclick="wmtClient.logout()">Logout</button>
                     </div>
                 </div>
                 <span class="user-info">
                     <?= htmlspecialchars($username) ?>
                 </span>
-                <button class="header-btn" id="logout-btn">Logout</button>
             </div>
         </header>
 
@@ -113,6 +137,9 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                 <div class="chat-header">
                     <span class="chat-title">Chat</span>
                     <div class="chat-controls">
+                        <button class="chat-btn" id="chat-settings-btn" title="Channel settings">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                        </button>
                         <button class="chat-btn" id="chat-dock-btn" title="Dock to top">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5v-7h14v7z"/></svg>
                         </button>
@@ -128,10 +155,6 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                     </div>
                 </div>
                 <div class="chat-output" id="chat-output"></div>
-                <div class="chat-input-container">
-                    <input type="text" id="chat-input" class="chat-input" placeholder="Type chat command...">
-                    <button class="chat-send-btn" id="chat-send-btn">Send</button>
-                </div>
                 <div class="chat-resize-handle"></div>
             </div>
 
@@ -202,7 +225,7 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                 </div>
                 <div class="input-container">
                     <div class="input-wrapper">
-                        <input type="text" id="command-input" placeholder="Enter command..." autocomplete="off" autofocus>
+                        <input type="text" id="command-input" placeholder="Enter command..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus>
                         <button id="send-btn">Send</button>
                     </div>
                 </div>
@@ -235,6 +258,7 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                     <button class="btn btn-sm" id="add-class-btn">+ Class</button>
                     <input type="file" id="script-file-input" accept=".txt,.tin" style="display:none">
                     <button class="btn btn-sm" id="upload-script-btn" title="Upload .tin or .txt file">Upload</button>
+                    <button class="btn btn-sm btn-danger btn-close-sidebar" id="close-scripts-btn">Close</button>
                 </div>
             </aside>
         </div>
@@ -257,37 +281,17 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                     <input type="text" id="trigger-pattern" placeholder="Text to match">
                 </div>
                 <div class="form-group">
-                    <label for="trigger-match-type">Match Type</label>
-                    <select id="trigger-match-type">
-                        <option value="contains">Contains</option>
-                        <option value="exact">Exact Match</option>
-                        <option value="startsWith">Starts With</option>
-                        <option value="endsWith">Ends With</option>
-                        <option value="tintin">TinTin++ Pattern</option>
-                        <option value="regex">Regular Expression (PCRE)</option>
-                    </select>
-                </div>
-                <div class="form-group">
                     <label for="trigger-class">Class</label>
                     <select id="trigger-class">
                         <option value="">No Class</option>
                         <!-- Populated by JavaScript -->
                     </select>
                 </div>
-                <div id="trigger-tintin-help" class="help-text" style="display:none; font-size:0.85em; color:#888; margin-bottom:15px; padding:10px; background:#111; border-radius:4px;">
-                    <strong>TinTin++ Wildcards:</strong><br>
-                    <code>%*</code> any text &nbsp; <code>%+</code> 1+ chars &nbsp; <code>%?</code> 0-1 char &nbsp; <code>%.</code> exactly 1 char<br>
-                    <code>%d</code> digits &nbsp; <code>%w</code> word &nbsp; <code>%s</code> spaces &nbsp; <code>%a</code> any (inc. newlines)<br>
-                    <code>%D</code> non-digits &nbsp; <code>%W</code> non-word &nbsp; <code>%S</code> non-spaces<br>
-                    <code>%1</code>-<code>%99</code> = capture groups &nbsp; <code>%!*</code> = non-capturing<br>
-                    <code>%+3..5d</code> = 3-5 digits (range specifier)<br>
-                    <strong>Example:</strong> <code>%1 tells you '%2'</code> → <code>reply %1 I heard: %2</code>
-                </div>
-                <div id="trigger-regex-help" class="help-text" style="display:none; font-size:0.85em; color:#888; margin-bottom:15px; padding:10px; background:#111; border-radius:4px;">
-                    <strong>PCRE Regex Variables:</strong><br>
-                    $0 = full match, $1 = first capture group, $2 = second, etc.<br>
-                    Example pattern: <code>(\w+) tells you '(.+)'</code><br>
-                    Example command: <code>reply $1 I heard you say: $2</code>
+                <div class="help-text" style="font-size:0.85em; color:#888; margin-bottom:15px; padding:10px; background:#111; border-radius:4px;">
+                    <strong>TinTin++ Pattern Support:</strong><br>
+                    <code>%*</code> any text &nbsp; <code>%+</code> 1+ chars &nbsp; <code>%d</code> digits &nbsp; <code>%w</code> word<br>
+                    <code>%1</code>-<code>%99</code> capture groups &nbsp; <code>^</code>/<code>$</code> anchors &nbsp; <code>{a|b}</code> alternation<br>
+                    <strong>Example:</strong> <code>^%1 tells you '%2'</code> → <code>reply %1 Got it: %2</code>
                 </div>
                 <div class="form-group">
                     <label>Actions</label>
@@ -372,19 +376,12 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label for="gag-pattern">Pattern *</label>
-                    <input type="text" id="gag-pattern" placeholder="Text to hide">
+                    <label for="gag-name">Name (optional)</label>
+                    <input type="text" id="gag-name" placeholder="My Gag">
                 </div>
                 <div class="form-group">
-                    <label for="gag-match-type">Match Type</label>
-                    <select id="gag-match-type">
-                        <option value="contains">Contains</option>
-                        <option value="exact">Exact Match</option>
-                        <option value="startsWith">Starts With</option>
-                        <option value="endsWith">Ends With</option>
-                        <option value="tintin">TinTin++ Pattern</option>
-                        <option value="regex">Regular Expression</option>
-                    </select>
+                    <label for="gag-pattern">Pattern *</label>
+                    <input type="text" id="gag-pattern" placeholder="Text to hide">
                 </div>
                 <div class="form-group">
                     <label for="gag-class">Class</label>
@@ -393,7 +390,7 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                     </select>
                 </div>
                 <div class="help-text" style="font-size:0.85em; color:#888; padding:10px; background:#111; border-radius:4px;">
-                    Lines matching this pattern will be hidden from the output.
+                    Lines matching this pattern will be hidden. Supports TinTin++ patterns (<code>%*</code>, <code>%d</code>, <code>^</code>/<code>$</code>).
                 </div>
             </div>
             <div class="modal-footer">
@@ -414,17 +411,7 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                 <div class="form-group">
                     <label for="highlight-pattern">Pattern *</label>
                     <input type="text" id="highlight-pattern" placeholder="Text to highlight">
-                </div>
-                <div class="form-group">
-                    <label for="highlight-match-type">Match Type</label>
-                    <select id="highlight-match-type">
-                        <option value="contains">Contains</option>
-                        <option value="exact">Exact Match</option>
-                        <option value="startsWith">Starts With</option>
-                        <option value="endsWith">Ends With</option>
-                        <option value="tintin">TinTin++ Pattern</option>
-                        <option value="regex">Regular Expression</option>
-                    </select>
+                    <div style="font-size:0.8em; color:#888; margin-top:4px;">Supports TinTin++ patterns (<code>%*</code>, <code>%d</code>, <code>^</code>/<code>$</code>)</div>
                 </div>
                 <div class="form-group">
                     <label>Text Color (Foreground)</label>
@@ -490,6 +477,42 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
         </div>
     </div>
 
+    <!-- Substitute Modal -->
+    <div class="modal-overlay" id="substitute-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Substitute</h3>
+                <button class="panel-close" onclick="wmtClient.closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="substitute-pattern">Pattern *</label>
+                    <input type="text" id="substitute-pattern" placeholder="Text to match">
+                </div>
+                <div class="form-group">
+                    <label for="substitute-replacement">Replacement *</label>
+                    <input type="text" id="substitute-replacement" placeholder="Replace with...">
+                </div>
+                <div class="form-group">
+                    <label for="substitute-class">Class</label>
+                    <select id="substitute-class">
+                        <option value="">No Class</option>
+                    </select>
+                </div>
+                <div class="help-text" style="font-size:0.85em; color:#888; padding:10px; background:#111; border-radius:4px;">
+                    <strong>TinTin++ Pattern Support:</strong><br>
+                    <code>%*</code> any text &nbsp; <code>%d</code> digits &nbsp; <code>%w</code> word &nbsp; <code>%1</code>-<code>%99</code> captures<br>
+                    <strong>Use captures in replacement:</strong> <code>%1</code>, <code>%2</code>, etc.<br>
+                    <strong>Example:</strong> Pattern <code>%1 hits %2</code> → Replacement <code>%1 SMASHES %2</code>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="wmtClient.saveSubstitute()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Ticker Modal -->
     <div class="modal-overlay" id="ticker-modal">
         <div class="modal">
@@ -540,7 +563,7 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                 </div>
 
                 <div class="mip-add-condition">
-                    <h4>Add Condition</h4>
+                    <h4 id="mip-form-title">Add Condition</h4>
                     <div class="form-row mip-primary-condition">
                         <div class="form-group" style="flex:2">
                             <label>Variable</label>
@@ -580,8 +603,30 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="wmtClient.closeMipConditionsModal()">Close</button>
-                <button class="btn btn-primary" onclick="wmtClient.addMipCondition()">Add Condition</button>
+                <button class="btn btn-secondary" id="mip-cancel-btn" onclick="wmtClient.cancelMipConditionEdit()">Close</button>
+                <button class="btn btn-primary" id="mip-save-btn" onclick="wmtClient.saveMipCondition()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Channel Settings Modal -->
+    <div class="modal-overlay" id="channel-settings-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Channel Settings</h3>
+                <button class="panel-close" onclick="wmtClient.closeChannelSettingsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="settings-hint" style="margin-bottom: 15px;">
+                    Configure per-channel settings. Channels appear here after receiving messages.
+                </p>
+                <div id="channel-list" class="channel-settings-list">
+                    <!-- Channel rows populated dynamically -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="wmtClient.closeChannelSettingsModal()">Close</button>
+                <button class="btn btn-primary" onclick="wmtClient.saveChannelSettings()">Save</button>
             </div>
         </div>
     </div>
@@ -592,14 +637,16 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
             wsUrl: '<?= WS_CLIENT_URL ?>',
             mudHost: '<?= $mudHost ?>',
             mudPort: <?= $mudPort ?>,
+            userId: '<?= $userId ?>',
             characterId: '<?= $characterId ?>',
             characterName: '<?= htmlspecialchars($characterName, ENT_QUOTES) ?>',
             characterServer: '<?= $characterServer ?>',
             csrfToken: '<?= generateCsrfToken() ?>',
-            newMudChar: '<?= htmlspecialchars($newMudChar, ENT_QUOTES) ?>'
+            newMudChar: '<?= htmlspecialchars($newMudChar, ENT_QUOTES) ?>',
+            wsToken: '<?= $wsToken ?>'
         };
     </script>
-    <script src="assets/js/connection.js?v=<?= time() ?>"></script>
-    <script src="assets/js/app.js?v=<?= time() ?>"></script>
+    <script src="assets/js/connection.js?v=<?= filemtime('assets/js/connection.js') ?>"></script>
+    <script src="assets/js/app.js?v=<?= filemtime('assets/js/app.js') ?>"></script>
 </body>
 </html>

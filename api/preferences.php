@@ -61,10 +61,10 @@ switch ($action) {
             $validated['fontFamily'] = $preferences['fontFamily'];
         }
 
-        // Font size (10-24)
+        // Font size (6-24)
         if (isset($preferences['fontSize'])) {
             $fontSize = intval($preferences['fontSize']);
-            $validated['fontSize'] = max(10, min(24, $fontSize));
+            $validated['fontSize'] = max(6, min(24, $fontSize));
         }
 
         // Colors (validate hex format)
@@ -97,10 +97,89 @@ switch ($action) {
             $validated['mipDebug'] = (bool)$preferences['mipDebug'];
         }
 
+        if (isset($preferences['wakeLock'])) {
+            $validated['wakeLock'] = (bool)$preferences['wakeLock'];
+        }
+
+        if (isset($preferences['mipEnabled'])) {
+            $validated['mipEnabled'] = (bool)$preferences['mipEnabled'];
+        }
+
+        if (isset($preferences['mipHpBar'])) {
+            $validated['mipHpBar'] = (bool)$preferences['mipHpBar'];
+        }
+
+        if (isset($preferences['mipShowStatBars'])) {
+            $validated['mipShowStatBars'] = (bool)$preferences['mipShowStatBars'];
+        }
+
+        if (isset($preferences['mipShowGuild'])) {
+            $validated['mipShowGuild'] = (bool)$preferences['mipShowGuild'];
+        }
+
+        if (isset($preferences['mipShowRoom'])) {
+            $validated['mipShowRoom'] = (bool)$preferences['mipShowRoom'];
+        }
+
+        if (isset($preferences['mipShowExits'])) {
+            $validated['mipShowExits'] = (bool)$preferences['mipShowExits'];
+        }
+
         // Keep alive interval (30-300 seconds)
         if (isset($preferences['keepAliveInterval'])) {
             $interval = intval($preferences['keepAliveInterval']);
             $validated['keepAliveInterval'] = max(30, min(300, $interval));
+        }
+
+        // Scrollback limit (2000-20000 lines)
+        if (isset($preferences['scrollbackLimit'])) {
+            $limit = intval($preferences['scrollbackLimit']);
+            $validated['scrollbackLimit'] = max(2000, min(20000, $limit));
+        }
+
+        // History size (100-2000)
+        if (isset($preferences['historySize'])) {
+            $size = intval($preferences['historySize']);
+            $validated['historySize'] = max(100, min(2000, $size));
+        }
+
+        // Channel preferences (for ChatMon)
+        if (isset($preferences['channelPrefs']) && is_array($preferences['channelPrefs'])) {
+            $validatedChannels = [];
+            foreach ($preferences['channelPrefs'] as $channel => $prefs) {
+                // Sanitize channel name (alphanumeric, lowercase, max 50 chars)
+                $channel = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '', substr($channel, 0, 50)));
+                if (empty($channel)) continue;
+
+                $validatedChannels[$channel] = [
+                    'sound' => isset($prefs['sound']) ? (bool)$prefs['sound'] : false,
+                    'hidden' => isset($prefs['hidden']) ? (bool)$prefs['hidden'] : false,
+                    'discord' => isset($prefs['discord']) ? (bool)$prefs['discord'] : false
+                ];
+            }
+            $validated['channelPrefs'] = $validatedChannels;
+        }
+
+        // Discord webhook URL (validate format)
+        if (isset($preferences['discordWebhookUrl'])) {
+            $url = trim($preferences['discordWebhookUrl']);
+            // Only allow Discord webhook URLs or empty string
+            if ($url === '' ||
+                preg_match('#^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$#', $url)) {
+                $validated['discordWebhookUrl'] = $url;
+            }
+        }
+
+        // Notification sound (whitelist allowed values)
+        $allowedSounds = ['classic', 'ping', 'double', 'chime', 'alert', 'gentle'];
+        if (isset($preferences['notificationSound']) && in_array($preferences['notificationSound'], $allowedSounds)) {
+            $validated['notificationSound'] = $preferences['notificationSound'];
+        }
+
+        // Notification volume (0-100)
+        if (isset($preferences['notificationVolume'])) {
+            $volume = intval($preferences['notificationVolume']);
+            $validated['notificationVolume'] = max(0, min(100, $volume));
         }
 
         // Load existing and merge
@@ -166,8 +245,10 @@ switch ($action) {
                 continue;
             }
 
-            // Validate variable
-            if (!in_array($condition['variable'], $allowedVariables)) {
+            // Validate variable (allow base variables and guild_ prefixed variables)
+            $isBaseVar = in_array($condition['variable'], $allowedVariables);
+            $isGuildVar = preg_match('/^guild_[a-z0-9_]+$/', $condition['variable']);
+            if (!$isBaseVar && !$isGuildVar) {
                 continue;
             }
 
@@ -201,7 +282,9 @@ switch ($action) {
 
                     // Validate logic, variable, operator
                     if (!in_array($sub['logic'], $allowedLogic)) continue;
-                    if (!in_array($sub['variable'], $allowedVariables)) continue;
+                    $isBaseVar = in_array($sub['variable'], $allowedVariables);
+                    $isGuildVar = preg_match('/^guild_[a-z0-9_]+$/', $sub['variable']);
+                    if (!$isBaseVar && !$isGuildVar) continue;
                     if (!in_array($sub['operator'], $allowedOperators)) continue;
                     if (!is_numeric($sub['value'])) continue;
 

@@ -33,6 +33,15 @@ define('SESSION_LIFETIME', 86400 * 7); // 7 days
 define('CSRF_TOKEN_NAME', 'csrf_token');
 define('PASSWORD_MIN_LENGTH', 6);
 
+// Render proxy admin key (for broadcast feature)
+// Load from separate file to keep it out of git
+$renderAdminKeyFile = __DIR__ . '/render_admin_key.php';
+if (file_exists($renderAdminKeyFile)) {
+    require_once $renderAdminKeyFile;
+} else {
+    define('RENDER_ADMIN_KEY', null);
+}
+
 // User storage limits
 define('MAX_USER_STORAGE', 25 * 1024 * 1024); // 25 MB
 define('MAX_USER_FILES', 250);

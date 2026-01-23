@@ -84,10 +84,12 @@ if (in_array($username, $ADMIN_USERS)) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <title>Select Character - <?= APP_NAME ?></title>
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?= filemtime('assets/css/style.css') ?>">
     <style>
         body {
             overflow-y: auto;
@@ -97,6 +99,8 @@ if (in_array($username, $ADMIN_USERS)) {
             max-width: 600px;
             margin: 50px auto;
             padding: 20px;
+            /* iOS safe area for PWA mode */
+            padding-top: calc(20px + env(safe-area-inset-top, 0px));
         }
 
         .characters-header {
@@ -379,12 +383,14 @@ if (in_array($username, $ADMIN_USERS)) {
             .characters-container {
                 margin: 20px auto;
                 padding: 15px;
+                /* iOS safe area for PWA mode */
+                padding-top: calc(15px + env(safe-area-inset-top, 0px));
             }
 
             .characters-header {
                 flex-direction: column;
                 align-items: flex-start;
-                gap: 10px;
+                gap: 8px;
             }
 
             .characters-header h1 {
@@ -392,7 +398,9 @@ if (in_array($username, $ADMIN_USERS)) {
             }
 
             .user-info {
-                font-size: 12px;
+                font-size: 13px;
+                color: #aaa;
+                line-height: 1.6;
             }
 
             .character-item {

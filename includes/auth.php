@@ -6,6 +6,20 @@
 require_once __DIR__ . '/functions.php';
 
 /**
+ * Log authentication events for debugging
+ */
+function authLog(string $message): void {
+    $logDir = __DIR__ . '/../data/logs';
+    if (!is_dir($logDir)) {
+        @mkdir($logDir, 0755, true);
+    }
+    $logFile = $logDir . '/auth.log';
+    $timestamp = date('Y-m-d H:i:s');
+    $entry = "[$timestamp] $message\n";
+    @file_put_contents($logFile, $entry, FILE_APPEND | LOCK_EX);
+}
+
+/**
  * Get users index file path
  */
 function getUsersIndexPath(): string {
@@ -313,20 +327,16 @@ function initSession(): void {
     if (session_status() === PHP_SESSION_NONE) {
         session_name(SESSION_NAME);
 
-        // Set cookie path to work in subdirectory
-        $cookiePath = '/';
-        $scriptPath = dirname($_SERVER['SCRIPT_NAME']);
-        if ($scriptPath && $scriptPath !== '/' && $scriptPath !== '\\') {
-            // Extract base path (e.g., /client)
-            $parts = explode('/', trim($scriptPath, '/'));
-            if (!empty($parts[0])) {
-                $cookiePath = '/' . $parts[0] . '/';
-            }
+        // Delete any old cookies with /api/ path (legacy bug fix)
+        // Old code set cookies with path=/api/ which take precedence over path=/
+        if (isset($_COOKIE[SESSION_NAME])) {
+            setcookie(SESSION_NAME, '', time() - 3600, '/api/');
         }
 
+        // Always use root path for cookies to ensure they work across all pages
         session_set_cookie_params([
             'lifetime' => SESSION_LIFETIME,
-            'path' => $cookiePath,
+            'path' => '/',
             'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
             'httponly' => true,
             'samesite' => 'Lax'
@@ -340,12 +350,40 @@ function initSession(): void {
  * Start user session
  */
 function startUserSession(string $userId, string $username): void {
+    authLog("LOGIN ATTEMPT: user=$username, userId=$userId");
+
     initSession();
+
+    $oldSessionId = session_id();
+    authLog("Session initialized: oldSessionId=$oldSessionId");
+
+    // Attempt session regeneration to prevent fixation attacks and clear stale sessions
+    $error = null;
+    set_error_handler(function($errno, $errstr) use (&$error) {
+        $error = $errstr;
+        return true;
+    });
+
+    $regenerateResult = session_regenerate_id(true);
+
+    restore_error_handler();
+
+    $newSessionId = session_id();
+
+    if (!$regenerateResult) {
+        $lastError = error_get_last();
+        $errorMsg = $error ?? ($lastError['message'] ?? 'unknown');
+        authLog("session_regenerate_id: FAILED old=$oldSessionId new=$newSessionId error=$errorMsg");
+    } else {
+        authLog("session_regenerate_id: SUCCESS old=$oldSessionId new=$newSessionId");
+    }
 
     // Set session data
     $_SESSION['user_id'] = $userId;
     $_SESSION['username'] = $username;
     $_SESSION['logged_in_at'] = time();
+
+    authLog("Session data set: user_id={$_SESSION['user_id']}, username={$_SESSION['username']}");
 
     // Update last_login in users index
     $users = loadUsersIndex();
@@ -362,6 +400,10 @@ function startUserSession(string $userId, string $username): void {
 
     // Restart session for any further operations in this request
     initSession();
+
+    // Verify session was saved correctly
+    $verifyUserId = $_SESSION['user_id'] ?? 'NOT SET';
+    authLog("LOGIN COMPLETE: user=$username, verified_user_id=$verifyUserId, final_session_id=" . session_id());
 }
 
 /**

@@ -86,6 +86,11 @@ body {
     animation: pulse 1s infinite;
 }
 
+.status-indicator.authenticating {
+    background: var(--warning-color);
+    animation: pulse 0.5s infinite;
+}
+
 .status-indicator.mud_disconnected {
     background: var(--error-color);
 }
@@ -320,13 +325,13 @@ body {
 /* Character Dropdown */
 .character-btn {
     background: transparent;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--accent-color);
     color: var(--accent-color);
-    padding: 6px 12px;
+    padding: 8px 14px;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 0.9em;
-    font-weight: 500;
+    font-size: 1em;
+    font-weight: 600;
     transition: all 0.2s;
 }
 
@@ -365,6 +370,29 @@ body {
 
 .character-menu a:hover {
     background: rgba(255, 255, 255, 0.1);
+}
+
+.character-menu button {
+    display: block;
+    width: 100%;
+    padding: 12px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    text-align: left;
+    font-size: 0.9em;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.character-menu button:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.character-menu .menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
 }
 
 .user-info {
@@ -616,16 +644,24 @@ body {
     display: none;
 }
 
-/* Guild lines */
+/* Guild lines - flexbox for smart wrapping on mobile */
 .mip-guild-line {
     font-family: var(--mud-font, 'Consolas, Monaco, monospace');
     font-size: var(--mud-font-size, 14px);
     color: var(--text-color);
-    white-space: nowrap;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em 0.75em;  /* row-gap, column-gap */
+    align-items: baseline;
 }
 
 .mip-guild-line:empty {
     display: none;
+}
+
+/* Each stat item stays together, won't break mid-value */
+.guild-stat-item {
+    white-space: nowrap;
 }
 
 /* Location info */
@@ -821,6 +857,59 @@ body {
     border-left: 2px solid var(--border-color);
 }
 
+/* Channel Settings Modal */
+.channel-settings-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.channel-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 10px 12px;
+    background: var(--bg-darker);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.channel-name {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+    color: var(--primary-color);
+}
+
+.channel-option {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.channel-option input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.channel-icon {
+    font-size: 1.1em;
+    opacity: 0.7;
+}
+
+.channel-option input:checked + .channel-icon {
+    opacity: 1;
+}
+
+.no-channels {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px;
+    font-style: italic;
+}
+
 .input-container {
     padding: 15px;
     background: var(--bg-panel);
@@ -928,10 +1017,13 @@ body {
     border-top: 1px solid var(--border-color);
     background: var(--bg-darker);
     flex-shrink: 0;
+    display: flex;
+    gap: 10px;
 }
 
 .settings-sticky-footer .btn {
-    width: 100%;
+    flex: 1;
+    padding: 10px 20px;
 }
 
 .settings-sticky-footer .btn.saved {
@@ -1011,6 +1103,18 @@ body {
     padding: 10px 15px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-darker);
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.scripts-sidebar-footer .btn {
+    flex: 1;
+}
+
+.scripts-sidebar-footer .btn-close-sidebar {
+    flex: none;
+    padding: 6px 15px;
 }
 
 /* Class Section */
@@ -1165,6 +1269,10 @@ body {
 
 .script-item-icon.highlight {
     color: #ffff66;
+}
+
+.script-item-icon.substitute {
+    color: #88ccff;
 }
 
 .script-item-name {
@@ -1848,26 +1956,66 @@ body {
         gap: 10px;
     }
 
-    .mip-guild-line {
-        max-width: 200px;
-    }
 }
 
 /* Responsive - Small screens (below 768px) */
 @media (max-width: 768px) {
+    /* Settings panel - full screen on mobile */
     .side-panel {
         position: fixed;
         top: 0;
+        left: 0;
         right: 0;
         bottom: 0;
         width: 100%;
-        max-width: 400px;
+        max-width: none;
         z-index: 100;
+    }
+
+    /* Ensure panel content area scrolls properly */
+    .side-panel .panel-content {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .side-panel .panel-header {
+        padding-top: calc(15px + env(safe-area-inset-top, 0px));
+    }
+
+    /* Scripts/Actions sidebar - full screen on mobile */
+    .scripts-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: none;
+        min-width: unset;
+        z-index: 100;
+        border-left: none;
+    }
+
+    .scripts-sidebar .scripts-sidebar-header {
+        padding-top: calc(15px + env(safe-area-inset-top, 0px));
+    }
+
+    .scripts-sidebar .scripts-sidebar-footer {
+        padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Hide resize handle on mobile */
+    .scripts-resize-handle {
+        display: none;
     }
 
     .header {
         gap: 8px;
         padding: 8px 10px;
+        /* iOS safe area - fixed minimum + safe area for notch */
+        padding-top: max(25px, calc(8px + env(safe-area-inset-top, 12px)));
     }
 
     .header-left {
@@ -1882,14 +2030,14 @@ body {
         font-size: 0.8em;
     }
 
-    /* Hide regular header buttons on small screens */
+    /* Hide regular header buttons on small screens, but keep character dropdown */
     .header-right > .header-btn,
-    .header-right > .header-dropdown:not(.hamburger-container) {
+    .header-right > .header-dropdown:not(.hamburger-container):not(.character-dropdown) {
         display: none !important;
     }
 
     .header-right {
-        gap: 10px;
+        gap: 8px;
     }
 
     /* Show hamburger menu */
@@ -1901,7 +2049,12 @@ body {
         display: flex !important;
     }
 
-    /* Keep character selector compact */
+    /* Compact character button on mobile */
+    .character-btn {
+        padding: 4px 8px;
+        font-size: 0.8em;
+    }
+
     .user-info {
         display: none;
     }
@@ -1910,54 +2063,154 @@ body {
         display: none;
     }
 
-    /* MIP Status Bar - Stack on small screens */
+    /* MIP Status Bar - Compact horizontal layout on small screens */
     .mip-status-bar {
-        padding: 6px 10px;
+        padding: 4px 8px;
+        gap: 4px;
     }
 
     .mip-row {
-        gap: 8px;
-    }
-
-    .mip-row-primary {
-        flex-wrap: wrap;
-    }
-
-    .mip-stat-block {
-        min-width: 70px;
-        max-width: 120px;
-        flex: 1 1 calc(50% - 8px);
-    }
-
-    /* Guild lines and location - stack vertically, left-aligned */
-    .mip-row-secondary {
-        flex-direction: column;
-        align-items: flex-start;
         gap: 6px;
     }
 
+    .mip-row-primary {
+        flex-wrap: nowrap;  /* Keep HP/SP/GP/Enemy on one line */
+    }
+
+    /* Hide enemy name on mobile - just show % */
+    .mip-stat-block.enemy .stat-enemy-name {
+        display: none;
+    }
+
+    /* Compact inline stat blocks */
+    .mip-stat-block {
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        min-width: auto;
+        max-width: none;
+        flex: 1 1 auto;  /* Allow shrinking to fit */
+    }
+
+    .mip-stat-block .stat-header {
+        flex-direction: row;
+        gap: 4px;
+    }
+
+    .mip-stat-block .stat-label {
+        font-size: 0.65em;
+    }
+
+    .mip-stat-block .stat-value {
+        font-size: 0.8em;
+        white-space: nowrap;
+    }
+
+    .mip-stat-block .stat-bar {
+        display: none;
+    }
+
+    /* Keep icons visible, add spacing */
+    .mip-stat-block .stat-icon {
+        width: 14px;
+        height: 14px;
+    }
+
+    .mip-row-primary {
+        gap: 12px;
+    }
+
+    /* Guild lines and location - compact, allow wrapping */
+    .mip-row-secondary {
+        font-size: 0.75em;
+        gap: 6px 12px;
+        flex-wrap: wrap;
+    }
+
     .mip-guild-line {
-        max-width: 100%;
-        white-space: normal;
+        /* Flexbox wraps at item boundaries, gap handles spacing */
+        gap: 0.2em 0.5em;
+        line-height: 1.3;
+        width: 100%;
     }
 
     .mip-location {
         margin-left: 0;
-        flex-direction: column;
-        align-items: flex-start;
         width: 100%;
-        gap: 4px;
+        flex-direction: row;
+        gap: 8px;
+    }
+
+    .mip-room, .mip-exits {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .mip-room {
-        max-width: 100%;
+        max-width: 60%;
+        flex-shrink: 1;
     }
 
     .mip-exits {
-        width: 100%;
-        padding-top: 4px;
-        border-top: 1px solid var(--border-color);
-        text-align: left;
+        color: var(--text-muted);
+        flex-shrink: 1;
+    }
+
+    /* ChatMon - anchor to top half on mobile */
+    .chat-window.floating {
+        position: fixed !important;
+        top: 60px !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: auto !important;
+        height: 45vh !important;
+        min-height: 150px;
+        max-height: 50vh;
+        border-radius: 0;
+        resize: none;
+    }
+
+    .chat-window.docked {
+        height: 40vh;
+        max-height: 45vh;
+    }
+
+    /* Simplify chat controls on mobile */
+    .chat-controls .chat-btn:not(.chat-close) {
+        display: none;
+    }
+
+    /* Full-screen modals on mobile - no keyboard fighting */
+    .modal-overlay {
+        padding: 0;
+        align-items: stretch;
+    }
+
+    .modal {
+        max-width: none;
+        max-height: none;
+        height: 100%;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .modal-body {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .modal-footer {
+        flex-shrink: 0;
+        padding-bottom: calc(15px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Channel Settings - fill available space on mobile */
+    .channel-settings-list {
+        max-height: none;
+        flex: 1;
     }
 }
 
@@ -1965,6 +2218,7 @@ body {
 @media (max-width: 480px) {
     .header {
         padding: 6px 8px;
+        padding-top: max(25px, calc(6px + env(safe-area-inset-top, 12px)));
     }
 
     .header-left {
@@ -1979,17 +2233,45 @@ body {
         display: none;
     }
 
-    .mip-stat-block {
-        flex: 1 1 calc(50% - 4px);
-        min-width: 60px;
+    /* Even more compact MIP bar */
+    .mip-status-bar {
+        padding: 3px 6px;
+        gap: 3px;
+    }
+
+    .mip-row-primary {
+        gap: 6px;  /* Tighter on very small screens */
     }
 
     .mip-stat-block .stat-label {
-        font-size: 0.6em;
+        font-size: 0.55em;
     }
 
     .mip-stat-block .stat-value {
-        font-size: 0.85em;
+        font-size: 0.7em;
+    }
+
+    .mip-stat-block .stat-icon {
+        width: 10px;
+        height: 10px;
+    }
+
+
+    .mip-row-secondary {
+        font-size: 0.65em;
+        gap: 4px 8px;
+    }
+
+    .mip-guild-line {
+        font-size: 0.9em;
+    }
+
+    .mip-location {
+        gap: 6px;
+    }
+
+    .mip-room {
+        max-width: 50%;
     }
 }
 
@@ -2189,6 +2471,54 @@ body {
     min-height: 0;
 }
 
+/* Side-docked modes (left/right) - desktop only */
+.terminal-area.chat-docked-left,
+.terminal-area.chat-docked-right {
+    flex-direction: row;
+    align-items: stretch;
+}
+
+.terminal-area.chat-docked-left .output-container,
+.terminal-area.chat-docked-right .output-container {
+    flex: 1;
+    min-width: 0;
+    height: auto;
+}
+
+/* Left-docked chat window */
+.chat-window.docked-left {
+    position: relative;
+    width: 30%;
+    min-width: 250px;
+    max-width: 500px;
+    height: 100%;
+    border-radius: 0;
+    resize: horizontal;
+    overflow: hidden;
+    flex-shrink: 0;
+    order: -1; /* Place before output container */
+}
+
+/* Right-docked chat window */
+.chat-window.docked-right {
+    position: relative;
+    width: 30%;
+    min-width: 250px;
+    max-width: 500px;
+    height: 100%;
+    border-radius: 0;
+    resize: horizontal;
+    overflow: hidden;
+    flex-shrink: 0;
+    order: 1; /* Place after output container (which defaults to order: 0) */
+}
+
+/* No drag cursor when side-docked */
+.chat-window.docked-left .chat-header,
+.chat-window.docked-right .chat-header {
+    cursor: default;
+}
+
 /* Chat button notification indicator */
 #chat-toggle-btn.has-new {
     position: relative;
@@ -2231,4 +2561,138 @@ body {
 #chat-toggle-btn.active {
     background: var(--primary-color);
     color: #000;
+}
+
+/* ==========================================
+   iOS PWA (Standalone) Safe Area Handling
+   Only applies when installed as web app
+   ========================================== */
+
+@media (display-mode: standalone) {
+    /* Header - add safe area padding for notch/dynamic island */
+    .header {
+        padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    }
+
+    /* Input container - add safe area padding for home indicator */
+    .input-container {
+        padding-bottom: calc(15px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Side panel - offset from top for status bar */
+    .side-panel {
+        top: env(safe-area-inset-top, 0px);
+    }
+
+    /* Modal headers - safe area for close button */
+    .modal-header {
+        padding-top: calc(15px + env(safe-area-inset-top, 0px));
+    }
+}
+
+/* PWA on smaller screens */
+@media (display-mode: standalone) and (max-width: 768px) {
+    .header {
+        padding-top: calc(8px + env(safe-area-inset-top, 0px));
+    }
+
+    .input-container {
+        padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Settings panel - full screen in PWA mode */
+    .side-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: none;
+    }
+
+    .side-panel .panel-header {
+        padding-top: calc(15px + env(safe-area-inset-top, 0px));
+    }
+
+    .side-panel .panel-content {
+        padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .modal-header {
+        padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    }
+
+    /* Scripts/Actions sidebar - full screen in PWA mode */
+    .scripts-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: none;
+        min-width: unset;
+    }
+
+    .scripts-sidebar .scripts-sidebar-header {
+        padding-top: calc(15px + env(safe-area-inset-top, 0px));
+    }
+
+    .scripts-sidebar .scripts-sidebar-footer {
+        padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+}
+
+@media (display-mode: standalone) and (max-width: 480px) {
+    .header {
+        padding-top: calc(6px + env(safe-area-inset-top, 0px));
+    }
+
+    .input-container {
+        padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Settings panel - full screen in PWA mode */
+    .side-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: none;
+    }
+
+    .side-panel .panel-header {
+        padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    }
+
+    .side-panel .panel-content {
+        padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .modal-header {
+        padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    }
+
+    /* Scripts/Actions sidebar - full screen in PWA mode */
+    .scripts-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: none;
+        min-width: unset;
+    }
+
+    .scripts-sidebar .scripts-sidebar-header {
+        padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    }
+
+    .scripts-sidebar .scripts-sidebar-footer {
+        padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    }
 }

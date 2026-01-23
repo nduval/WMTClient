@@ -31,6 +31,8 @@ IONOS_DEPLOY_FILES = [
     'data/users/index.php',
     'data/users/backups/.htaccess',
     'data/users/backups/index.php',
+    'data/logs/.htaccess',
+    'data/logs/index.php',
 ]
 
 # Files to exclude from IONOS deploy

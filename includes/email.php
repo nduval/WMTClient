@@ -8,7 +8,7 @@ require_once __DIR__ . '/../config/sendgrid.php';
 /**
  * Send an email via SendGrid API
  */
-function sendEmail(string $toEmail, string $toName, string $subject, string $htmlBody, string $textBody = ''): array {
+function sendEmail(string $toEmail, string $toName, string $subject, string $htmlBody, string $textBody = '', string $bccEmail = ''): array {
     $apiKey = SENDGRID_API_KEY;
 
     if ($apiKey === 'YOUR_API_KEY_HERE' || empty($apiKey)) {
@@ -21,15 +21,22 @@ function sendEmail(string $toEmail, string $toName, string $subject, string $htm
         $textBody = strip_tags($htmlBody);
     }
 
-    $data = [
-        'personalizations' => [
-            [
-                'to' => [
-                    ['email' => $toEmail, 'name' => $toName]
-                ],
-                'subject' => $subject
-            ]
+    $personalization = [
+        'to' => [
+            ['email' => $toEmail, 'name' => $toName]
         ],
+        'subject' => $subject
+    ];
+
+    // Add BCC if provided
+    if (!empty($bccEmail)) {
+        $personalization['bcc'] = [
+            ['email' => $bccEmail]
+        ];
+    }
+
+    $data = [
+        'personalizations' => [$personalization],
         'from' => [
             'email' => EMAIL_FROM_ADDRESS,
             'name' => EMAIL_FROM_NAME
@@ -73,7 +80,7 @@ function sendEmail(string $toEmail, string $toName, string $subject, string $htm
 /**
  * Send password reset email
  */
-function sendPasswordResetEmail(string $email, string $username, string $resetToken, string $baseUrl): array {
+function sendPasswordResetEmail(string $email, string $username, string $resetToken, string $baseUrl, string $bccEmail = ''): array {
     $resetLink = $baseUrl . '/reset-password.php?token=' . urlencode($resetToken);
 
     $subject = 'Password Reset Request - ' . APP_NAME;
@@ -105,5 +112,5 @@ function sendPasswordResetEmail(string $email, string $username, string $resetTo
     $textBody .= "This link will expire in 1 hour.\n\n";
     $textBody .= "If you didn't request this reset, you can safely ignore this email.";
 
-    return sendEmail($email, $username, $subject, $htmlBody, $textBody);
+    return sendEmail($email, $username, $subject, $htmlBody, $textBody, $bccEmail);
 }

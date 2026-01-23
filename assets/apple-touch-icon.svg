@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <!-- Solid background (iOS requires no transparency) -->
+  <rect width="180" height="180" fill="#1a1a1a"/>
+
+  <!-- Terminal window -->
+  <rect x="20" y="30" width="140" height="120" rx="12" fill="#252525" stroke="#444" stroke-width="2"/>
+
+  <!-- Title bar -->
+  <rect x="20" y="30" width="140" height="28" rx="12" fill="#333"/>
+  <rect x="20" y="46" width="140" height="12" fill="#333"/>
+
+  <!-- Window buttons -->
+  <circle cx="38" cy="44" r="6" fill="#ff5f56"/>
+  <circle cx="56" cy="44" r="6" fill="#ffbd2e"/>
+  <circle cx="74" cy="44" r="6" fill="#27ca40"/>
+
+  <!-- Command prompt -->
+  <text x="35" y="100" font-family="monospace" font-size="36" font-weight="bold" fill="#00ff00">&gt;_</text>
+
+  <!-- Cursor block -->
+  <rect x="95" y="78" width="20" height="28" fill="#00ff00" opacity="0.9"/>
+</svg>

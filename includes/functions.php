@@ -533,22 +533,25 @@ function ansiToHtml(string $text): string {
  * Require authentication
  */
 function requireAuth(): void {
+    // Debug logging
+    $logFile = __DIR__ . '/../data/logs/auth.log';
+    $timestamp = date('Y-m-d H:i:s');
+    $uri = $_SERVER['REQUEST_URI'] ?? 'unknown';
+    $sessionCookie = $_COOKIE[SESSION_NAME] ?? 'NOT SET';
+    @file_put_contents($logFile, "[$timestamp] requireAuth called: uri=$uri, cookie=$sessionCookie\n", FILE_APPEND | LOCK_EX);
+
     if (session_status() === PHP_SESSION_NONE) {
         session_name(SESSION_NAME);
 
-        // Set cookie path to work in subdirectory
-        $cookiePath = '/';
-        $scriptPath = dirname($_SERVER['SCRIPT_NAME']);
-        if ($scriptPath && $scriptPath !== '/' && $scriptPath !== '\\') {
-            $parts = explode('/', trim($scriptPath, '/'));
-            if (!empty($parts[0])) {
-                $cookiePath = '/' . $parts[0] . '/';
-            }
+        // Delete any old cookies with /api/ path (legacy bug fix)
+        if (isset($_COOKIE[SESSION_NAME])) {
+            setcookie(SESSION_NAME, '', time() - 3600, '/api/');
         }
 
+        // Always use root path for cookies to ensure they work across all pages
         session_set_cookie_params([
             'lifetime' => SESSION_LIFETIME,
-            'path' => $cookiePath,
+            'path' => '/',
             'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
             'httponly' => true,
             'samesite' => 'Lax'
@@ -557,7 +560,12 @@ function requireAuth(): void {
         session_start();
     }
 
+    $sessionId = session_id();
+    $userId = $_SESSION['user_id'] ?? 'NOT SET';
+    @file_put_contents($logFile, "[$timestamp] requireAuth session: id=$sessionId, user_id=$userId\n", FILE_APPEND | LOCK_EX);
+
     if (!isset($_SESSION['user_id'])) {
+        @file_put_contents($logFile, "[$timestamp] requireAuth DENIED: no user_id in session\n", FILE_APPEND | LOCK_EX);
         if (strpos($_SERVER['REQUEST_URI'], '/api/') !== false) {
             errorResponse('Authentication required', 401);
         } else {
