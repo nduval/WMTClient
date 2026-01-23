@@ -509,8 +509,90 @@ function createSession(token) {
     // Discord webhook settings (for server-side notifications when browser is closed)
     // Each channel can have its own webhook: { channelName: { discord: bool, webhookUrl: string } }
     discordUsername: 'WMT Client',
-    discordChannelPrefs: {}
+    discordChannelPrefs: {},
+
+    // Server-side tickers
+    tickers: [],           // Array of ticker objects
+    tickerIntervals: {}    // Map of ticker id -> interval timer
   };
+}
+
+/**
+ * Update session tickers - clears old intervals and starts new ones for enabled tickers
+ */
+function updateSessionTickers(session, tickers) {
+  // Clear all existing intervals
+  for (const id in session.tickerIntervals) {
+    clearInterval(session.tickerIntervals[id]);
+  }
+  session.tickerIntervals = {};
+
+  // Store the new tickers array
+  session.tickers = tickers;
+
+  // Start intervals for enabled tickers
+  tickers.forEach(ticker => {
+    if (ticker.enabled && ticker.interval > 0) {
+      startTicker(session, ticker);
+    }
+  });
+
+  console.log(`Tickers updated: ${tickers.filter(t => t.enabled).length} active out of ${tickers.length}`);
+}
+
+/**
+ * Start a single ticker's interval
+ */
+function startTicker(session, ticker) {
+  if (!ticker.id || !ticker.command || ticker.interval <= 0) return;
+
+  // Clear existing interval if any
+  if (session.tickerIntervals[ticker.id]) {
+    clearInterval(session.tickerIntervals[ticker.id]);
+  }
+
+  const intervalMs = ticker.interval * 1000;
+
+  session.tickerIntervals[ticker.id] = setInterval(() => {
+    // Only execute if MUD is connected
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      // Expand aliases before sending
+      const expanded = expandCommandWithAliases(ticker.command, session.aliases || []);
+      expanded.forEach(cmd => {
+        // Handle #N repeat pattern
+        const repeatMatch = cmd.match(/^#(\d+)\s+(.+)$/);
+        if (repeatMatch) {
+          const count = Math.min(parseInt(repeatMatch[1]), 100);
+          const repeatCmd = repeatMatch[2];
+          for (let i = 0; i < count; i++) {
+            session.mudSocket.write(repeatCmd + '\r\n');
+          }
+        } else {
+          session.mudSocket.write(cmd + '\r\n');
+        }
+      });
+    }
+  }, intervalMs);
+}
+
+/**
+ * Stop a single ticker's interval
+ */
+function stopTicker(session, tickerId) {
+  if (session.tickerIntervals[tickerId]) {
+    clearInterval(session.tickerIntervals[tickerId]);
+    delete session.tickerIntervals[tickerId];
+  }
+}
+
+/**
+ * Clear all tickers for a session (called on disconnect)
+ */
+function clearAllTickers(session) {
+  for (const id in session.tickerIntervals) {
+    clearInterval(session.tickerIntervals[id]);
+  }
+  session.tickerIntervals = {};
 }
 
 /**
@@ -605,6 +687,9 @@ function replayBuffer(session) {
  */
 function closeSession(session, reason) {
   console.log(`Closing session ${session.token.substring(0, 8)}...: ${reason}`);
+
+  // Clear all tickers
+  clearAllTickers(session);
 
   if (session.mudSocket && !session.mudSocket.destroyed) {
     session.mudSocket.destroy();
@@ -1361,6 +1446,11 @@ wss.on('connection', (ws, req) => {
 
         case 'set_aliases':
           session.aliases = data.aliases || [];
+          break;
+
+        case 'set_tickers':
+          // Update tickers and restart intervals
+          updateSessionTickers(session, data.tickers || []);
           break;
 
         case 'set_mip':
