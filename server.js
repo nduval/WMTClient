@@ -1164,10 +1164,26 @@ function processLine(session, line) {
  * Create and connect MUD socket for a session
  */
 function connectToMud(session) {
+  // Thorough cleanup of any existing connection state
   if (session.mudSocket) {
-    session.mudSocket.destroy();
+    // Remove all listeners before destroying to prevent spurious events
+    session.mudSocket.removeAllListeners();
+    if (!session.mudSocket.destroyed) {
+      session.mudSocket.destroy();
+    }
     session.mudSocket = null;
   }
+
+  // Clear line buffer state from previous connection
+  session.lineBuffer = '';
+  if (session.lineBufferTimeout) {
+    clearTimeout(session.lineBufferTimeout);
+    session.lineBufferTimeout = null;
+  }
+
+  // Clear MIP state for fresh connection
+  session.mipId = null;
+  session.currentAnsiState = '';
 
   sendToClient(session, {
     type: 'system',
