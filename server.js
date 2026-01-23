@@ -567,6 +567,9 @@ function startTicker(session, ticker) {
           for (let i = 0; i < count; i++) {
             session.mudSocket.write(repeatCmd + '\r\n');
           }
+        } else if (cmd.startsWith('#')) {
+          // Client-side command from alias expansion - send back to client
+          sendToClient(session, { type: 'client_command', command: cmd });
         } else {
           session.mudSocket.write(cmd + '\r\n');
         }
@@ -1146,6 +1149,9 @@ function processLine(session, line) {
           for (let i = 0; i < count; i++) {
             session.mudSocket.write(repeatCmd + '\r\n');
           }
+        } else if (ec.startsWith('#')) {
+          // Client-side command from alias expansion - send back to client
+          sendToClient(session, { type: 'client_command', command: ec });
         } else {
           session.mudSocket.write(ec + '\r\n');
         }
@@ -1418,7 +1424,7 @@ wss.on('connection', (ws, req) => {
                 allExpanded.push(...expandCommand(c));
               });
 
-              // Send all expanded commands to MUD
+              // Send all expanded commands to MUD (or back to client for # commands)
               allExpanded.forEach(ec => {
                 // Check for #N command pattern (e.g., #15 e) - repeat command N times
                 const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
@@ -1428,6 +1434,9 @@ wss.on('connection', (ws, req) => {
                   for (let i = 0; i < count; i++) {
                     session.mudSocket.write(repeatCmd + '\r\n');
                   }
+                } else if (ec.startsWith('#')) {
+                  // Client-side command (like #delay, #showme, etc.) - send back to client
+                  sendToClient(session, { type: 'client_command', command: ec });
                 } else {
                   session.mudSocket.write(ec + '\r\n');
                 }
@@ -1557,6 +1566,9 @@ wss.on('connection', (ws, req) => {
                     for (let i = 0; i < count; i++) {
                       session.mudSocket.write(repeatCmd + '\r\n');
                     }
+                  } else if (ec.startsWith('#')) {
+                    // Client-side command from alias expansion - send back to client
+                    sendToClient(session, { type: 'client_command', command: ec });
                   } else {
                     session.mudSocket.write(ec + '\r\n');
                   }
