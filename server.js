@@ -9,6 +9,7 @@
 const WebSocket = require('ws');
 const net = require('net');
 const http = require('http');
+const https = require('https');
 
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
@@ -26,6 +27,61 @@ const sessions = new Map();
 // User+character session tracking: "userId:characterId" -> token
 // Used to close old sessions when same user+character connects from different device
 const userCharacterSessions = new Map();
+
+/**
+ * Send message to Discord webhook (fire and forget)
+ * Used for server-side notifications when browser is disconnected
+ */
+function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
+  if (!webhookUrl) return;
+
+  // Validate webhook URL
+  if (!webhookUrl.startsWith('https://discord.com/api/webhooks/') &&
+      !webhookUrl.startsWith('https://discordapp.com/api/webhooks/')) {
+    return;
+  }
+
+  // Sanitize message
+  const sanitizedMessage = message
+    .replace(/\x1b\[[0-9;]*m/g, '')  // Strip ANSI
+    .replace(/@(everyone|here)/gi, '@\u200b$1')  // Escape @everyone/@here
+    .replace(/<@[!&]?\d+>/g, '[mention]')  // Escape mentions
+    .substring(0, 1997) + (message.length > 1997 ? '...' : '');
+
+  const payload = JSON.stringify({
+    content: sanitizedMessage,
+    username: username
+  });
+
+  try {
+    const urlObj = new URL(webhookUrl);
+    const options = {
+      hostname: urlObj.hostname,
+      port: 443,
+      path: urlObj.pathname + urlObj.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      if (res.statusCode !== 204 && res.statusCode !== 200) {
+        console.error('Discord webhook error:', res.statusCode);
+      }
+    });
+
+    req.on('error', (e) => {
+      console.error('Discord webhook error:', e.message);
+    });
+
+    req.write(payload);
+    req.end();
+  } catch (e) {
+    console.error('Discord webhook exception:', e.message);
+  }
+}
 
 // Telnet protocol constants
 const TELNET = {
@@ -448,7 +504,12 @@ function createSession(token) {
       uptime: '',
       reboot: '',
       guildVars: {}
-    }
+    },
+
+    // Discord webhook settings (for server-side notifications when browser is closed)
+    discordWebhookUrl: null,
+    discordUsername: 'WMT Client',
+    discordChannelPrefs: {}  // channel name -> { discord: true/false }
   };
 }
 
@@ -645,6 +706,14 @@ function parseMipMessage(session, msgType, msgData) {
           rawText: rawText,
           message: formatted
         });
+
+        // Server-side Discord notification (works even when browser is closed)
+        if (session.discordWebhookUrl && rawText) {
+          const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
+          if (channelPrefs?.discord) {
+            sendToDiscordWebhook(session.discordWebhookUrl, rawText, session.discordUsername);
+          }
+        }
       }
       break;
 
@@ -680,6 +749,14 @@ function parseMipMessage(session, msgType, msgData) {
           rawText: rawText,
           message: formatted
         });
+
+        // Server-side Discord notification (works even when browser is closed)
+        if (session.discordWebhookUrl && rawText && channel) {
+          const channelPrefs = session.discordChannelPrefs[channel] || session.discordChannelPrefs[channel.toLowerCase()];
+          if (channelPrefs?.discord) {
+            sendToDiscordWebhook(session.discordWebhookUrl, rawText, session.discordUsername);
+          }
+        }
       }
       break;
 
@@ -1277,6 +1354,22 @@ wss.on('connection', (ws, req) => {
           session.mipId = data.mipId || null;
           session.mipDebug = data.debug || false;
           console.log(`MIP ${session.mipEnabled ? 'enabled' : 'disabled'}${session.mipId ? ' (ID: ' + session.mipId + ')' : ''}`);
+          break;
+
+        case 'set_discord_prefs':
+          // Store Discord preferences for server-side notifications
+          if (data.webhookUrl) {
+            // Validate webhook URL
+            if (data.webhookUrl.startsWith('https://discord.com/api/webhooks/') ||
+                data.webhookUrl.startsWith('https://discordapp.com/api/webhooks/')) {
+              session.discordWebhookUrl = data.webhookUrl;
+            }
+          } else {
+            session.discordWebhookUrl = null;
+          }
+          session.discordUsername = data.username || 'WMT Client';
+          session.discordChannelPrefs = data.channelPrefs || {};
+          console.log(`Discord prefs updated: webhook=${session.discordWebhookUrl ? 'set' : 'none'}, channels=${Object.keys(session.discordChannelPrefs).length}`);
           break;
 
         case 'set_server':
