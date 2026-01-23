@@ -21,9 +21,9 @@ class WMTClient {
         this.characterPassword = '';
         this.passwordSent = false;
 
-        // Tickers and delays (client-side only)
-        this.tickers = {};  // {name: {command, interval, timerId}}
-        this.delays = {};   // {name: {command, timerId}}
+        // Tickers (server-side, persistent) and delays (client-side only)
+        this.tickers = [];  // Array of ticker objects: {id, name, command, interval, enabled, class}
+        this.delays = {};   // {name: {command, timerId}} - still client-side
 
         // Variables for #var/#unvar (TinTin++ style)
         this.variables = {};
@@ -78,9 +78,8 @@ class WMTClient {
         this.chatIsDragging = false;
 
         // Channel preferences for ChatMon
-        // Format: { channelName: { sound: bool, hidden: bool, discord: bool } }
+        // Format: { channelName: { sound: bool, hidden: bool, discord: bool, webhookUrl: string } }
         this.channelPrefs = {};
-        this.discordWebhookUrl = '';
 
         // Current class being filled when reading scripts
         this.currentScriptClass = null;
@@ -116,6 +115,13 @@ class WMTClient {
                 this.aliases = aliasesData.aliases || [];
             }
 
+            // Load tickers
+            const tickersRes = await fetch('api/tickers.php?action=list');
+            const tickersData = await tickersRes.json();
+            if (tickersData.success) {
+                this.tickers = tickersData.tickers || [];
+            }
+
             // Load classes
             const classesRes = await fetch('api/classes.php?action=list');
             const classesData = await classesRes.json();
@@ -128,9 +134,8 @@ class WMTClient {
             const prefsData = await prefsRes.json();
             if (prefsData.success) {
                 this.preferences = prefsData.preferences || {};
-                // Load channel preferences
+                // Load channel preferences (each channel can have its own webhook)
                 this.channelPrefs = this.preferences.channelPrefs || {};
-                this.discordWebhookUrl = this.preferences.discordWebhookUrl || '';
             }
 
             // Load character password for auto-login
@@ -356,21 +361,30 @@ class WMTClient {
         });
     }
 
+    getFilteredTickers() {
+        const enabledClasses = this.getEnabledClassIds();
+        return this.tickers.filter(t => {
+            // If ticker is disabled, exclude
+            if (!t.enabled) return false;
+            // If no class assigned, always include
+            if (!t.class) return true;
+            // If class assigned, check if class is enabled
+            return enabledClasses.has(t.class);
+        });
+    }
+
     // Send filtered triggers and aliases to server
     sendFilteredTriggersAndAliases() {
         this.connection.setTriggers(this.getFilteredTriggers());
         this.connection.setAliases(this.getFilteredAliases());
+        this.connection.setTickers(this.getFilteredTickers());
         this.sendDiscordPrefsToServer();
     }
 
     // Send Discord preferences to server for server-side notifications (works when browser closed)
     sendDiscordPrefsToServer() {
         const charName = window.WMT_CONFIG?.characterName || 'WMT Client';
-        this.connection.setDiscordPrefs(
-            this.discordWebhookUrl,
-            this.channelPrefs,
-            charName
-        );
+        this.connection.setDiscordPrefs(this.channelPrefs, charName);
     }
 
     setupConnection() {
@@ -1436,14 +1450,11 @@ class WMTClient {
             this.playBell();
         }
 
-        // Send to Discord if enabled for this channel
-        if (prefs.discord && this.discordWebhookUrl && rawText) {
-            this.sendToDiscord(rawText);
-        }
+        // Discord is handled server-side (works even when browser is closed)
 
         // Track this channel for the settings UI
         if (channel && !this.channelPrefs[channelKey]) {
-            this.channelPrefs[channelKey] = { sound: false, hidden: false, discord: false };
+            this.channelPrefs[channelKey] = { sound: false, hidden: false, discord: false, webhookUrl: '' };
         }
 
         // Append to chat window
@@ -1493,51 +1504,17 @@ class WMTClient {
         }
     }
 
-    // Send message to Discord webhook
-    async sendToDiscord(message) {
-        if (!this.discordWebhookUrl) return;
 
-        try {
-            const proxyUrl = typeof WMT_CONFIG !== 'undefined' && WMT_CONFIG.wsUrl
-                ? WMT_CONFIG.wsUrl.replace('wss://', 'https://').replace('ws://', 'http://')
-                : '';
-
-            if (!proxyUrl) {
-                console.error('Cannot determine proxy URL for Discord webhook');
-                return;
-            }
-
-            const response = await fetch(proxyUrl + '/discord-webhook', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    webhookUrl: this.discordWebhookUrl,
-                    message: message,
-                    username: '3K ChatMon'
-                })
-            });
-
-            if (!response.ok) {
-                const data = await response.json();
-                console.error('Discord webhook failed:', data.error);
-            }
-        } catch (e) {
-            console.error('Failed to send to Discord:', e);
-        }
-    }
-
-    // Save channel preferences
+    // Save channel preferences (each channel can have its own webhook URL)
     async saveChannelPrefs() {
         try {
             this.preferences.channelPrefs = this.channelPrefs;
-            this.preferences.discordWebhookUrl = this.discordWebhookUrl;
             await fetch('api/preferences.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     preferences: {
-                        channelPrefs: this.channelPrefs,
-                        discordWebhookUrl: this.discordWebhookUrl
+                        channelPrefs: this.channelPrefs
                     }
                 })
             });
@@ -1562,24 +1539,43 @@ class WMTClient {
             } else {
                 channelList.innerHTML = channels.sort().map(channel => {
                     const prefs = this.channelPrefs[channel] || {};
+                    const webhookUrl = prefs.webhookUrl || '';
                     return `
                         <div class="channel-row" data-channel="${channel}">
-                            <span class="channel-name">${channel}</span>
-                            <label class="channel-option" title="Play sound on message">
-                                <input type="checkbox" class="channel-sound" ${prefs.sound ? 'checked' : ''}>
-                                <span class="channel-icon">🔔</span>
-                            </label>
-                            <label class="channel-option" title="Hide this channel">
-                                <input type="checkbox" class="channel-hidden" ${prefs.hidden ? 'checked' : ''}>
-                                <span class="channel-icon">👁️</span>
-                            </label>
-                            <label class="channel-option" title="Send to Discord">
-                                <input type="checkbox" class="channel-discord" ${prefs.discord ? 'checked' : ''}>
-                                <span class="channel-icon">📤</span>
-                            </label>
+                            <div class="channel-row-main">
+                                <span class="channel-name">${channel}</span>
+                                <label class="channel-option" title="Play sound on message">
+                                    <input type="checkbox" class="channel-sound" ${prefs.sound ? 'checked' : ''}>
+                                    <span class="channel-icon">🔔</span>
+                                </label>
+                                <label class="channel-option" title="Hide this channel">
+                                    <input type="checkbox" class="channel-hidden" ${prefs.hidden ? 'checked' : ''}>
+                                    <span class="channel-icon">👁️</span>
+                                </label>
+                                <label class="channel-option" title="Send to Discord">
+                                    <input type="checkbox" class="channel-discord" ${prefs.discord ? 'checked' : ''}>
+                                    <span class="channel-icon">📤</span>
+                                </label>
+                            </div>
+                            <div class="channel-webhook-row" style="display: ${prefs.discord ? 'flex' : 'none'};">
+                                <input type="text" class="channel-webhook"
+                                    placeholder="Discord webhook URL for ${channel}..."
+                                    value="${webhookUrl}">
+                            </div>
                         </div>
                     `;
                 }).join('');
+
+                // Add event listeners to toggle webhook input visibility
+                channelList.querySelectorAll('.channel-discord').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => {
+                        const row = e.target.closest('.channel-row');
+                        const webhookRow = row.querySelector('.channel-webhook-row');
+                        if (webhookRow) {
+                            webhookRow.style.display = e.target.checked ? 'flex' : 'none';
+                        }
+                    });
+                });
             }
         }
 
@@ -1602,7 +1598,8 @@ class WMTClient {
             const sound = row.querySelector('.channel-sound')?.checked || false;
             const hidden = row.querySelector('.channel-hidden')?.checked || false;
             const discord = row.querySelector('.channel-discord')?.checked || false;
-            this.channelPrefs[channel] = { sound, hidden, discord };
+            const webhookUrl = row.querySelector('.channel-webhook')?.value?.trim() || '';
+            this.channelPrefs[channel] = { sound, hidden, discord, webhookUrl };
         });
         this.saveChannelPrefs();
         this.closeChannelSettingsModal();
@@ -2763,7 +2760,8 @@ class WMTClient {
         this.classes.forEach(cls => {
             const classTrigs = this.triggers.filter(t => t.class === cls.id);
             const classAliases = this.aliases.filter(a => a.class === cls.id);
-            const itemCount = classTrigs.length + classAliases.length;
+            const classTickers = this.tickers.filter(t => t.class === cls.id);
+            const itemCount = classTrigs.length + classAliases.length + classTickers.length;
             const isEnabled = cls.enabled !== false;
             const isExpanded = cls._expanded !== false; // Default to expanded
 
@@ -2780,7 +2778,7 @@ class WMTClient {
                         </div>
                     </div>
                     <div class="class-items">
-                        ${this.renderClassItems(classTrigs, classAliases)}
+                        ${this.renderClassItems(classTrigs, classAliases, classTickers)}
                     </div>
                 </div>
             `;
@@ -2789,18 +2787,19 @@ class WMTClient {
         // Render unassigned items
         const unassignedTrigs = this.triggers.filter(t => !t.class);
         const unassignedAliases = this.aliases.filter(a => !a.class);
+        const unassignedTickers = this.tickers.filter(t => !t.class);
 
-        if (unassignedTrigs.length > 0 || unassignedAliases.length > 0) {
+        if (unassignedTrigs.length > 0 || unassignedAliases.length > 0 || unassignedTickers.length > 0) {
             html += `
                 <div class="unassigned-section">
-                    <div class="unassigned-header">Unassigned (${unassignedTrigs.length + unassignedAliases.length})</div>
-                    ${this.renderClassItems(unassignedTrigs, unassignedAliases)}
+                    <div class="unassigned-header">Unassigned (${unassignedTrigs.length + unassignedAliases.length + unassignedTickers.length})</div>
+                    ${this.renderClassItems(unassignedTrigs, unassignedAliases, unassignedTickers)}
                 </div>
             `;
         }
 
         // Empty state
-        if (this.classes.length === 0 && unassignedTrigs.length === 0 && unassignedAliases.length === 0) {
+        if (this.classes.length === 0 && unassignedTrigs.length === 0 && unassignedAliases.length === 0 && unassignedTickers.length === 0) {
             html += `
                 <div class="empty-state" style="padding: 20px;">
                     <p>No scripts yet.</p>
@@ -2812,7 +2811,7 @@ class WMTClient {
         content.innerHTML = html;
     }
 
-    renderClassItems(triggers, aliases) {
+    renderClassItems(triggers, aliases, tickers = []) {
         let html = '';
 
         triggers.forEach(t => {
@@ -2843,6 +2842,20 @@ class WMTClient {
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleAliasById('${a.id}')"></div>
                     <div class="script-item-actions">
                         <button onclick="wmtClient.deleteAliasById('${a.id}')" title="Delete">×</button>
+                    </div>
+                </div>
+            `;
+        });
+
+        tickers.forEach(t => {
+            const isEnabled = t.enabled !== false;
+            html += `
+                <div class="script-item ${isEnabled ? '' : 'disabled'}" data-type="ticker" data-id="${t.id}">
+                    <span class="script-item-icon ticker">K</span>
+                    <span class="script-item-name" onclick="wmtClient.editTickerById('${t.id}')" title="${this.escapeHtml(t.command)} (${t.interval}s)">${this.escapeHtml(t.name || t.command)}</span>
+                    <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleTickerEnabled('${t.id}')"></div>
+                    <div class="script-item-actions">
+                        <button onclick="wmtClient.deleteTickerById('${t.id}')" title="Delete">×</button>
                     </div>
                 </div>
             `;
@@ -3639,24 +3652,40 @@ class WMTClient {
         this.editingHighlightIndex = null;
     }
 
-    // Open ticker modal
-    openTickerModal() {
+    // Open ticker modal (editIndex is the ticker id to edit, or null for new)
+    openTickerModal(editId = null) {
         const modal = document.getElementById('ticker-modal');
         if (!modal) return;
 
-        // Reset form
-        document.getElementById('ticker-name').value = '';
-        document.getElementById('ticker-command').value = '';
-        document.getElementById('ticker-interval').value = '60';
+        this.editingTickerId = editId;
+        const ticker = editId ? this.tickers.find(t => t.id === editId) : null;
+
+        // Set form values
+        document.getElementById('ticker-name').value = ticker?.name || '';
+        document.getElementById('ticker-command').value = ticker?.command || '';
+        document.getElementById('ticker-interval').value = ticker?.interval || '60';
+
+        // Update class dropdown
+        const classSelect = document.getElementById('ticker-class');
+        if (classSelect) {
+            classSelect.innerHTML = this.renderClassOptions(ticker?.class);
+        }
+
+        // Update modal title
+        const title = modal.querySelector('h3');
+        if (title) {
+            title.textContent = editId ? 'Edit Ticker' : 'New Ticker';
+        }
 
         modal.classList.add('open');
     }
 
     // Save ticker from modal
-    saveTicker() {
+    async saveTicker() {
         const name = document.getElementById('ticker-name').value.trim();
         const command = document.getElementById('ticker-command').value.trim();
         const interval = parseFloat(document.getElementById('ticker-interval').value);
+        const tickerClass = document.getElementById('ticker-class')?.value || null;
 
         if (!name) {
             alert('Name is required');
@@ -3666,14 +3695,57 @@ class WMTClient {
             alert('Command is required');
             return;
         }
-        if (isNaN(interval) || interval <= 0) {
-            alert('Interval must be a positive number');
+        if (isNaN(interval) || interval < 1) {
+            alert('Interval must be at least 1 second');
             return;
         }
 
-        // Create ticker using existing command
-        this.cmdTicker([name, command, interval.toString()]);
+        if (this.editingTickerId) {
+            // Update existing ticker
+            const ticker = this.tickers.find(t => t.id === this.editingTickerId);
+            if (ticker) {
+                ticker.name = name;
+                ticker.command = command;
+                ticker.interval = interval;
+                ticker.class = tickerClass || null;
+            }
+        } else {
+            // Create new ticker
+            const ticker = {
+                id: 'ticker_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+                name: name,
+                command: command,
+                interval: interval,
+                enabled: true,
+                class: tickerClass || null
+            };
+            this.tickers.push(ticker);
+        }
+
+        await this.saveTickers();
         this.closeModal();
+        this.editingTickerId = null;
+    }
+
+    // Edit ticker by id
+    editTickerById(id) {
+        this.openTickerModal(id);
+    }
+
+    // Delete ticker by id
+    async deleteTickerById(id) {
+        if (!confirm('Delete this ticker?')) return;
+        this.tickers = this.tickers.filter(t => t.id !== id);
+        await this.saveTickers();
+    }
+
+    // Toggle ticker enabled/disabled
+    async toggleTickerEnabled(id) {
+        const ticker = this.tickers.find(t => t.id === id);
+        if (ticker) {
+            ticker.enabled = !ticker.enabled;
+            await this.saveTickers();
+        }
     }
 
     async saveAlias() {
@@ -3745,6 +3817,23 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save aliases:', e);
+        }
+    }
+
+    async saveTickers() {
+        try {
+            await fetch('api/tickers.php?action=save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tickers: this.tickers })
+            });
+            this.sendFilteredTriggersAndAliases();
+            // Refresh sidebar if open
+            if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                this.renderScriptsSidebar();
+            }
+        } catch (e) {
+            console.error('Failed to save tickers:', e);
         }
     }
 
@@ -3919,16 +4008,11 @@ class WMTClient {
 
             <div class="settings-section">
                 <h4>ChatMon</h4>
-                <div class="form-group">
-                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Discord Webhook URL</label>
-                    <input type="text" id="pref-discord-webhook" placeholder="https://discord.com/api/webhooks/..."
-                        value="${this.discordWebhookUrl || ''}"
-                        style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px; font-size: 12px;">
-                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">
-                        Forward chat channels to Discord. Configure per-channel settings via the gear icon in ChatMon.
-                    </p>
-                </div>
-                <button class="settings-btn" id="channel-settings-btn" style="margin-top: 5px;">Channel Settings</button>
+                <p class="settings-hint" style="font-size: 12px; color: #888; margin-bottom: 10px;">
+                    Configure sounds, visibility, and Discord webhooks for each channel.
+                    Each channel can have its own Discord webhook URL.
+                </p>
+                <button class="settings-btn" id="channel-settings-btn">Channel Settings</button>
             </div>
 
             <div class="settings-section">
@@ -4033,12 +4117,6 @@ class WMTClient {
         // MIP reload button
         document.getElementById('mip-reload-btn')?.addEventListener('click', () => {
             this.cmdMip(['reload']);
-        });
-
-        // Discord webhook URL - save on blur
-        document.getElementById('pref-discord-webhook')?.addEventListener('blur', (e) => {
-            this.discordWebhookUrl = e.target.value.trim();
-            this.saveChannelPrefs();
         });
 
         // Notification sound dropdown
@@ -4741,17 +4819,18 @@ class WMTClient {
     }
 
     // #ticker {name} {command} {interval}
+    // #ticker {name} {command} {interval} - Create/update a ticker (server-side, persistent)
     cmdTicker(args) {
         if (args.length < 3) {
             // List tickers
-            const names = Object.keys(this.tickers);
-            if (names.length === 0) {
-                this.appendOutput('No tickers running.', 'system');
+            if (this.tickers.length === 0) {
+                this.appendOutput('No tickers configured.', 'system');
             } else {
-                this.appendOutput('Active tickers:', 'system');
-                names.forEach(name => {
-                    const t = this.tickers[name];
-                    this.appendOutput(`  ${name}: ${t.command} (every ${t.interval}s)`, 'system');
+                this.appendOutput('Tickers:', 'system');
+                this.tickers.forEach(t => {
+                    const status = t.enabled ? 'ON' : 'OFF';
+                    const classInfo = t.class ? ` [${t.class}]` : '';
+                    this.appendOutput(`  ${t.name}: ${t.command} (every ${t.interval}s) [${status}]${classInfo}`, 'system');
                 });
             }
             return;
@@ -4761,25 +4840,37 @@ class WMTClient {
         const command = args[1];
         const interval = parseFloat(args[2]);
 
-        if (isNaN(interval) || interval < 0.1) {
-            this.appendOutput('Interval must be at least 0.1 seconds', 'error');
+        if (isNaN(interval) || interval < 1) {
+            this.appendOutput('Interval must be at least 1 second', 'error');
             return;
         }
 
-        // Stop existing ticker with same name
-        if (this.tickers[name]) {
-            clearInterval(this.tickers[name].timerId);
+        // Check if ticker with this name exists
+        const existing = this.tickers.find(t => t.name.toLowerCase() === name.toLowerCase());
+        if (existing) {
+            // Update existing
+            existing.command = command;
+            existing.interval = interval;
+            existing.enabled = true;
+            this.appendOutput(`Ticker updated: ${name} (${command} every ${interval}s)`, 'system');
+        } else {
+            // Create new
+            const ticker = {
+                id: 'ticker_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+                name: name,
+                command: command,
+                interval: interval,
+                enabled: true,
+                class: null
+            };
+            this.tickers.push(ticker);
+            this.appendOutput(`Ticker created: ${name} (${command} every ${interval}s)`, 'system');
         }
 
-        const timerId = setInterval(() => {
-            this.connection.sendCommand(command);
-        }, interval * 1000);
-
-        this.tickers[name] = { command, interval, timerId };
-        this.appendOutput(`Ticker started: ${name} (${command} every ${interval}s)`, 'system');
+        this.saveTickers();
     }
 
-    // #unticker {name}
+    // #unticker {name} - Disable/delete a ticker
     cmdUnticker(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unticker {name}', 'error');
@@ -4787,10 +4878,13 @@ class WMTClient {
         }
 
         const name = args[0];
-        if (this.tickers[name]) {
-            clearInterval(this.tickers[name].timerId);
-            delete this.tickers[name];
-            this.appendOutput(`Ticker stopped: ${name}`, 'system');
+        const ticker = this.tickers.find(t => t.name.toLowerCase() === name.toLowerCase());
+
+        if (ticker) {
+            // Toggle enabled off (or delete if you prefer)
+            ticker.enabled = false;
+            this.appendOutput(`Ticker disabled: ${name}`, 'system');
+            this.saveTickers();
         } else {
             this.appendOutput(`Ticker not found: ${name}`, 'error');
         }

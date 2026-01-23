@@ -167,6 +167,10 @@ class MudConnection {
         return this.send('set_aliases', { aliases });
     }
 
+    setTickers(tickers) {
+        return this.send('set_tickers', { tickers });
+    }
+
     setMip(enabled, mipId, debug = false) {
         return this.send('set_mip', { enabled, mipId, debug });
     }
@@ -175,8 +179,8 @@ class MudConnection {
         return this.send('set_server', { host, port });
     }
 
-    setDiscordPrefs(webhookUrl, channelPrefs, username = 'WMT Client') {
-        return this.send('set_discord_prefs', { webhookUrl, channelPrefs, username });
+    setDiscordPrefs(channelPrefs, username = 'WMT Client') {
+        return this.send('set_discord_prefs', { channelPrefs, username });
     }
 
     reconnect() {

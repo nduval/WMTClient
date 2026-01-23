@@ -865,13 +865,45 @@ body {
 
 .channel-row {
     display: flex;
-    align-items: center;
-    gap: 15px;
+    flex-direction: column;
+    gap: 8px;
     padding: 10px 12px;
     background: var(--bg-darker);
     border-radius: 6px;
     margin-bottom: 8px;
     border: 1px solid var(--border-color);
+}
+
+.channel-row-main {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    width: 100%;
+}
+
+.channel-webhook-row {
+    display: flex;
+    width: 100%;
+}
+
+.channel-webhook {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-color);
+    font-size: 12px;
+    font-family: var(--font-mono);
+}
+
+.channel-webhook:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.channel-webhook::placeholder {
+    color: var(--text-muted);
 }
 
 .channel-name {
@@ -1273,6 +1305,10 @@ body {
 
 .script-item-icon.substitute {
     color: #88ccff;
+}
+
+.script-item-icon.ticker {
+    color: #66ff99;
 }
 
 .script-item-name {

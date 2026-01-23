@@ -518,7 +518,7 @@ $wsToken = $_SESSION['ws_token'];
     <div class="modal-overlay" id="ticker-modal">
         <div class="modal">
             <div class="modal-header">
-                <h3>Ticker</h3>
+                <h3>New Ticker</h3>
                 <button class="panel-close" onclick="wmtClient.closeModal()">&times;</button>
             </div>
             <div class="modal-body">
@@ -532,11 +532,16 @@ $wsToken = $_SESSION['ws_token'];
                 </div>
                 <div class="form-group">
                     <label for="ticker-interval">Interval (seconds) *</label>
-                    <input type="number" id="ticker-interval" min="1" step="0.5" value="60" placeholder="60">
+                    <input type="number" id="ticker-interval" min="1" step="1" value="60" placeholder="60">
+                </div>
+                <div class="form-group">
+                    <label for="ticker-class">Class (optional)</label>
+                    <select id="ticker-class"></select>
                 </div>
                 <div class="help-text" style="font-size:0.85em; color:#888; padding:10px; background:#111; border-radius:4px;">
-                    Tickers run client-side and will repeat the command(s) at the specified interval.<br>
-                    Separate multiple commands with semicolons. Use <code>#unticker {name}</code> to stop.
+                    Tickers run server-side and persist across sessions.<br>
+                    They continue running even when your browser is closed.<br>
+                    Assign to a class to enable/disable with other automation.
                 </div>
             </div>
             <div class="modal-footer">

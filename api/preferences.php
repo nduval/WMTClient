@@ -151,11 +151,23 @@ switch ($action) {
                 $channel = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '', substr($channel, 0, 50)));
                 if (empty($channel)) continue;
 
-                $validatedChannels[$channel] = [
+                $channelData = [
                     'sound' => isset($prefs['sound']) ? (bool)$prefs['sound'] : false,
                     'hidden' => isset($prefs['hidden']) ? (bool)$prefs['hidden'] : false,
-                    'discord' => isset($prefs['discord']) ? (bool)$prefs['discord'] : false
+                    'discord' => isset($prefs['discord']) ? (bool)$prefs['discord'] : false,
+                    'webhookUrl' => ''
                 ];
+
+                // Validate webhook URL if provided
+                if (isset($prefs['webhookUrl']) && is_string($prefs['webhookUrl'])) {
+                    $url = trim($prefs['webhookUrl']);
+                    if ($url === '' ||
+                        preg_match('#^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$#', $url)) {
+                        $channelData['webhookUrl'] = $url;
+                    }
+                }
+
+                $validatedChannels[$channel] = $channelData;
             }
             $validated['channelPrefs'] = $validatedChannels;
         }

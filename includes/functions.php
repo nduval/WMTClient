@@ -254,6 +254,13 @@ function getAliasesPath(string $userId, string $characterId): string {
 }
 
 /**
+ * Get character's tickers file path
+ */
+function getTickersPath(string $userId, string $characterId): string {
+    return getCharacterDataPath($userId, $characterId) . '/tickers.json';
+}
+
+/**
  * Get character's preferences file path
  */
 function getPreferencesPath(string $userId, string $characterId): string {
@@ -329,6 +336,7 @@ function createCharacter(string $userId, string $characterName, string $server =
     // Initialize character data files
     saveJsonFile(getTriggersPath($userId, $characterId), []);
     saveJsonFile(getAliasesPath($userId, $characterId), []);
+    saveJsonFile(getTickersPath($userId, $characterId), []);
     saveJsonFile(getPreferencesPath($userId, $characterId), [
         'fontFamily' => DEFAULT_FONT_FAMILY,
         'fontSize' => DEFAULT_FONT_SIZE,
