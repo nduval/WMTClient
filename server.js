@@ -186,6 +186,10 @@ setInterval(() => {
   const now = Date.now();
   for (const [token, session] of sessions) {
     if (!session.ws && session.disconnectedAt) {
+      // Skip timeout for wizard accounts (game devs who may idle for long periods)
+      if (session.isWizard) {
+        continue;
+      }
       const elapsed = now - session.disconnectedAt;
       if (elapsed > SESSION_TIMEOUT_MS) {
         console.log(`Session timeout for token ${token.substring(0, 8)}... (${Math.round(elapsed / 1000)}s without browser)`);
@@ -1093,6 +1097,7 @@ wss.on('connection', (ws, req) => {
           const token = data.token;
           const userId = data.userId;
           const characterId = data.characterId;
+          const isWizard = data.isWizard || false;
 
           if (!token || token.length !== 64) {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid auth token' }));
@@ -1150,6 +1155,7 @@ wss.on('connection', (ws, req) => {
             session.ws = ws;
             session.disconnectedAt = null;
             session.explicitDisconnect = false;
+            session.isWizard = isWizard;  // Update wizard status on reconnect
             if (session.timeoutHandle) {
               clearTimeout(session.timeoutHandle);
               session.timeoutHandle = null;
@@ -1180,9 +1186,10 @@ wss.on('connection', (ws, req) => {
             session.ws = ws;
             session.userId = userId;
             session.characterId = characterId;
+            session.isWizard = isWizard;
             sessions.set(token, session);
 
-            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterId})`);
+            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterId}, wizard: ${isWizard})`);
 
             ws.send(JSON.stringify({
               type: 'session_new'
