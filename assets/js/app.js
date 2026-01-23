@@ -2051,6 +2051,9 @@ class WMTClient {
 
         if (input) {
             input.addEventListener('keydown', (e) => this.handleInputKeydown(e));
+            // Reset history search when user types/modifies input
+            // This ensures up arrow starts fresh after any text change
+            input.addEventListener('input', () => this.resetHistorySearch());
         }
 
         if (sendBtn) {
