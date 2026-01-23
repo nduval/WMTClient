@@ -507,9 +507,9 @@ function createSession(token) {
     },
 
     // Discord webhook settings (for server-side notifications when browser is closed)
-    discordWebhookUrl: null,
+    // Each channel can have its own webhook: { channelName: { discord: bool, webhookUrl: string } }
     discordUsername: 'WMT Client',
-    discordChannelPrefs: {}  // channel name -> { discord: true/false }
+    discordChannelPrefs: {}
   };
 }
 
@@ -708,10 +708,10 @@ function parseMipMessage(session, msgType, msgData) {
         });
 
         // Server-side Discord notification (works even when browser is closed)
-        if (session.discordWebhookUrl && rawText) {
+        if (rawText) {
           const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
-          if (channelPrefs?.discord) {
-            sendToDiscordWebhook(session.discordWebhookUrl, rawText, session.discordUsername);
+          if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+            sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
           }
         }
       }
@@ -751,10 +751,10 @@ function parseMipMessage(session, msgType, msgData) {
         });
 
         // Server-side Discord notification (works even when browser is closed)
-        if (session.discordWebhookUrl && rawText && channel) {
+        if (rawText && channel) {
           const channelPrefs = session.discordChannelPrefs[channel] || session.discordChannelPrefs[channel.toLowerCase()];
-          if (channelPrefs?.discord) {
-            sendToDiscordWebhook(session.discordWebhookUrl, rawText, session.discordUsername);
+          if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+            sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
           }
         }
       }
@@ -1358,18 +1358,30 @@ wss.on('connection', (ws, req) => {
 
         case 'set_discord_prefs':
           // Store Discord preferences for server-side notifications
-          if (data.webhookUrl) {
-            // Validate webhook URL
-            if (data.webhookUrl.startsWith('https://discord.com/api/webhooks/') ||
-                data.webhookUrl.startsWith('https://discordapp.com/api/webhooks/')) {
-              session.discordWebhookUrl = data.webhookUrl;
-            }
-          } else {
-            session.discordWebhookUrl = null;
-          }
+          // Each channel can have its own webhook URL
           session.discordUsername = data.username || 'WMT Client';
-          session.discordChannelPrefs = data.channelPrefs || {};
-          console.log(`Discord prefs updated: webhook=${session.discordWebhookUrl ? 'set' : 'none'}, channels=${Object.keys(session.discordChannelPrefs).length}`);
+          session.discordChannelPrefs = {};
+
+          // Validate and store per-channel webhook URLs
+          const channelPrefs = data.channelPrefs || {};
+          let webhookCount = 0;
+          for (const [channel, prefs] of Object.entries(channelPrefs)) {
+            session.discordChannelPrefs[channel] = {
+              sound: prefs.sound || false,
+              hidden: prefs.hidden || false,
+              discord: prefs.discord || false,
+              webhookUrl: null
+            };
+            // Validate webhook URL if provided
+            if (prefs.webhookUrl && prefs.discord) {
+              if (prefs.webhookUrl.startsWith('https://discord.com/api/webhooks/') ||
+                  prefs.webhookUrl.startsWith('https://discordapp.com/api/webhooks/')) {
+                session.discordChannelPrefs[channel].webhookUrl = prefs.webhookUrl;
+                webhookCount++;
+              }
+            }
+          }
+          console.log(`Discord prefs updated: ${webhookCount} channel(s) with webhooks, ${Object.keys(session.discordChannelPrefs).length} total channels`);
           break;
 
         case 'set_server':
