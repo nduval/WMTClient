@@ -1042,7 +1042,7 @@ function processLine(session, line) {
     });
   }
 
-  // Execute trigger commands
+  // Execute trigger commands (with alias expansion)
   processed.commands.forEach(cmd => {
     if (cmd.startsWith('#')) {
       sendToClient(session, {
@@ -1050,7 +1050,21 @@ function processLine(session, line) {
         command: cmd
       });
     } else if (session.mudSocket && !session.mudSocket.destroyed) {
-      session.mudSocket.write(cmd + '\r\n');
+      // Expand aliases before sending to MUD
+      const expanded = expandCommandWithAliases(cmd, session.aliases || []);
+      expanded.forEach(ec => {
+        // Check for #N command pattern (e.g., #15 e) - repeat command N times
+        const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+        if (repeatMatch) {
+          const count = Math.min(parseInt(repeatMatch[1]), 100);
+          const repeatCmd = repeatMatch[2];
+          for (let i = 0; i < count; i++) {
+            session.mudSocket.write(repeatCmd + '\r\n');
+          }
+        } else {
+          session.mudSocket.write(ec + '\r\n');
+        }
+      });
     }
   });
 }
@@ -1435,7 +1449,7 @@ wss.on('connection', (ws, req) => {
               test: true  // Flag so client knows this is test output
             });
 
-            // Execute any trigger commands
+            // Execute any trigger commands (with alias expansion)
             processed.commands.forEach(cmd => {
               if (cmd.startsWith('#')) {
                 sendToClient(session, {
@@ -1443,7 +1457,20 @@ wss.on('connection', (ws, req) => {
                   command: cmd
                 });
               } else if (session.mudSocket && !session.mudSocket.destroyed) {
-                session.mudSocket.write(cmd + '\r\n');
+                // Expand aliases before sending to MUD
+                const expanded = expandCommandWithAliases(cmd, session.aliases || []);
+                expanded.forEach(ec => {
+                  const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+                  if (repeatMatch) {
+                    const count = Math.min(parseInt(repeatMatch[1]), 100);
+                    const repeatCmd = repeatMatch[2];
+                    for (let i = 0; i < count; i++) {
+                      session.mudSocket.write(repeatCmd + '\r\n');
+                    }
+                  } else {
+                    session.mudSocket.write(ec + '\r\n');
+                  }
+                });
               }
             });
           }
@@ -1830,6 +1857,31 @@ function processAliases(command, aliases) {
     }
   }
   return command;
+}
+
+/**
+ * Recursively expand aliases in a command string
+ * Returns an array of fully-expanded commands
+ */
+function expandCommandWithAliases(cmd, aliases, depth = 0) {
+  if (depth > 10) return [cmd];  // Prevent infinite loops
+  const trimmed = cmd.trim();
+  if (!trimmed) return [];
+
+  const expanded = processAliases(trimmed, aliases);
+  if (expanded === trimmed) {
+    // No alias matched, return as-is
+    return [trimmed];
+  }
+
+  // Alias matched - the result might contain semicolons
+  // Split and recursively expand each part
+  const parts = parseCommands(expanded);
+  const results = [];
+  parts.forEach(part => {
+    results.push(...expandCommandWithAliases(part, aliases, depth + 1));
+  });
+  return results;
 }
 
 /**
