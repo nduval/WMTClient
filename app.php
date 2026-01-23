@@ -22,6 +22,7 @@ $characterId = getCurrentCharacterId();
 $characterName = getCurrentCharacterName();
 $characterServer = getCurrentCharacterServer();
 $characters = getCharacters($userId);
+$isWizard = isUserWizard($userId);
 
 // Determine MUD host/port based on character server
 $mudHost = MUD_HOST;
@@ -643,7 +644,8 @@ $wsToken = $_SESSION['ws_token'];
             characterServer: '<?= $characterServer ?>',
             csrfToken: '<?= generateCsrfToken() ?>',
             newMudChar: '<?= htmlspecialchars($newMudChar, ENT_QUOTES) ?>',
-            wsToken: '<?= $wsToken ?>'
+            wsToken: '<?= $wsToken ?>',
+            isWizard: <?= $isWizard ? 'true' : 'false' ?>
         };
     </script>
     <script src="assets/js/connection.js?v=<?= filemtime('assets/js/connection.js') ?>"></script>

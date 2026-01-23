@@ -115,24 +115,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 break;
 
-            case 'reset_password':
-                $targetUserId = $_POST['user_id'] ?? '';
-                $newPassword = $_POST['new_password'] ?? '';
-                if ($targetUserId && $newPassword) {
-                    $result = adminResetPassword($targetUserId, $newPassword);
-                    if ($result['success']) {
-                        $message = 'Password reset for: ' . $result['username'];
-                        $messageType = 'success';
-                    } else {
-                        $message = 'Reset failed: ' . $result['error'];
-                        $messageType = 'error';
-                    }
-                } else {
-                    $message = 'User ID and new password are required';
-                    $messageType = 'error';
-                }
-                break;
-
             case 'send_reset_email':
                 require_once __DIR__ . '/includes/email.php';
                 $targetUserId = $_POST['user_id'] ?? '';
@@ -146,6 +128,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $messageType = 'success';
                     } else {
                         $message = 'Send failed: ' . $result['error'];
+                        $messageType = 'error';
+                    }
+                } else {
+                    $message = 'User ID is required';
+                    $messageType = 'error';
+                }
+                break;
+
+            case 'toggle_wizard':
+                $targetUserId = $_POST['user_id'] ?? '';
+                if ($targetUserId) {
+                    $currentStatus = isUserWizard($targetUserId);
+                    $newStatus = !$currentStatus;
+                    if (setUserWizard($targetUserId, $newStatus)) {
+                        $user = findUserById($targetUserId);
+                        $message = ($newStatus ? 'Enabled' : 'Disabled') . ' wizard status for: ' . ($user['username'] ?? $targetUserId);
+                        $messageType = 'success';
+                    } else {
+                        $message = 'Failed to update wizard status';
                         $messageType = 'error';
                     }
                 } else {
@@ -464,48 +465,6 @@ function deleteUserAccount(string $userId, string $confirmUsername): array {
     return ['success' => true, 'username' => $username];
 }
 
-function adminResetPassword(string $userId, string $newPassword): array {
-    if (strlen($newPassword) < 6) {
-        return ['success' => false, 'error' => 'Password must be at least 6 characters'];
-    }
-
-    // Find user in index
-    $users = loadUsersIndex();
-    $userIndex = -1;
-    $username = '';
-
-    foreach ($users as $i => $user) {
-        if ($user['id'] === $userId) {
-            $userIndex = $i;
-            $username = $user['username'];
-            break;
-        }
-    }
-
-    if ($userIndex === -1) {
-        return ['success' => false, 'error' => 'User not found'];
-    }
-
-    // Hash the new password
-    $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
-
-    // Update in users index
-    $users[$userIndex]['password'] = $passwordHash;
-    if (!saveUsersIndex($users)) {
-        return ['success' => false, 'error' => 'Failed to update users index'];
-    }
-
-    // Also update in user's profile.json for consistency
-    $profilePath = getUserDataPath($userId) . '/profile.json';
-    if (file_exists($profilePath)) {
-        $profile = loadJsonFile($profilePath);
-        $profile['password_hash'] = $passwordHash;
-        saveJsonFile($profilePath, $profile);
-    }
-
-    return ['success' => true, 'username' => $username];
-}
-
 function getAdminEmail(): string {
     $adminUser = findUserByUsername(getCurrentUsername());
     return $adminUser['email'] ?? '';
@@ -717,6 +676,20 @@ $backups = getBackupFiles();
 
         .btn-secondary:hover {
             background: #444;
+        }
+
+        .btn-info {
+            background: #00cccc;
+            color: #000;
+        }
+
+        .btn-info:hover {
+            background: #00aaaa;
+        }
+
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 12px;
         }
 
         .message {
@@ -950,12 +923,16 @@ $backups = getBackupFiles();
                         <?php foreach ($usersIndex as $user):
                             $stats = getUserStorageStats($user['id']);
                             $isAdmin = in_array($user['username'], $ADMIN_USERS);
+                            $isWizard = $user['isWizard'] ?? false;
                         ?>
                             <tr>
                                 <td>
                                     <?= htmlspecialchars($user['username']) ?>
                                     <?php if ($isAdmin): ?>
                                         <span style="color: #ff6600; font-size: 11px;">(admin)</span>
+                                    <?php endif; ?>
+                                    <?php if ($isWizard): ?>
+                                        <span style="color: #00ffff; font-size: 11px;">(wizard)</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -984,27 +961,34 @@ $backups = getBackupFiles();
                                         <span style="color: #666;">Never</span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="white-space: nowrap;">
-                                    <?php if (!empty($user['email'])): ?>
-                                        <form method="post" style="display: inline;" onsubmit="return confirm('Send password reset email to <?= htmlspecialchars($user['email']) ?>?');">
+                                <td>
+                                    <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+                                        <?php if (!empty($user['email'])): ?>
+                                            <form method="post" style="margin: 0;" onsubmit="return confirm('Send password reset email to <?= htmlspecialchars($user['email']) ?>?');">
+                                                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+                                                <input type="hidden" name="action" value="send_reset_email">
+                                                <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
+                                                <button type="submit" class="btn btn-primary btn-sm" title="Send reset email to <?= htmlspecialchars($user['email']) ?>">
+                                                    Email Reset
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                        <form method="post" style="margin: 0;">
                                             <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                                            <input type="hidden" name="action" value="send_reset_email">
+                                            <input type="hidden" name="action" value="toggle_wizard">
                                             <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
-                                            <button type="submit" class="btn btn-primary" style="margin-right: 5px;" title="Send reset email to <?= htmlspecialchars($user['email']) ?>">
-                                                Email Reset
+                                            <button type="submit" class="btn btn-sm <?= $isWizard ? 'btn-info' : 'btn-secondary' ?>"
+                                                    title="<?= $isWizard ? 'Disable wizard (enable session timeout)' : 'Enable wizard (disable session timeout)' ?>">
+                                                <?= $isWizard ? '★ Wiz' : '☆ Wiz' ?>
                                             </button>
                                         </form>
-                                    <?php endif; ?>
-                                    <button type="button" class="btn btn-warning" style="margin-right: 5px;"
-                                            onclick="showResetPasswordModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">
-                                        Set PW
-                                    </button>
-                                    <?php if (!$isAdmin): ?>
-                                        <button type="button" class="btn btn-danger"
-                                                onclick="showDeleteModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">
-                                            Delete
-                                        </button>
-                                    <?php endif; ?>
+                                        <?php if (!$isAdmin): ?>
+                                            <button type="button" class="btn btn-danger btn-sm"
+                                                    onclick="showDeleteModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">
+                                                Delete
+                                            </button>
+                                        <?php endif; ?>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1104,31 +1088,6 @@ $backups = getBackupFiles();
         </div>
     </div>
 
-    <!-- Reset Password Modal -->
-    <div id="resetPasswordModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
-        <div style="background: #1a1a1a; border: 1px solid #ff9900; border-radius: 8px; padding: 25px; width: 100%; max-width: 450px;">
-            <h3 style="margin: 0 0 20px 0; color: #ff9900;">Reset User Password</h3>
-            <p style="color: #ccc; margin-bottom: 15px;">
-                Reset password for: <strong id="resetModalUsername" style="color: #fff;"></strong>
-            </p>
-            <form method="post" id="resetPasswordForm">
-                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                <input type="hidden" name="action" value="reset_password">
-                <input type="hidden" name="user_id" id="resetModalUserId">
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; color: #ccc;">New Password:</label>
-                    <input type="text" name="new_password" id="resetModalPassword" required autocomplete="off"
-                           style="width: 100%; padding: 12px; border: 1px solid #333; border-radius: 4px; background: #222; color: #fff; font-size: 14px;"
-                           placeholder="Enter new password (min 6 characters)">
-                </div>
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button type="button" class="btn btn-secondary" onclick="hideResetPasswordModal()">Cancel</button>
-                    <button type="submit" class="btn btn-warning">Reset Password</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <script>
         let deleteUsername = '';
 
@@ -1145,18 +1104,6 @@ $backups = getBackupFiles();
             document.getElementById('deleteModal').style.display = 'none';
         }
 
-        function showResetPasswordModal(userId, username) {
-            document.getElementById('resetModalUserId').value = userId;
-            document.getElementById('resetModalUsername').textContent = username;
-            document.getElementById('resetModalPassword').value = '';
-            document.getElementById('resetPasswordModal').style.display = 'flex';
-            document.getElementById('resetModalPassword').focus();
-        }
-
-        function hideResetPasswordModal() {
-            document.getElementById('resetPasswordModal').style.display = 'none';
-        }
-
         // Validate username before submit
         document.getElementById('deleteForm').addEventListener('submit', function(e) {
             const confirm = document.getElementById('modalConfirmUsername').value;
@@ -1170,7 +1117,6 @@ $backups = getBackupFiles();
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 hideDeleteModal();
-                hideResetPasswordModal();
             }
         });
 
@@ -1178,12 +1124,6 @@ $backups = getBackupFiles();
         document.getElementById('deleteModal').addEventListener('click', function(e) {
             if (e.target === this) {
                 hideDeleteModal();
-            }
-        });
-
-        document.getElementById('resetPasswordModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                hideResetPasswordModal();
             }
         });
 

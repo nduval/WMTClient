@@ -106,6 +106,30 @@ function findUserById(string $id): ?array {
 }
 
 /**
+ * Check if user is a wizard (no session timeout)
+ */
+function isUserWizard(string $userId): bool {
+    $user = findUserById($userId);
+    return $user['isWizard'] ?? false;
+}
+
+/**
+ * Set wizard status for a user
+ */
+function setUserWizard(string $userId, bool $isWizard): bool {
+    $users = loadUsersIndex();
+
+    foreach ($users as &$user) {
+        if ($user['id'] === $userId) {
+            $user['isWizard'] = $isWizard;
+            return saveUsersIndex($users);
+        }
+    }
+
+    return false;
+}
+
+/**
  * Register a new user
  */
 function registerUser(string $username, string $password, string $email): array {

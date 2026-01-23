@@ -360,6 +360,17 @@ class WMTClient {
     sendFilteredTriggersAndAliases() {
         this.connection.setTriggers(this.getFilteredTriggers());
         this.connection.setAliases(this.getFilteredAliases());
+        this.sendDiscordPrefsToServer();
+    }
+
+    // Send Discord preferences to server for server-side notifications (works when browser closed)
+    sendDiscordPrefsToServer() {
+        const charName = window.WMT_CONFIG?.characterName || 'WMT Client';
+        this.connection.setDiscordPrefs(
+            this.discordWebhookUrl,
+            this.channelPrefs,
+            charName
+        );
     }
 
     setupConnection() {
@@ -368,12 +379,14 @@ class WMTClient {
         const wsToken = window.WMT_CONFIG?.wsToken || null;
         const userId = window.WMT_CONFIG?.userId || null;
         const characterId = window.WMT_CONFIG?.characterId || null;
+        const isWizard = window.WMT_CONFIG?.isWizard || false;
 
         this.connection = new MudConnection({
             wsUrl: wsUrl,
             wsToken: wsToken,
             userId: userId,
             characterId: characterId,
+            isWizard: isWizard,
             onConnect: () => this.onConnect(),
             onDisconnect: () => this.onDisconnect(),
             onMessage: (data) => this.onMessage(data),
@@ -1528,6 +1541,8 @@ class WMTClient {
                     }
                 })
             });
+            // Also send to server for server-side notifications (works when browser closed)
+            this.sendDiscordPrefsToServer();
         } catch (e) {
             console.error('Failed to save channel preferences:', e);
         }

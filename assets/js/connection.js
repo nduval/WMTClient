@@ -9,6 +9,7 @@ class MudConnection {
         this.wsToken = options.wsToken || null;  // Session token for reconnection
         this.userId = options.userId || null;    // User ID for multi-device session management
         this.characterId = options.characterId || null;  // Character ID for multi-device session management
+        this.isWizard = options.isWizard || false;  // Wizard flag (no session timeout)
         this.socket = null;
         this.connected = false;
         this.authenticated = false;  // Have we completed auth handshake?
@@ -57,7 +58,8 @@ class MudConnection {
                     type: 'auth',
                     token: this.wsToken,
                     userId: this.userId,
-                    characterId: this.characterId
+                    characterId: this.characterId,
+                    isWizard: this.isWizard
                 }));
             } else {
                 console.error('No WebSocket token available');
@@ -171,6 +173,10 @@ class MudConnection {
 
     setServer(host, port) {
         return this.send('set_server', { host, port });
+    }
+
+    setDiscordPrefs(webhookUrl, channelPrefs, username = 'WMT Client') {
+        return this.send('set_discord_prefs', { webhookUrl, channelPrefs, username });
     }
 
     reconnect() {
