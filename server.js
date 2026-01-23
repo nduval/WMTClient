@@ -1868,8 +1868,8 @@ function parseCommands(input) {
     } else if (char === '}') {
       current += char;
       braceDepth--;
-    } else if (char === ';' && braceDepth === 0) {
-      // Only split on semicolons outside of braces
+    } else if ((char === ';' || char === '\n' || char === '\r') && braceDepth === 0) {
+      // Split on semicolons or newlines outside of braces
       if (current.trim()) commands.push(current.trim());
       current = '';
     } else {
