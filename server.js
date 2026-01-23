@@ -1970,19 +1970,25 @@ function expandCommandWithAliases(cmd, aliases, depth = 0) {
   const trimmed = cmd.trim();
   if (!trimmed) return [];
 
-  const expanded = processAliases(trimmed, aliases);
-  if (expanded === trimmed) {
-    // No alias matched, return as-is
-    return [trimmed];
-  }
-
-  // Alias matched - the result might contain semicolons
-  // Split and recursively expand each part
-  const parts = parseCommands(expanded);
+  // First split by semicolons/newlines at the top level
+  const initialParts = parseCommands(trimmed);
   const results = [];
-  parts.forEach(part => {
-    results.push(...expandCommandWithAliases(part, aliases, depth + 1));
+
+  initialParts.forEach(part => {
+    const expanded = processAliases(part, aliases);
+    if (expanded === part) {
+      // No alias matched, return this part as-is
+      results.push(part);
+    } else {
+      // Alias matched - the result might contain more semicolons
+      // Split and recursively expand each part
+      const subParts = parseCommands(expanded);
+      subParts.forEach(subPart => {
+        results.push(...expandCommandWithAliases(subPart, aliases, depth + 1));
+      });
+    }
   });
+
   return results;
 }
 
