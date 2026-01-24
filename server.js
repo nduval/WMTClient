@@ -14,7 +14,7 @@ const https = require('https');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.5.0'; // Multi-device session management - close old sessions when same user+character connects from different device
+const VERSION = '2.6.5'; // Discord webhook trigger action type
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -1158,6 +1158,13 @@ function processLine(session, line) {
       });
     }
   });
+
+  // Send Discord webhooks (with user variable substitution)
+  if (processed.discordWebhooks) {
+    processed.discordWebhooks.forEach(webhook => {
+      sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+    });
+  }
 }
 
 /**
@@ -1591,6 +1598,13 @@ wss.on('connection', (ws, req) => {
                 });
               }
             });
+
+            // Send Discord webhooks (with user variable substitution)
+            if (processed.discordWebhooks) {
+              processed.discordWebhooks.forEach(webhook => {
+                sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+              });
+            }
           }
           break;
 
@@ -2119,12 +2133,76 @@ function processTriggers(line, triggers) {
               result.line = result.line.replace(searchPattern, replacement);
             }
             break;
+          case 'discord':
+            // Queue Discord webhook to be sent by caller (needs session for variable substitution)
+            if (action.webhookUrl && action.message) {
+              let message = action.message;
+              if (matches.length) {
+                message = replaceTinTinVars(message, matches);
+              }
+              if (!result.discordWebhooks) result.discordWebhooks = [];
+              result.discordWebhooks.push({
+                webhookUrl: action.webhookUrl,
+                message: message
+              });
+            }
+            break;
         }
       }
     }
   }
 
   return result;
+}
+
+/**
+ * Send a message to a Discord webhook
+ * @param {string} webhookUrl - The Discord webhook URL
+ * @param {string} message - The message to send
+ * @param {Object} variables - User variables for $var substitution
+ */
+function sendDiscordWebhook(webhookUrl, message, variables = {}) {
+  // Validate webhook URL - only allow Discord webhook URLs
+  const discordPattern = /^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]+$/;
+  if (!discordPattern.test(webhookUrl)) {
+    console.error('Invalid Discord webhook URL:', webhookUrl);
+    return;
+  }
+
+  // Substitute user variables ($varname)
+  let finalMessage = message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+    return variables[varName] !== undefined ? String(variables[varName]) : match;
+  });
+
+  // Prepare the payload
+  const payload = JSON.stringify({ content: finalMessage });
+
+  const url = new URL(webhookUrl);
+  const options = {
+    hostname: url.hostname,
+    port: 443,
+    path: url.pathname,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    }
+  };
+
+  const req = https.request(options, (res) => {
+    if (res.statusCode === 204 || res.statusCode === 200) {
+      console.log('Discord webhook sent successfully');
+    } else {
+      console.error('Discord webhook error:', res.statusCode);
+    }
+  });
+
+  req.on('error', (e) => {
+    console.error('Discord webhook request failed:', e.message);
+  });
+
+  req.write(payload);
+  req.end();
 }
 
 server.listen(PORT, () => {
