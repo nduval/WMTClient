@@ -184,9 +184,29 @@ class MudConnection {
     }
 
     reconnect() {
+        // Reset all connection state
         this.reconnectAttempts = 0;
-        this.disconnect();
-        setTimeout(() => this.connect(), 500);
+        this.connected = false;
+        this.authenticated = false;
+        this.sessionResumed = false;
+        this.stopKeepAlive();
+
+        // Force close any existing socket, even if in weird state
+        if (this.socket) {
+            try {
+                // Don't send disconnect message - just close
+                this.socket.onclose = null;  // Prevent onclose handler from firing
+                this.socket.onerror = null;
+                this.socket.onmessage = null;
+                this.socket.close();
+            } catch (e) {
+                console.error('Error closing socket:', e);
+            }
+            this.socket = null;
+        }
+
+        // Small delay then reconnect fresh
+        setTimeout(() => this.connect(), 300);
     }
 
     requestReconnect() {

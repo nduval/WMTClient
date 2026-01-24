@@ -24,6 +24,7 @@ class WMTClient {
         // Tickers (server-side, persistent) and delays (client-side only)
         this.tickers = [];  // Array of ticker objects: {id, name, command, interval, enabled, class}
         this.delays = {};   // {name: {command, timerId}} - still client-side
+        this.delayCounter = 0;  // Counter for auto-generated delay names
 
         // Variables for #var/#unvar (TinTin++ style)
         this.variables = {};
@@ -503,16 +504,17 @@ class WMTClient {
                 }
 
                 // For guest logins or manual logins - detect login success messages
+                // Use fixed delays instead of trying to detect "jump" room (wizards skip it)
                 if (!this.mipStarted && this.preferences.mipEnabled !== false && data.line) {
                     // Linkdeath recovery - character is already in world, use shorter delay
                     if (data.line.includes('welcomes you back from linkdeath')) {
                         this.mipStarted = true;
                         setTimeout(() => {
                             this.enableMip();
-                        }, 1000);
+                        }, 4000);  // 4 seconds for linkdeath
                     }
-                    // Fresh login - wait until player leaves the stasis room (has "jump" exit)
-                    // Exclude linkdeath messages that also contain welcome text
+                    // Fresh login - use fixed delay to ensure player is fully in-world
+                    // This works for both normal players (who jump) and wizards (who skip stasis)
                     // Support both 3Kingdoms and 3Scapes
                     else if (!data.line.includes('linkdeath') &&
                              (data.line.includes('3Kingdoms welcomes you') ||
@@ -520,32 +522,9 @@ class WMTClient {
                               data.line.includes('3Scapes welcomes you') ||
                               data.line.includes('entering 3Scapes'))) {
                         this.mipStarted = true;
-                        this.mipPendingRealRoom = true;  // Wait for real room before enabling MIP
-                    }
-                }
-
-                // Detect when player leaves the stasis room (fresh login only)
-                // Stasis room only has "jump" exit - real rooms have other exits
-                if (this.mipPendingRealRoom && !this.mipEnabled && data.line) {
-                    // Detect the jump message or exits that aren't just "jump"
-                    if (data.line.includes('you leap out of the Entrance room')) {
-                        this.mipPendingRealRoom = false;
                         setTimeout(() => {
                             this.enableMip();
-                        }, 500);
-                    } else {
-                        // Look for exits line that's NOT just "jump"
-                        const exitsMatch = data.line.match(/Obvious exits?:\s*(.+)/i);
-                        if (exitsMatch) {
-                            const exits = exitsMatch[1].trim().toLowerCase();
-                            // If exits are anything other than just "jump", we're in a real room
-                            if (exits && exits !== 'jump' && exits !== 'jump.') {
-                                this.mipPendingRealRoom = false;
-                                setTimeout(() => {
-                                    this.enableMip();
-                                }, 500);
-                            }
-                        }
+                        }, 10000);  // 10 seconds for fresh login
                     }
                 }
 
@@ -2273,11 +2252,6 @@ class WMTClient {
                 this.connection.connect();
             }
         });
-
-        // Alias match type help toggle
-        document.getElementById('alias-match-type')?.addEventListener('change', () => {
-            this.updateAliasHelp();
-        });
     }
 
     handleInputKeydown(e) {
@@ -2418,8 +2392,20 @@ class WMTClient {
         // Reset flags so credentials will be sent again
         this.passwordSent = false;
         this.mipStarted = false;
+        this.mipEnabled = false;
+        this.mipReady = false;
         this.pendingReconnect = true;  // Flag to trigger credential send on reconnect
-        this.connection.requestReconnect();
+
+        // Check WebSocket state - if not open, we need a full reconnect
+        const socket = this.connection?.socket;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            this.appendOutput('WebSocket not connected, performing full reconnect...', 'system');
+            // Full WebSocket reconnect (disconnect + connect)
+            this.connection.reconnect();
+        } else {
+            // WebSocket is open, just request MUD reconnection
+            this.connection.requestReconnect();
+        }
     }
 
     disconnect() {
@@ -3173,6 +3159,9 @@ class WMTClient {
         const container = document.getElementById('trigger-actions');
         const div = document.createElement('div');
         div.className = 'action-item';
+        const isCommand = !action || action.type === 'command';
+        const value = this.escapeHtml(action?.command || action?.color || action?.replacement || '');
+
         div.innerHTML = `
             <select class="action-type">
                 <option value="command" ${action?.type === 'command' ? 'selected' : ''}>Send Command</option>
@@ -3181,9 +3170,36 @@ class WMTClient {
                 <option value="substitute" ${action?.type === 'substitute' ? 'selected' : ''}>Substitute</option>
                 <option value="sound" ${action?.type === 'sound' ? 'selected' : ''}>Play Sound</option>
             </select>
-            <input type="text" class="action-value" placeholder="Value" value="${this.escapeHtml(action?.command || action?.color || action?.replacement || '')}">
+            ${isCommand
+                ? `<textarea class="action-value" placeholder="Command(s) - use semicolons or newlines to separate" rows="2">${value}</textarea>`
+                : `<input type="text" class="action-value" placeholder="Value" value="${value}">`
+            }
             <button type="button" class="btn btn-sm btn-danger remove-action">X</button>
         `;
+
+        // Switch between input/textarea based on action type
+        const typeSelect = div.querySelector('.action-type');
+        typeSelect.addEventListener('change', () => {
+            const valueEl = div.querySelector('.action-value');
+            const currentValue = valueEl.value;
+            const isNowCommand = typeSelect.value === 'command';
+
+            if (isNowCommand && valueEl.tagName === 'INPUT') {
+                const textarea = document.createElement('textarea');
+                textarea.className = 'action-value';
+                textarea.placeholder = 'Command(s) - use semicolons or newlines to separate';
+                textarea.rows = 2;
+                textarea.value = currentValue;
+                valueEl.replaceWith(textarea);
+            } else if (!isNowCommand && valueEl.tagName === 'TEXTAREA') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'action-value';
+                input.placeholder = 'Value';
+                input.value = currentValue;
+                valueEl.replaceWith(input);
+            }
+        });
 
         div.querySelector('.remove-action').addEventListener('click', () => div.remove());
         container.appendChild(div);
@@ -3365,7 +3381,6 @@ class WMTClient {
         if (!modal) return;
 
         document.getElementById('alias-pattern').value = alias?.pattern || '';
-        document.getElementById('alias-match-type').value = alias?.matchType || 'exact';
         document.getElementById('alias-replacement').value = alias?.replacement || '';
 
         // Populate class dropdown
@@ -3374,29 +3389,7 @@ class WMTClient {
             classSelect.innerHTML = this.renderClassOptions(alias?.class);
         }
 
-        // Update help text visibility
-        this.updateAliasHelp();
-
         modal.classList.add('open');
-    }
-
-    updateAliasHelp() {
-        const matchType = document.getElementById('alias-match-type')?.value;
-        const simpleHelp = document.getElementById('alias-help-simple');
-        const tintinHelp = document.getElementById('alias-help-tintin');
-        const regexHelp = document.getElementById('alias-help-regex');
-
-        if (simpleHelp) simpleHelp.style.display = 'none';
-        if (tintinHelp) tintinHelp.style.display = 'none';
-        if (regexHelp) regexHelp.style.display = 'none';
-
-        if (matchType === 'regex') {
-            if (regexHelp) regexHelp.style.display = 'block';
-        } else if (matchType === 'tintin') {
-            if (tintinHelp) tintinHelp.style.display = 'block';
-        } else {
-            if (simpleHelp) simpleHelp.style.display = 'block';
-        }
     }
 
     // Open gag modal
@@ -3750,7 +3743,6 @@ class WMTClient {
 
     async saveAlias() {
         const pattern = document.getElementById('alias-pattern').value.trim();
-        const matchType = document.getElementById('alias-match-type').value;
         const replacement = document.getElementById('alias-replacement').value.trim();
         const classId = document.getElementById('alias-class')?.value || null;
 
@@ -3759,15 +3751,11 @@ class WMTClient {
             return;
         }
 
-        // Validate regex if regex mode
-        if (matchType === 'regex') {
-            try {
-                new RegExp(pattern);
-            } catch (e) {
-                alert('Invalid regular expression: ' + e.message);
-                return;
-            }
-        }
+        // Auto-detect match type: if pattern has TinTin++ wildcards, use tintin mode
+        // Otherwise use exact first-word matching
+        const hasTinTinWildcards = /%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern) ||
+                                   pattern.startsWith('^') || pattern.endsWith('$');
+        const matchType = hasTinTinWildcards ? 'tintin' : 'exact';
 
         const alias = {
             id: this.editingItem !== null ? this.aliases[this.editingItem].id : this.generateId(),
@@ -4913,7 +4901,7 @@ class WMTClient {
             // #delay {seconds} {command}
             seconds = parseFloat(args[0]);
             command = args[1];
-            name = 'delay_' + Date.now();
+            name = 'delay_' + (++this.delayCounter);
         } else {
             // #delay {name} {command} {seconds}
             name = args[0];
@@ -4932,12 +4920,20 @@ class WMTClient {
         }
 
         const timerId = setTimeout(() => {
-            this.connection.sendCommand(command);
+            // Split command by semicolons/newlines (respecting brace depth) and execute each
+            const commands = this.parseCommands(command);
+            commands.forEach(cmd => {
+                if (cmd.startsWith('#')) {
+                    this.processClientCommand(cmd);
+                } else {
+                    this.connection.sendCommand(cmd);
+                }
+            });
             delete this.delays[name];
         }, seconds * 1000);
 
         this.delays[name] = { command, timerId };
-        this.appendOutput(`Delay set: ${command} in ${seconds}s`, 'system');
+        // No confirmation message - silent operation like TinTin++
     }
 
     // #undelay {name}
@@ -6626,6 +6622,105 @@ class WMTClient {
         });
     }
 
+    // Convert TinTin++ color codes <xyz> to ANSI escape sequences
+    // Reference: https://tintin.mudhalla.net/manual/colors.php
+    parseTinTinColors(str) {
+        if (!str) return str;
+
+        // VT100 color mapping: 0=black, 1=red, 2=green, 3=yellow, 4=blue, 5=magenta, 6=cyan, 7=white, 8=default, 9=default
+        // Note: 9 in TinTin++ means "light" for fg but practically means "default" for bg
+        const fgColors = { '0': 30, '1': 31, '2': 32, '3': 33, '4': 34, '5': 35, '6': 36, '7': 37, '8': 39, '9': 39 };
+        const bgColors = { '0': 40, '1': 41, '2': 42, '3': 43, '4': 44, '5': 45, '6': 46, '7': 47, '8': 49, '9': 49 };
+        // Attributes: 0=reset, 1=bold, 2=dim, 4=underline, 5=blink, 7=reverse, 8=invisible
+        const attrs = { '0': 0, '1': 1, '2': 2, '4': 4, '5': 5, '7': 7, '8': 8 };
+
+        return str.replace(/<([a-fA-F0-9gG]{3,8})>/g, (match, code) => {
+            // Handle 3-digit VT100 codes like <179> (attr, fg, bg)
+            if (/^[0-9]{3}$/.test(code)) {
+                const attr = code[0];
+                const fg = code[1];
+                const bg = code[2];
+                const parts = [];
+
+                if (attrs[attr] !== undefined) parts.push(attrs[attr]);
+                if (fgColors[fg] !== undefined) parts.push(fgColors[fg]);
+                if (bgColors[bg] !== undefined) parts.push(bgColors[bg]);
+
+                if (parts.length > 0) {
+                    return '\x1b[' + parts.join(';') + 'm';
+                }
+                return '';
+            }
+
+            // Handle 256-color foreground: <aaa> to <fff> (lowercase = fg)
+            if (/^[a-f]{3}$/.test(code)) {
+                const r = code.charCodeAt(0) - 97; // a=0, f=5
+                const g = code.charCodeAt(1) - 97;
+                const b = code.charCodeAt(2) - 97;
+                const colorIndex = 16 + 36 * r + 6 * g + b;
+                return `\x1b[38;5;${colorIndex}m`;
+            }
+
+            // Handle 256-color background: <AAA> to <FFF> (uppercase = bg)
+            if (/^[A-F]{3}$/.test(code)) {
+                const r = code.charCodeAt(0) - 65; // A=0, F=5
+                const g = code.charCodeAt(1) - 65;
+                const b = code.charCodeAt(2) - 65;
+                const colorIndex = 16 + 36 * r + 6 * g + b;
+                return `\x1b[48;5;${colorIndex}m`;
+            }
+
+            // Handle grayscale foreground: <g00> to <g23>
+            if (/^g[0-2][0-9]$/.test(code)) {
+                const level = parseInt(code.substring(1));
+                if (level >= 0 && level <= 23) {
+                    return `\x1b[38;5;${232 + level}m`;
+                }
+            }
+
+            // Handle grayscale background: <G00> to <G23>
+            if (/^G[0-2][0-9]$/.test(code)) {
+                const level = parseInt(code.substring(1));
+                if (level >= 0 && level <= 23) {
+                    return `\x1b[48;5;${232 + level}m`;
+                }
+            }
+
+            // Handle truecolor foreground: <Fxxx> (12-bit) or <Fxxxxxx> (24-bit)
+            if (/^F[0-9a-fA-F]{3}$/.test(code)) {
+                // 12-bit: expand each nibble to full byte
+                const r = parseInt(code[1], 16) * 17;
+                const g = parseInt(code[2], 16) * 17;
+                const b = parseInt(code[3], 16) * 17;
+                return `\x1b[38;2;${r};${g};${b}m`;
+            }
+            if (/^F[0-9a-fA-F]{6}$/.test(code)) {
+                // 24-bit RGB
+                const r = parseInt(code.substring(1, 3), 16);
+                const g = parseInt(code.substring(3, 5), 16);
+                const b = parseInt(code.substring(5, 7), 16);
+                return `\x1b[38;2;${r};${g};${b}m`;
+            }
+
+            // Handle truecolor background: <Bxxx> (12-bit) or <Bxxxxxx> (24-bit)
+            if (/^B[0-9a-fA-F]{3}$/.test(code)) {
+                const r = parseInt(code[1], 16) * 17;
+                const g = parseInt(code[2], 16) * 17;
+                const b = parseInt(code[3], 16) * 17;
+                return `\x1b[48;2;${r};${g};${b}m`;
+            }
+            if (/^B[0-9a-fA-F]{6}$/.test(code)) {
+                const r = parseInt(code.substring(1, 3), 16);
+                const g = parseInt(code.substring(3, 5), 16);
+                const b = parseInt(code.substring(5, 7), 16);
+                return `\x1b[48;2;${r};${g};${b}m`;
+            }
+
+            // Unknown code - return as-is
+            return match;
+        });
+    }
+
     // Execute a command string (may contain multiple commands separated by ;)
     executeCommandString(cmdStr) {
         if (!cmdStr) return;
@@ -6688,6 +6783,7 @@ class WMTClient {
         // Join all message arguments (supports both braced and unbraced input)
         let message = messageArgs.join(' ') || rest;
         message = this.substituteVariables(message);
+        message = this.parseTinTinColors(message);
 
         if (row !== null && (this.splitConfig.top > 0 || this.splitConfig.bottom > 0)) {
             // Display in split area (local only, no trigger processing)
@@ -6712,6 +6808,7 @@ class WMTClient {
         }
         let message = args.join(' ') || rest;
         message = this.substituteVariables(message);
+        message = this.parseTinTinColors(message);
         this.appendOutput(message, 'system');
     }
 
@@ -7179,6 +7276,32 @@ class WMTClient {
 
     generateId() {
         return Math.random().toString(36).substr(2, 9);
+    }
+
+    // Parse commands separated by semicolons or newlines, respecting brace depth
+    parseCommands(str) {
+        const commands = [];
+        let current = '';
+        let braceDepth = 0;
+
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            if (char === '{') {
+                braceDepth++;
+                current += char;
+            } else if (char === '}') {
+                braceDepth--;
+                current += char;
+            } else if ((char === ';' || char === '\n' || char === '\r') && braceDepth === 0) {
+                // Split on semicolons or newlines outside of braces
+                if (current.trim()) commands.push(current.trim());
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        if (current.trim()) commands.push(current.trim());
+        return commands;
     }
 
     escapeHtml(text) {

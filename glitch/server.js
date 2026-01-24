@@ -567,6 +567,9 @@ function startTicker(session, ticker) {
           for (let i = 0; i < count; i++) {
             session.mudSocket.write(repeatCmd + '\r\n');
           }
+        } else if (cmd.startsWith('#')) {
+          // Client-side command from alias expansion - send back to client
+          sendToClient(session, { type: 'client_command', command: cmd });
         } else {
           session.mudSocket.write(cmd + '\r\n');
         }
@@ -1146,6 +1149,9 @@ function processLine(session, line) {
           for (let i = 0; i < count; i++) {
             session.mudSocket.write(repeatCmd + '\r\n');
           }
+        } else if (ec.startsWith('#')) {
+          // Client-side command from alias expansion - send back to client
+          sendToClient(session, { type: 'client_command', command: ec });
         } else {
           session.mudSocket.write(ec + '\r\n');
         }
@@ -1158,10 +1164,26 @@ function processLine(session, line) {
  * Create and connect MUD socket for a session
  */
 function connectToMud(session) {
+  // Thorough cleanup of any existing connection state
   if (session.mudSocket) {
-    session.mudSocket.destroy();
+    // Remove all listeners before destroying to prevent spurious events
+    session.mudSocket.removeAllListeners();
+    if (!session.mudSocket.destroyed) {
+      session.mudSocket.destroy();
+    }
     session.mudSocket = null;
   }
+
+  // Clear line buffer state from previous connection
+  session.lineBuffer = '';
+  if (session.lineBufferTimeout) {
+    clearTimeout(session.lineBufferTimeout);
+    session.lineBufferTimeout = null;
+  }
+
+  // Clear MIP state for fresh connection
+  session.mipId = null;
+  session.currentAnsiState = '';
 
   sendToClient(session, {
     type: 'system',
@@ -1418,7 +1440,7 @@ wss.on('connection', (ws, req) => {
                 allExpanded.push(...expandCommand(c));
               });
 
-              // Send all expanded commands to MUD
+              // Send all expanded commands to MUD (or back to client for # commands)
               allExpanded.forEach(ec => {
                 // Check for #N command pattern (e.g., #15 e) - repeat command N times
                 const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
@@ -1428,6 +1450,9 @@ wss.on('connection', (ws, req) => {
                   for (let i = 0; i < count; i++) {
                     session.mudSocket.write(repeatCmd + '\r\n');
                   }
+                } else if (ec.startsWith('#')) {
+                  // Client-side command (like #delay, #showme, etc.) - send back to client
+                  sendToClient(session, { type: 'client_command', command: ec });
                 } else {
                   session.mudSocket.write(ec + '\r\n');
                 }
@@ -1557,6 +1582,9 @@ wss.on('connection', (ws, req) => {
                     for (let i = 0; i < count; i++) {
                       session.mudSocket.write(repeatCmd + '\r\n');
                     }
+                  } else if (ec.startsWith('#')) {
+                    // Client-side command from alias expansion - send back to client
+                    sendToClient(session, { type: 'client_command', command: ec });
                   } else {
                     session.mudSocket.write(ec + '\r\n');
                   }
@@ -1856,8 +1884,8 @@ function parseCommands(input) {
     } else if (char === '}') {
       current += char;
       braceDepth--;
-    } else if (char === ';' && braceDepth === 0) {
-      // Only split on semicolons outside of braces
+    } else if ((char === ';' || char === '\n' || char === '\r') && braceDepth === 0) {
+      // Split on semicolons or newlines outside of braces
       if (current.trim()) commands.push(current.trim());
       current = '';
     } else {
@@ -1958,19 +1986,25 @@ function expandCommandWithAliases(cmd, aliases, depth = 0) {
   const trimmed = cmd.trim();
   if (!trimmed) return [];
 
-  const expanded = processAliases(trimmed, aliases);
-  if (expanded === trimmed) {
-    // No alias matched, return as-is
-    return [trimmed];
-  }
-
-  // Alias matched - the result might contain semicolons
-  // Split and recursively expand each part
-  const parts = parseCommands(expanded);
+  // First split by semicolons/newlines at the top level
+  const initialParts = parseCommands(trimmed);
   const results = [];
-  parts.forEach(part => {
-    results.push(...expandCommandWithAliases(part, aliases, depth + 1));
+
+  initialParts.forEach(part => {
+    const expanded = processAliases(part, aliases);
+    if (expanded === part) {
+      // No alias matched, return this part as-is
+      results.push(part);
+    } else {
+      // Alias matched - the result might contain more semicolons
+      // Split and recursively expand each part
+      const subParts = parseCommands(expanded);
+      subParts.forEach(subPart => {
+        results.push(...expandCommandWithAliases(subPart, aliases, depth + 1));
+      });
+    }
   });
+
   return results;
 }
 

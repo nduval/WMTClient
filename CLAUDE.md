@@ -535,10 +535,24 @@ Reference TinTin++ format: `3klient $mip[id]~~Po3kdb$mip[Version]`
 
 Without the proper format, the MUD will still send some MIP data (room names, exits, guild lines) but will NOT send FFF messages containing HP/SP/GP stats.
 
-### Fresh Login Timing (CRITICAL)
-Fresh logins (non-linkdeath) start in a **stasis room** with only a "jump" exit. MIP does NOT work in this room - stats won't be sent until the player enters the real game world.
+### MIP Loading Timing (CRITICAL)
 
-**Solution:** For fresh logins, we detect "Obvious exits:" and wait until exits are NOT just "jump" before enabling MIP. This ensures MIP registers after the player has jumped into the real world.
+**Problem:** MIP registration must happen when the player is fully in the game world. The old approach tried to detect the "jump" stasis room, but this failed for wizard characters who skip the stasis room entirely.
+
+**Solution (v2.6.2+):** Use simple fixed delays after login detection instead of complex room detection:
+
+| Login Type | Delay | Detection |
+|------------|-------|-----------|
+| **Fresh login** | 10 seconds | "3Kingdoms welcomes you" or "entering 3Kingdoms" (same for 3Scapes) |
+| **Linkdeath recovery** | 4 seconds | "welcomes you back from linkdeath" |
+
+**Why this works:**
+- Fixed delays are predictable and work for all character types (normal players AND wizards)
+- 10 seconds is enough time for normal players to type "jump" and enter the world
+- Wizards who skip stasis are already in-world, so the delay just ensures everything is settled
+- Simpler code with no edge cases to worry about
+
+**Key code location:** `app.js` in the `case 'mud':` message handler (~line 507)
 
 ### MIP Wire Format
 MIP messages are embedded in MUD output with this structure:
@@ -948,6 +962,31 @@ session.mudSocket.on('close', () => {
 
 **Result:** Session stays in the map with all triggers/aliases intact. User can reconnect cleanly without the session being in an inconsistent state.
 
+### Reconnect robustness improvements (v2.6.2+)
+
+The reconnect flow was improved to handle edge cases more reliably.
+
+**Server-side (`connectToMud` in `server.js`):**
+- Remove all event listeners before destroying socket (prevents spurious events during teardown)
+- Clear `lineBuffer` and `lineBufferTimeout` from previous connection
+- Reset MIP state (`mipId`, `currentAnsiState`) for fresh connection
+
+**Client-side (`reconnect` in `app.js`):**
+- Reset all MIP-related state (`mipEnabled`, `mipReady`, `mipStarted`)
+- Check if WebSocket is actually OPEN before sending `requestReconnect` message
+- If WebSocket is dead/closed, perform full WebSocket reconnect instead of just MUD reconnect
+
+**Client-side (`reconnect` in `connection.js`):**
+- Reset all connection flags (`connected`, `authenticated`, `sessionResumed`)
+- Null out event handlers before closing socket (prevents handlers firing during close)
+- Force close socket even if in weird state
+
+**Flow:**
+1. User clicks Reconnect
+2. Check WebSocket state:
+   - **OPEN**: Send `reconnect` message → server cleans up old MUD socket → connects fresh MUD
+   - **CLOSED/CLOSING**: Full WebSocket teardown → fresh WebSocket → fresh MUD connection
+
 ### Font size not saving below 10px (pinch-to-zoom)
 
 **Problem:** User pinches to zoom to 6px font, but it reverts to 10px after opening/closing panels or refreshing.
@@ -1014,6 +1053,46 @@ Debug logging remains in place at `data/logs/auth.log`:
 1. When debugging session issues, log session IDs across requests. Different IDs = cookie problem.
 2. `session_regenerate_id()` can expose latent cookie bugs that were harmless before.
 3. Cookie path specificity matters: `/api/` takes precedence over `/` for requests to `/api/*`.
+
+### #delay commands skipping lines when run from alias (v2.6.1+)
+
+**Problem:** An alias with 24 `#delay` commands only executed 3 of them. Also, "Delay set:" confirmation messages were printing for each delay.
+
+**Root Cause:** The auto-generated delay name used `Date.now()`:
+```javascript
+name = 'delay_' + Date.now();
+```
+When multiple delays are created within the same millisecond (which happens when an alias rapidly creates many delays), they all get the SAME name and overwrite each other. Only the last delay with each timestamp survives.
+
+**Fix:**
+1. Use a sequential counter instead of timestamp:
+```javascript
+name = 'delay_' + (++this.delayCounter);
+```
+
+2. Remove the "Delay set:" confirmation message (TinTin++ doesn't print confirmations).
+
+3. Execute `#` commands directly via `processClientCommand()` instead of round-tripping through the server.
+
+4. **Semicolon parsing:** When delay fires, split command by semicolons (respecting brace depth) before executing. Added `parseCommands()` helper to `app.js`. This allows delays like:
+```
+#delay {5} {#showme {Hello};say world}
+```
+The `#showme` runs client-side, then `say world` is sent to MUD.
+
+**Also fixed:** TinTin++ VT100 color codes `<xyz>` now support digits 8 and 9:
+- `8` = default foreground/background (reset to terminal default)
+- `9` = default (same as 8 for practical purposes)
+
+So `<179>` now correctly produces bold (1) + white (7) + default background (9).
+
+### Command parsing in tickers and aliases
+
+**Problem:** Ticker/alias commands like `#showme {text};grepdebug foo` were treated as a single command instead of being split on the semicolon.
+
+**Root Cause:** `expandCommandWithAliases()` in `server.js` only split commands AFTER alias expansion. If no alias matched, the entire string was returned unsplit.
+
+**Fix:** Modified `expandCommandWithAliases()` to split by `parseCommands()` FIRST, then process each part for alias expansion. This ensures semicolon-separated commands always get split, regardless of whether aliases are involved.
 
 ## Mobile UI Architecture
 

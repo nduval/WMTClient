@@ -319,16 +319,7 @@ $wsToken = $_SESSION['ws_token'];
             <div class="modal-body">
                 <div class="form-group">
                     <label for="alias-pattern">Pattern *</label>
-                    <input type="text" id="alias-pattern" placeholder="e.g., kk">
-                </div>
-                <div class="form-group">
-                    <label for="alias-match-type">Match Type</label>
-                    <select id="alias-match-type">
-                        <option value="exact">Exact (first word)</option>
-                        <option value="startsWith">Starts With</option>
-                        <option value="tintin">TinTin++ Pattern</option>
-                        <option value="regex">Regular Expression (PCRE)</option>
-                    </select>
+                    <input type="text" id="alias-pattern" placeholder="e.g., kk or kk %*">
                 </div>
                 <div class="form-group">
                     <label for="alias-replacement">Replacement *</label>
@@ -342,23 +333,10 @@ $wsToken = $_SESSION['ws_token'];
                     </select>
                 </div>
                 <div id="alias-help" class="help-text" style="font-size:0.85em; color:#888; margin-top:10px; padding:10px; background:#111; border-radius:4px;">
-                    <div id="alias-help-simple">
-                        <strong>Variables:</strong> $1, $2... = arguments, $* = all arguments<br>
-                        <strong>Example:</strong> <code>kk $1</code> → <code>kill $1; get all from corpse</code><br>
-                        Separate multiple commands with semicolons.
-                    </div>
-                    <div id="alias-help-tintin" style="display:none;">
-                        <strong>TinTin++ Wildcards:</strong><br>
-                        <code>%*</code> any text &nbsp; <code>%+</code> 1+ chars &nbsp; <code>%d</code> digits &nbsp; <code>%w</code> word &nbsp; <code>%s</code> spaces<br>
-                        <code>%1</code>-<code>%99</code> = capture groups (use in replacement)<br>
-                        <strong>Example:</strong> <code>%1x%2</code> → <code>#%2 %1</code> (input: <code>north x5</code>)
-                    </div>
-                    <div id="alias-help-regex" style="display:none;">
-                        <strong>PCRE Regex Variables:</strong> $0 = full match, $1, $2... = capture groups<br>
-                        <strong>Example pattern:</strong> <code>^(\w+)x(\d+)$</code><br>
-                        <strong>Example replacement:</strong> <code>#$2 $1</code><br>
-                        Input <code>north x5</code> → <code>#5 north</code>
-                    </div>
+                    <strong>Simple:</strong> <code>kk</code> → <code>kill kobold</code><br>
+                    <strong>With args:</strong> <code>kk $1</code> → <code>kill $1; get all</code> ($1, $2... = words, $* = all)<br>
+                    <strong>TinTin++:</strong> <code>%1 x%2</code> → <code>#%2 %1</code> (%* = any, %d = digits)<br>
+                    Separate commands with semicolons or newlines.
                 </div>
             </div>
             <div class="modal-footer">
