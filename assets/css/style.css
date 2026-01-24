@@ -1063,6 +1063,24 @@ body {
     color: #000;
 }
 
+.settings-support-link {
+    text-align: center;
+    padding: 15px 20px 5px;
+    margin-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.settings-support-link a {
+    color: #666;
+    text-decoration: none;
+    font-size: 0.85em;
+    transition: color 0.3s;
+}
+
+.settings-support-link a:hover {
+    color: #ffdd00;
+}
+
 /* Scripts Sidebar (docked, resizable) */
 .scripts-sidebar {
     position: relative;

@@ -143,6 +143,16 @@ switch ($action) {
             $validated['historySize'] = max(100, min(2000, $size));
         }
 
+        // Idle disconnect / deadman switch (0=disabled, 15/30/60/120 minutes)
+        if (isset($preferences['idleDisconnectMinutes'])) {
+            $minutes = intval($preferences['idleDisconnectMinutes']);
+            // Only allow specific values
+            $allowedMinutes = [0, 15, 30, 60, 120];
+            if (in_array($minutes, $allowedMinutes)) {
+                $validated['idleDisconnectMinutes'] = $minutes;
+            }
+        }
+
         // Channel preferences (for ChatMon)
         if (isset($preferences['channelPrefs']) && is_array($preferences['channelPrefs'])) {
             $validatedChannels = [];

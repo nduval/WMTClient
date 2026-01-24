@@ -29,6 +29,18 @@ class WMTClient {
         // Variables for #var/#unvar (TinTin++ style)
         this.variables = {};
 
+        // Functions for #function (TinTin++ style) - called with @name{args}
+        this.functions = {};  // {name: {body: string}}
+
+        // Local variable scope stack for #local
+        // Each scope is an object of {varName: value}
+        // Push on function/alias entry, pop on exit
+        this.localScopes = [];
+
+        // Event handlers for #event (TinTin++ style)
+        // {eventName: [{body: string, class: string}]}
+        this.eventHandlers = {};
+
         // Loop control flags for #break and #continue
         this.loopBreak = false;
         this.loopContinue = false;
@@ -93,6 +105,10 @@ class WMTClient {
         this.healthCheckTimeout = null;
         this.healthCheckPending = false;
         this.healthCheckInterval = null;
+
+        // Idle disconnect (deadman switch) - disconnects if user hasn't typed in X minutes
+        this.lastUserInput = Date.now();
+        this.idleCheckInterval = null;
 
         // Chat window state
         this.chatWindowOpen = false;
@@ -231,6 +247,11 @@ class WMTClient {
                 this.commandHistory.pop();
             }
         }
+
+        // Restart idle checker if setting changed (deadman switch)
+        if (this.connection && this.connection.connected) {
+            this.startIdleChecker();
+        }
     }
 
     // Wake Lock API - prevents screen from sleeping
@@ -358,6 +379,51 @@ class WMTClient {
         this.healthCheckPending = false;
     }
 
+    // Start idle disconnect checker (deadman switch)
+    // Disconnects if user hasn't manually typed a command in X minutes
+    startIdleChecker() {
+        this.stopIdleChecker();
+
+        const idleMinutes = this.preferences.idleDisconnectMinutes;
+        if (!idleMinutes || idleMinutes <= 0) {
+            return; // Disabled
+        }
+
+        const idleTimeoutMs = idleMinutes * 60 * 1000;
+
+        // Check every 30 seconds
+        this.idleCheckInterval = setInterval(() => {
+            const idleMs = Date.now() - this.lastUserInput;
+            const idleMinutesElapsed = Math.floor(idleMs / 60000);
+
+            // Warn at 1 minute before disconnect
+            if (idleMs >= idleTimeoutMs - 60000 && idleMs < idleTimeoutMs - 55000) {
+                this.appendOutput(`Warning: You will be disconnected in 1 minute due to inactivity. Type any command to stay connected.`, 'system');
+                this.playNotificationSound();
+            }
+
+            // Disconnect when timeout reached
+            if (idleMs >= idleTimeoutMs) {
+                this.appendOutput(`Disconnecting after ${idleMinutes} minutes of inactivity.`, 'system');
+                this.stopIdleChecker();
+                if (this.connection) {
+                    this.connection.disconnect();
+                }
+            }
+        }, 30000);
+
+        // Reset last input time when starting
+        this.lastUserInput = Date.now();
+    }
+
+    // Stop idle disconnect checker
+    stopIdleChecker() {
+        if (this.idleCheckInterval) {
+            clearInterval(this.idleCheckInterval);
+            this.idleCheckInterval = null;
+        }
+    }
+
     // Get set of enabled class IDs
     getEnabledClassIds() {
         return new Set(
@@ -447,6 +513,12 @@ class WMTClient {
         // Start periodic health checks to detect zombie connections
         this.startPeriodicHealthCheck();
 
+        // Start idle disconnect checker (deadman switch)
+        this.startIdleChecker();
+
+        // Fire SESSION_CONNECTED event
+        this.fireEvent('SESSION_CONNECTED');
+
         // Tell the proxy which server to connect to
         const mudHost = window.WMT_CONFIG.mudHost || '3k.org';
         const mudPort = window.WMT_CONFIG.mudPort || 3000;
@@ -486,6 +558,13 @@ class WMTClient {
         // Restart periodic health checks
         this.startPeriodicHealthCheck();
 
+        // Restart idle checker and reset last input time
+        this.lastUserInput = Date.now();
+        this.startIdleChecker();
+
+        // Fire SESSION_RESUMED event
+        this.fireEvent('SESSION_RESUMED');
+
         if (mudConnected) {
             this.appendOutput('Session resumed - MUD connection active.', 'system');
             // Re-send triggers and aliases in case they changed
@@ -505,6 +584,11 @@ class WMTClient {
         this.mipReady = false;  // Reset so conditions don't fire on stale data after reconnect
         // Stop health checks when disconnected
         this.stopPeriodicHealthCheck();
+        // Stop idle checker when disconnected
+        this.stopIdleChecker();
+
+        // Fire SESSION_DISCONNECTED event
+        this.fireEvent('SESSION_DISCONNECTED');
 
         // Only show disconnect message if it was intentional or we've given up reconnecting
         // Otherwise, stay quiet and let the reconnect happen - session resume will confirm success
@@ -2312,6 +2396,9 @@ class WMTClient {
 
         const command = input.value;
 
+        // Track last user input for idle disconnect (deadman switch)
+        this.lastUserInput = Date.now();
+
         // Add to history (only non-empty commands)
         if (command.trim()) {
             this.commandHistory.unshift(command);
@@ -3943,6 +4030,17 @@ class WMTClient {
                     </label>
                 </div>
                 <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: -5px;">Prevents phone from sleeping while connected</p>
+                <div class="form-group" style="margin-top: 15px; margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Auto-disconnect after inactivity</label>
+                    <select id="pref-idle-disconnect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px;">
+                        <option value="0" ${!prefs.idleDisconnectMinutes ? 'selected' : ''}>Disabled</option>
+                        <option value="15" ${prefs.idleDisconnectMinutes == 15 ? 'selected' : ''}>15 minutes</option>
+                        <option value="30" ${prefs.idleDisconnectMinutes == 30 ? 'selected' : ''}>30 minutes</option>
+                        <option value="60" ${prefs.idleDisconnectMinutes == 60 ? 'selected' : ''}>1 hour</option>
+                        <option value="120" ${prefs.idleDisconnectMinutes == 120 ? 'selected' : ''}>2 hours</option>
+                    </select>
+                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">Disconnects if YOU haven't typed anything (triggers still run)</p>
+                </div>
             </div>
 
             <div class="settings-section">
@@ -4064,6 +4162,10 @@ class WMTClient {
                 <div id="script-files-list" class="script-files-list">
                     <em>Loading...</em>
                 </div>
+            </div>
+
+            <div class="settings-support-link">
+                <a href="https://buymeacoffee.com/wemudtogether" target="_blank" rel="noopener">Support this project</a>
             </div>
             </div>
 
@@ -4220,6 +4322,7 @@ class WMTClient {
             retainLastCommand: document.getElementById('pref-retain')?.checked ?? this.preferences.retainLastCommand ?? false,
             historySize: parseInt(document.getElementById('pref-history-size')?.value) || this.preferences.historySize || 500,
             wakeLock: document.getElementById('pref-wake-lock')?.checked ?? this.preferences.wakeLock ?? false,
+            idleDisconnectMinutes: parseInt(document.getElementById('pref-idle-disconnect')?.value) || 0,
             mipEnabled: document.getElementById('pref-mip-enabled')?.checked ?? this.preferences.mipEnabled ?? true,
             mipHpBar: document.getElementById('pref-mip-hpbar')?.checked ?? this.preferences.mipHpBar ?? true,
             mipShowStatBars: document.getElementById('pref-mip-statbars')?.checked ?? this.preferences.mipShowStatBars ?? true,
@@ -4749,6 +4852,40 @@ class WMTClient {
                 this.cmdHelp();
                 break;
 
+            // Function commands (TinTin++ style)
+            case 'function':
+            case 'func':
+                this.cmdFunction(args);
+                break;
+            case 'unfunction':
+            case 'unfunc':
+                this.cmdUnfunction(args);
+                break;
+            case 'return':
+                this.cmdReturn(args, rest);
+                break;
+
+            // Local variable commands
+            case 'local':
+                this.cmdLocal(args);
+                break;
+            case 'unlocal':
+                this.cmdUnlocal(args);
+                break;
+
+            // Switch/case commands
+            case 'switch':
+                this.cmdSwitch(args, rest);
+                break;
+
+            // Event commands
+            case 'event':
+                this.cmdEvent(args);
+                break;
+            case 'unevent':
+                this.cmdUnevent(args);
+                break;
+
             default:
                 this.appendOutput(`Unknown command: #${cmdName}`, 'error');
         }
@@ -5182,7 +5319,11 @@ class WMTClient {
             const data = await res.json();
             if (data.success) {
                 const cls = this.classes.find(c => c.id === classId);
-                if (cls) cls.enabled = enabled;
+                if (cls) {
+                    cls.enabled = enabled;
+                    // Fire class activation/deactivation event
+                    this.fireEvent(enabled ? 'CLASS_ACTIVATED' : 'CLASS_DEACTIVATED', cls.name);
+                }
                 // Re-send filtered triggers/aliases to server
                 this.sendFilteredTriggersAndAliases();
                 // Refresh panels if open
@@ -5338,6 +5479,296 @@ class WMTClient {
         this.appendOutput('  #info [type]        - Show counts', 'system');
         this.appendOutput('  #nop {comment}      - Comment (ignored)', 'system');
         this.appendOutput('  #help               - Show this help', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Functions:', 'system');
+        this.appendOutput('  #function {name} {body} - Define function (call with @name{})', 'system');
+        this.appendOutput('  #unfunction {name}  - Remove function', 'system');
+        this.appendOutput('  #return {value}     - Return value from function', 'system');
+        this.appendOutput('  #local {var} {val}  - Set local variable (scoped)', 'system');
+        this.appendOutput('  #unlocal {var}      - Remove local variable', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Switch/Case:', 'system');
+        this.appendOutput('  #switch {val} {#case {v1} {cmd};#default {cmd}}', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Events:', 'system');
+        this.appendOutput('  #event {name} {cmd} - Hook into event', 'system');
+        this.appendOutput('  #unevent {name}     - Remove event handler', 'system');
+        this.appendOutput('  Events: SESSION_CONNECTED, SESSION_DISCONNECTED,', 'system');
+        this.appendOutput('          VARIABLE_UPDATE, CLASS_ACTIVATED, CLASS_DEACTIVATED', 'system');
+    }
+
+    // ==========================================
+    // Function Commands (#function, #return, @name{})
+    // ==========================================
+
+    // #function {name} {body}
+    // Creates a function that can be called with @name{args}
+    cmdFunction(args) {
+        if (args.length === 0) {
+            // List all functions
+            const names = Object.keys(this.functions);
+            if (names.length === 0) {
+                this.appendOutput('No functions defined.', 'system');
+            } else {
+                this.appendOutput('Functions:', 'system');
+                names.forEach(name => {
+                    this.appendOutput(`  @${name}{} = ${this.functions[name].body}`, 'system');
+                });
+            }
+            return;
+        }
+
+        if (args.length < 2) {
+            this.appendOutput('Usage: #function {name} {body}', 'error');
+            return;
+        }
+
+        const name = args[0].toLowerCase();
+        const body = args[1];
+
+        this.functions[name] = { body };
+        this.appendOutput(`Function @${name}{} defined.`, 'system');
+    }
+
+    // #unfunction {name}
+    cmdUnfunction(args) {
+        if (args.length === 0) {
+            this.appendOutput('Usage: #unfunction {name}', 'error');
+            return;
+        }
+
+        const name = args[0].toLowerCase();
+        if (this.functions[name]) {
+            delete this.functions[name];
+            this.appendOutput(`Function @${name}{} removed.`, 'system');
+        } else {
+            this.appendOutput(`Function @${name}{} not found.`, 'error');
+        }
+    }
+
+    // #return {value}
+    // Sets the result for the current function call
+    cmdReturn(args, rest) {
+        // The return value is stored in a special variable that the function caller reads
+        const value = args.length > 0 ? this.substituteVariables(args[0]) : '';
+        this.setVariable('result', value);
+    }
+
+    // Call a function by name with arguments
+    // Returns the result (from #return or $result variable)
+    callFunction(name, argString) {
+        const func = this.functions[name.toLowerCase()];
+        if (!func) {
+            return `@${name}{${argString}}`; // Return unchanged if function not found
+        }
+
+        // Push a new local scope
+        this.localScopes.push({});
+
+        // Parse arguments (semicolon-separated)
+        const funcArgs = argString ? argString.split(';').map(a => a.trim()) : [];
+
+        // Set %0 through %99 for arguments
+        this.setLocalVariable('%0', argString || '');
+        funcArgs.forEach((arg, i) => {
+            this.setLocalVariable(`%${i + 1}`, arg);
+        });
+
+        // Clear result
+        this.setLocalVariable('result', '');
+
+        // Execute the function body
+        this.executeCommandString(func.body);
+
+        // Get the result
+        const result = this.getVariable('result') || '';
+
+        // Pop the local scope
+        this.localScopes.pop();
+
+        return result;
+    }
+
+    // ==========================================
+    // Local Variable Commands (#local, #unlocal)
+    // ==========================================
+
+    // #local {name} {value}
+    cmdLocal(args) {
+        if (args.length < 1) {
+            this.appendOutput('Usage: #local {name} {value}', 'error');
+            return;
+        }
+
+        const name = args[0];
+        const value = args.length > 1 ? this.substituteVariables(args[1]) : '';
+
+        this.setLocalVariable(name, value);
+    }
+
+    // #unlocal {name}
+    cmdUnlocal(args) {
+        if (args.length < 1) {
+            this.appendOutput('Usage: #unlocal {name}', 'error');
+            return;
+        }
+
+        const name = args[0];
+        // Remove from current scope if exists
+        if (this.localScopes.length > 0) {
+            delete this.localScopes[this.localScopes.length - 1][name];
+        }
+    }
+
+    // Set a local variable in the current scope
+    setLocalVariable(name, value) {
+        if (this.localScopes.length === 0) {
+            // No local scope, use global
+            this.setVariable(name, value);
+            return;
+        }
+        this.localScopes[this.localScopes.length - 1][name] = value;
+    }
+
+    // Get a variable, checking local scopes first (innermost to outermost), then global
+    getVariableWithScope(name) {
+        // Check local scopes from innermost to outermost
+        for (let i = this.localScopes.length - 1; i >= 0; i--) {
+            if (name in this.localScopes[i]) {
+                return this.localScopes[i][name];
+            }
+        }
+        // Fall back to global
+        return this.getVariable(name);
+    }
+
+    // ==========================================
+    // Switch/Case Commands (#switch, #case, #default)
+    // ==========================================
+
+    // #switch {value} {#case {v1} {cmd1};#case {v2} {cmd2};#default {cmd}}
+    cmdSwitch(args, rest) {
+        if (args.length < 2) {
+            this.appendOutput('Usage: #switch {value} {cases}', 'error');
+            return;
+        }
+
+        const switchValue = this.substituteVariables(args[0]);
+        const casesBlock = args[1];
+
+        // Parse the cases block to find #case and #default
+        // Format: #case {value} {commands};#case {value2} {commands2};#default {commands}
+        const caseRegex = /#(case|default)\s*(?:\{([^}]*)\})?\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/gi;
+        let match;
+        let matched = false;
+        let defaultCmd = null;
+
+        while ((match = caseRegex.exec(casesBlock)) !== null) {
+            const type = match[1].toLowerCase();
+            const caseValue = match[2];
+            const commands = match[3];
+
+            if (type === 'default') {
+                defaultCmd = commands;
+            } else if (type === 'case' && !matched) {
+                // Check if this case matches
+                const expandedCaseValue = this.substituteVariables(caseValue);
+                if (switchValue === expandedCaseValue) {
+                    this.executeCommandString(commands);
+                    matched = true;
+                }
+            }
+        }
+
+        // Execute default if no case matched
+        if (!matched && defaultCmd) {
+            this.executeCommandString(defaultCmd);
+        }
+    }
+
+    // ==========================================
+    // Event Commands (#event, #unevent)
+    // ==========================================
+
+    // Supported events:
+    // SESSION_CONNECTED - when WebSocket connects
+    // SESSION_DISCONNECTED - when WebSocket disconnects
+    // SESSION_RESUMED - when session is resumed after reconnect
+    // VARIABLE_UPDATE {varname} - when a variable is changed
+    // CLASS_ACTIVATED {classname} - when a class is enabled
+    // CLASS_DEACTIVATED {classname} - when a class is disabled
+
+    // #event {name} {commands}
+    cmdEvent(args) {
+        if (args.length === 0) {
+            // List all events
+            const eventNames = Object.keys(this.eventHandlers);
+            if (eventNames.length === 0) {
+                this.appendOutput('No event handlers defined.', 'system');
+            } else {
+                this.appendOutput('Event handlers:', 'system');
+                eventNames.forEach(name => {
+                    const handlers = this.eventHandlers[name];
+                    handlers.forEach(h => {
+                        this.appendOutput(`  ${name} = ${h.body}`, 'system');
+                    });
+                });
+            }
+            return;
+        }
+
+        if (args.length < 2) {
+            this.appendOutput('Usage: #event {name} {commands}', 'error');
+            return;
+        }
+
+        const eventName = args[0].toUpperCase();
+        const body = args[1];
+
+        if (!this.eventHandlers[eventName]) {
+            this.eventHandlers[eventName] = [];
+        }
+        this.eventHandlers[eventName].push({ body });
+        this.appendOutput(`Event handler for ${eventName} added.`, 'system');
+    }
+
+    // #unevent {name}
+    cmdUnevent(args) {
+        if (args.length === 0) {
+            this.appendOutput('Usage: #unevent {name}', 'error');
+            return;
+        }
+
+        const eventName = args[0].toUpperCase();
+        if (this.eventHandlers[eventName]) {
+            delete this.eventHandlers[eventName];
+            this.appendOutput(`Event handlers for ${eventName} removed.`, 'system');
+        } else {
+            this.appendOutput(`No event handlers for ${eventName}.`, 'error');
+        }
+    }
+
+    // Fire an event - executes all handlers for that event
+    fireEvent(eventName, eventArg = '') {
+        const handlers = this.eventHandlers[eventName.toUpperCase()];
+        if (!handlers || handlers.length === 0) return;
+
+        // Push a local scope for event arguments
+        this.localScopes.push({});
+        if (eventArg) {
+            this.setLocalVariable('%0', eventArg);
+            this.setLocalVariable('%1', eventArg);
+        }
+
+        handlers.forEach(handler => {
+            try {
+                this.executeCommandString(handler.body);
+            } catch (e) {
+                console.error(`Error in event handler for ${eventName}:`, e);
+            }
+        });
+
+        this.localScopes.pop();
     }
 
     // #read {filename} - Load and execute TinTin++ script file
@@ -6754,10 +7185,23 @@ class WMTClient {
         return result;
     }
 
-    // Substitute $variables in a string
-    // Supports: $var, $var[key], $var[key][subkey], $var[+1], $var[-1], &var[], *var[]
+    // Substitute $variables and @functions in a string
+    // Supports: $var, $var[key], $var[key][subkey], $var[+1], $var[-1], &var[], *var[], @func{args}
     substituteVariables(str) {
         if (!str) return str;
+
+        // First handle @function{args} calls
+        // Match @name{args} where args can contain nested braces
+        let maxIterations = 10; // Prevent infinite loops from nested function calls
+        while (maxIterations-- > 0) {
+            const funcMatch = str.match(/@(\w+)\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/);
+            if (!funcMatch) break;
+
+            const funcName = funcMatch[1];
+            const funcArgs = funcMatch[2];
+            const result = this.callFunction(funcName, funcArgs);
+            str = str.replace(funcMatch[0], result);
+        }
 
         // First handle &variable[] for size (must come before $ handling)
         str = str.replace(/&(\w+)\[\]/g, (match, name) => {
@@ -6849,12 +7293,21 @@ class WMTClient {
 
         // Handle simple $variable patterns (no brackets)
         str = str.replace(/\$(\w+)(?!\[)/g, (match, name) => {
-            // Check TinTin++ variables first, then MIP variables
+            // Check local scopes first (innermost to outermost)
+            for (let i = this.localScopes.length - 1; i >= 0; i--) {
+                if (name in this.localScopes[i]) {
+                    const val = this.localScopes[i][name];
+                    if (typeof val === 'object') return JSON.stringify(val);
+                    return String(val);
+                }
+            }
+            // Then check global TinTin++ variables
             if (this.variables[name] !== undefined) {
                 const val = this.variables[name];
                 if (typeof val === 'object') return JSON.stringify(val);
                 return String(val);  // Ensure string return for replace
             }
+            // Finally check MIP variables
             if (this.mipVars[name] !== undefined) {
                 return String(this.mipVars[name]);  // Ensure string return
             }
@@ -6864,11 +7317,27 @@ class WMTClient {
         return str;
     }
 
+    // Set a simple variable (convenience method)
+    setVariable(name, value) {
+        this.variables[name] = value;
+        // Fire VARIABLE_UPDATE event (but avoid infinite loops from event handlers)
+        if (!this._firingVariableEvent) {
+            this._firingVariableEvent = true;
+            this.fireEvent('VARIABLE_UPDATE', name);
+            this._firingVariableEvent = false;
+        }
+    }
+
+    // Get a simple variable
+    getVariable(name) {
+        return this.variables[name];
+    }
+
     // Set a nested variable value using bracket notation
     // e.g., setNestedVariable('hp', ['self'], 34) sets variables.hp.self = 34
     setNestedVariable(name, keys, value) {
         if (keys.length === 0) {
-            this.variables[name] = value;
+            this.setVariable(name, value);
             return;
         }
 
@@ -6886,6 +7355,13 @@ class WMTClient {
             current = current[key];
         }
         current[keys[keys.length - 1]] = value;
+
+        // Fire VARIABLE_UPDATE event for the base variable
+        if (!this._firingVariableEvent) {
+            this._firingVariableEvent = true;
+            this.fireEvent('VARIABLE_UPDATE', name);
+            this._firingVariableEvent = false;
+        }
     }
 
     // Get a nested variable value

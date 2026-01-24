@@ -27,6 +27,193 @@ This ensures future sessions have context for troubleshooting. Hard-won knowledg
 
 ---
 
+## Local Development Environment
+
+### MUD Box (AWS EC2)
+SSH to the development MUD server where TinTin++ scripts are stored:
+```bash
+ssh ec2-user@52.5.228.15 -i ~/.ssh/3k.pem
+```
+- **TinTin++ scripts location**: `/elminster/*.tin`
+- **Purpose**: Reference scripts to check WMT client compatibility
+
+### Development Environments
+
+This project is developed on two machines that share the same git repo:
+
+| Environment | Path | Notes |
+|-------------|------|-------|
+| **Windows** | `D:/GitHub/client` | Primary, uses Git Bash |
+| **Mac Mini** | `~/github/client` | Secondary, SSH accessible |
+
+**Sync between environments:**
+```bash
+python .claude/sync.py status   # Check both
+python .claude/sync.py push     # Push local changes via git
+python .claude/sync.py pull     # Pull remote changes via git
+```
+
+Local tracking files are in `.claude/` (gitignored):
+- `sync_config.json` - Environment configuration
+- `session_notes.md` - Recent work log for Claude context
+- `sync.py` - Sync helper script
+
+### SSH to Mac Mini
+```bash
+ssh nathan@192.168.86.55 -i ~/.ssh/id_rsa
+```
+- Repo path: `/Users/nathan/github/client`
+- May have environment-specific config (deploy credentials differ)
+
+### SSH to MUD Box (AWS EC2)
+```bash
+ssh ec2-user@52.5.228.15 -i ~/.ssh/id_rsa
+```
+- **TinTin++ scripts**: `~/elminster/*.tin` (main character)
+- Other characters: `~/jaeger/`, `~/lestat/`, `~/heimdall/`, etc.
+
+### Windows + Git Bash Path Notes
+Claude Code runs in a Git Bash environment on Windows. Path quirks:
+- Use forward slashes: `C:/Users/nduva/.ssh/` (not backslashes)
+- Git Bash mount: `/c/Users/nduva/` also works
+- For SSH keys: `~/.ssh/` expands to `/c/Users/nduva/.ssh/`
+- Windows paths with spaces need quotes: `"C:/Users/name/My Documents/"`
+
+## TinTin++ Script Compatibility Analysis
+
+Based on analysis of production TinTin++ scripts (`~/elminster/*.tin`), here's the compatibility status:
+
+### Fully Supported Commands
+| Command | Notes |
+|---------|-------|
+| `#act` / `#action` | Triggers with pattern matching |
+| `#alias` | Command aliases |
+| `#var` / `#unvar` | Variables (case insensitive) |
+| `#math` | Arithmetic operations |
+| `#if` / `#elseif` | Conditionals with string/numeric comparison |
+| `#delay` | Delayed command execution |
+| `#ticker` / `#unticker` | Repeating timers (server-side) |
+| `#gag` | Suppress matching lines |
+| `#highlight` / `#high` | Color matching lines |
+| `#showme` | Display text locally |
+| `#echo` | Display without trigger processing |
+| `#bell` | Play alert sound |
+| `#nop` | Comments |
+| `#read` | Load script files |
+| `#loop` | Numeric iteration |
+| `#foreach` | List iteration |
+| `#list` | List manipulation |
+| `#replace` | String substitution in variables |
+| `#format` | String formatting |
+| `#regex` / `#regexp` | Pattern matching with captures |
+| `#class` | Group actions by class |
+| `#send` | Send raw command |
+| `#break` / `#continue` | Loop control |
+| `#function` / `#unfunction` | User-defined functions with `@name{}` |
+| `#return` | Return value from function |
+| `#local` / `#unlocal` | Scoped local variables |
+| `#switch` / `#case` / `#default` | Switch/case conditionals |
+| `#event` / `#unevent` | Session event handlers |
+
+### Partially Supported
+| Command | Status |
+|---------|--------|
+| `#split {0} {rows}` | Creates split screen, row display limited |
+| `#showme {text} {-row}` | Row number ignored (no split screen regions) |
+| `#prompt` | Basic support, row parameter ignored |
+| `#config {SPEEDWALK}` | Speedwalk ON/OFF works, other configs ignored |
+| `#unact` / `#unaction` | Works by pattern, not by name |
+
+### NOT Supported (by design)
+| Command | Reason |
+|---------|--------|
+| `#system` | Security - no shell command execution |
+| `#CONFIG` (most) | TinTin++-specific settings (buffer size, packet patch, etc.) |
+| `#PATHDIR` | Path/direction mapping not implemented |
+| `#EVENT` | Event handlers (RECEIVED INPUT, etc.) not implemented |
+| `#end` | Not applicable to web client |
+| `#run` / `#session` | Multi-session not supported |
+
+### Pattern Features Supported
+```
+%1-%99    Numbered captures
+%*        Any text (greedy)
+%w        Word characters
+%d        Digits
+%s        Whitespace
+%S        Non-whitespace
+^         Line start anchor
+$         Line end anchor
+{a|b|c}   PCRE alternation
+{[0-9]+}  PCRE character classes
+```
+
+### Variable Features Supported
+```
+$varname           Simple variable
+$var[key]          Nested/indexed variable
+$var[key][subkey]  Deep nesting
+$list[%*]          All list items (for #foreach)
+```
+
+### Known Gaps from Real Scripts
+1. **`#EVENT {RECEIVED INPUT}`** - Replaced by "idle disconnect" setting (deadman switch)
+2. **`#CONFIG {PACKET PATCH}`** - Server handles buffering automatically
+3. **`#system` calls** - Used for Discord notifications; use server-side Discord webhooks instead
+4. **Split screen rows** - `#showme {text} {-5}` row positioning doesn't work; all output goes to main area
+
+### Idle Disconnect (Deadman Switch) - v2.6.4+
+
+Replaces TinTin++ `#EVENT {RECEIVED INPUT}` for idle detection. Found in Settings → "Auto-disconnect after inactivity".
+
+**How it works:**
+- Tracks time since user last typed a command (not trigger activity)
+- Options: Disabled, 15/30/60/120 minutes
+- Warns 1 minute before disconnect
+- Triggers still run, only disconnects if YOU stopped typing
+
+**Key distinction:**
+- MUD timeout: no activity at all (including triggers)
+- Deadman timeout: no USER input (triggers keep running, bots work, but human walked away)
+
+### #split Analysis - What's Missing
+
+TinTin++ `#split` creates dedicated screen regions:
+```
+#split {top} {bottom} {left} {right} {input}
+```
+
+**Full TinTin++ split features:**
+- Top status bar (fixed rows at top)
+- Bottom status bar (fixed rows above input)
+- Left/right sidebars
+- Scrolling region in center
+- `#showme {text} {-row}` displays to specific row in split regions
+
+**Current WMT implementation:**
+- `#split {top} {bottom}` - Creates split config but doesn't render separate regions
+- All output still goes to main scrollable area
+- Row numbers in `#showme {text} {-5}` are ignored
+
+**Why it's hard:**
+- Web browsers don't have VT100 terminal emulation
+- Would require custom CSS grid layout with fixed-position divs
+- Need to intercept row-targeted output and route to correct div
+- Significant UI architecture change
+
+**Workaround:** Use the MIP status bar for HP/SP display instead of split screen rows.
+
+### Remaining Features to Consider
+
+| Feature | Difficulty | Value | Notes |
+|---------|------------|-------|-------|
+| `#buffer` | Hard | Low | Scroll buffer manipulation |
+| `#screen` | Hard | Low | Terminal manipulation (not applicable to web) |
+| `#draw` | Hard | Low | ASCII art drawing (not applicable to web) |
+| `RECEIVED_LINE` event | Medium | Medium | Already handled by triggers |
+
+---
+
 ## Deployment
 
 This project has two deployment targets:
@@ -317,7 +504,9 @@ When adding a new action type (like triggers, aliases, gags, highlights, substit
 
 This client supports TinTin++ style scripting:
 - Pattern matching: `%*`, `%d`, `%w`, `%1`-`%99`, etc.
-- Commands: `#action`, `#alias`, `#gag`, `#highlight`, `#var`, `#math`, `#if`, `#loop`, `#showme`, `#bell`, `#split`, `#ticker`, `#delay`, `#class`, `#read`, `#write`, `#regexp`
+- Commands: `#action`, `#alias`, `#gag`, `#highlight`, `#var`, `#math`, `#if`, `#loop`, `#foreach`, `#list`, `#showme`, `#bell`, `#split`, `#ticker`, `#delay`, `#class`, `#read`, `#write`, `#regexp`, `#prompt`, `#break`, `#continue`
+- Nested variables: `$hp[max]`, `$stats[str][base]`
+- Speedwalk: `3n2e` expands to `n;n;n;e;e`
 - Script files: `.tin` format supported
 
 ### TinTin++ Pattern Reference
@@ -458,6 +647,277 @@ Reference: https://tintin.mudhalla.net/manual/if.php
 ```
 #if {$hp < 100} {#show Critical!} {#if {$hp < 500} {#show Low} {#show OK}}
 ```
+
+### #foreach Command Reference (v2.6.3+)
+
+Iterates over a list of items, executing commands for each.
+
+**Syntax:**
+```
+#foreach {list} {variable} {commands}
+```
+
+**Examples:**
+```
+#foreach {a;b;c} {item} {say $item}
+#foreach {$mylist[%*]} {x} {#showme Item: $x}
+#foreach {north;south;east;west} {dir} {look $dir}
+```
+
+**Notes:**
+- List items are separated by semicolons
+- The variable is set to each item in turn
+- Commands can use `#break` to exit early or `#continue` to skip to next item
+- Works with list variables: `#foreach {$mylist[%*]} {x} {...}`
+
+### #list Command Reference (v2.6.3+)
+
+Manages list variables with TinTin++ compatible operations.
+
+Reference: https://tintin.mudhalla.net/manual/list.php
+
+**Syntax:**
+```
+#list {variable} {option} [arguments]
+```
+
+**Options:**
+
+| Option | Usage | Description |
+|--------|-------|-------------|
+| `add` | `#list {var} add {item}` | Add item(s) to end of list |
+| `clear` | `#list {var} clear` | Remove all items |
+| `create` | `#list {var} create {a;b;c}` | Create list from items |
+| `delete` | `#list {var} delete {index}` | Remove item at index |
+| `find` | `#list {var} find {item} {result}` | Find item, store index in result |
+| `get` | `#list {var} get {index} {result}` | Get item at index, store in result |
+| `insert` | `#list {var} insert {index} {item}` | Insert item at index |
+| `set` | `#list {var} set {index} {value}` | Set item at index |
+| `size` | `#list {var} size {result}` | Store list size in result |
+| `sort` | `#list {var} sort` | Sort alphabetically |
+| `reverse` | `#list {var} reverse` | Reverse order |
+| `shuffle` | `#list {var} shuffle` | Randomize order |
+
+**Examples:**
+```
+#list targets create {orc;goblin;troll}
+#list targets add {dragon}
+#list targets get {1} {first}
+#showme First target: $first
+#list targets size {count}
+#showme Total targets: $count
+```
+
+**Accessing List Items:**
+```
+$mylist[1]    - First item (1-indexed)
+$mylist[-1]   - Last item
+$mylist[%*]   - All items (for #foreach)
+```
+
+### #break and #continue (v2.6.3+)
+
+Loop control statements for `#loop` and `#foreach`.
+
+**#break** - Exit the loop immediately:
+```
+#loop {1} {10} {i} {
+    #if {$i == 5} {#break};
+    say $i
+}
+```
+
+**#continue** - Skip to next iteration:
+```
+#foreach {1;2;3;4;5} {n} {
+    #if {$n == 3} {#continue};
+    say $n
+}
+```
+
+### Nested Variables (v2.6.3+)
+
+Variables can have nested keys for structured data.
+
+**Syntax:**
+```
+#var {name[key]} {value}
+#var {name[key][subkey]} {value}
+```
+
+**Examples:**
+```
+#var hp[current] 500
+#var hp[max] 1000
+#var stats[str][base] 18
+#var stats[str][bonus] 2
+
+#showme HP: $hp[current]/$hp[max]
+#math stats[str][total] {$stats[str][base] + $stats[str][bonus]}
+```
+
+**Notes:**
+- Keys can be any string
+- Nested depth is unlimited
+- Lists use numeric keys: `$mylist[1]`, `$mylist[2]`
+- Access all list items with `$var[%*]` for #foreach
+
+### #prompt Command Reference (v2.6.3+)
+
+Captures and optionally modifies the MUD prompt line.
+
+Reference: https://tintin.mudhalla.net/manual/prompt.php
+
+**Syntax:**
+```
+#prompt {pattern} {replacement} {row}
+```
+
+**Parameters:**
+- `pattern` - TinTin++ pattern to match prompt
+- `replacement` - Optional replacement text (use `{}` for none)
+- `row` - Display row: `-1` for top split, `-2` for bottom split
+
+**Examples:**
+```
+#prompt {HP: %1/%2 SP: %3/%4} {} {-2}
+#prompt {^%*$} {[PROMPT] %0} {-1}
+```
+
+**Notes:**
+- Prompts are lines that don't end with newline (detected via telnet GA)
+- Row `-2` is typically used for status display at screen bottom
+- Captured values available as `%1`, `%2`, etc.
+
+### #function Command Reference (v2.6.4+)
+
+User-defined functions that can be called inline with `@name{args}` syntax.
+
+Reference: https://tintin.mudhalla.net/manual/function.php
+
+**Syntax:**
+```
+#function {name} {body}
+@name{arg1;arg2}
+```
+
+**Examples:**
+```
+#function {double} {#math result {%1 * 2}}
+#showme The double of 5 is @double{5}
+
+#function {rnd} {#math result {1 d (%2 - %1 + 1) + %1 - 1}}
+#showme Random 1-100: @rnd{1;100}
+
+#function {gettime} {#format result {%t} {%H:%M}}
+#showme Current time: @gettime{}
+```
+
+**Inside functions:**
+- `%0` = all arguments as a string
+- `%1`, `%2`, etc. = individual arguments (semicolon-separated)
+- `#return {value}` or set `$result` to return a value
+- `#local {var} {val}` for scoped variables
+
+### #local Command Reference (v2.6.4+)
+
+Creates variables scoped to the current function or alias execution.
+
+**Syntax:**
+```
+#local {name} {value}
+#unlocal {name}
+```
+
+**Example:**
+```
+#alias {swap} {#local x %0;#replace x {e} {u};#showme $x}
+```
+
+**Notes:**
+- Local variables shadow global variables of the same name
+- Automatically cleaned up when function/alias completes
+- Useful to avoid polluting global namespace
+
+### #switch / #case / #default (v2.6.4+)
+
+Cleaner alternative to chained `#if` / `#elseif` statements.
+
+**Syntax:**
+```
+#switch {value} {#case {v1} {cmd1};#case {v2} {cmd2};#default {cmd}}
+```
+
+**Example:**
+```
+#switch {$direction} {
+    #case {north} {#showme Going up!};
+    #case {south} {#showme Going down!};
+    #default {#showme Going somewhere!}
+}
+
+#switch {1d4} {#case 1 cackle;#case 2 smile;#default giggle}
+```
+
+### #event Command Reference (v2.6.4+)
+
+Hook into session lifecycle events to run commands automatically.
+
+**Syntax:**
+```
+#event {event_name} {commands}
+#unevent {event_name}
+```
+
+**Supported Events:**
+
+| Event | When Fired | Argument |
+|-------|------------|----------|
+| `SESSION_CONNECTED` | WebSocket connects | - |
+| `SESSION_DISCONNECTED` | WebSocket disconnects | - |
+| `SESSION_RESUMED` | Session resumed after reconnect | - |
+| `VARIABLE_UPDATE` | Any variable is changed | Variable name |
+| `CLASS_ACTIVATED` | Class is enabled | Class name |
+| `CLASS_DEACTIVATED` | Class is disabled | Class name |
+
+**Examples:**
+```
+#event {SESSION_CONNECTED} {#showme Connected!;look}
+#event {SESSION_DISCONNECTED} {#showme Lost connection!}
+#event {VARIABLE_UPDATE} {#if {"%1" == "hp"} {#showme HP changed!}}
+#event {CLASS_ACTIVATED} {#showme Class %1 enabled}
+```
+
+### Speedwalk (v2.6.3+)
+
+Condensed movement commands that expand to multiple directions.
+
+**Enable:**
+```
+#config {SPEEDWALK} {ON}
+```
+
+**Syntax:**
+```
+[count]direction[count]direction...
+```
+
+**Examples:**
+```
+3n2e     → n;n;n;e;e
+2n3e2s   → n;n;e;e;e;s;s
+nnnee    → n;n;n;e;e
+```
+
+**Supported Directions:**
+- `n`, `e`, `s`, `w` - Cardinal directions
+- `u`, `d` - Up, down
+- `ne`, `nw`, `se`, `sw` - Diagonals (if supported by MUD)
+
+**Notes:**
+- Only works when speedwalk is enabled
+- Commands are sent with configurable delay between each
+- Disable with `#config {SPEEDWALK} {OFF}`
 
 ## Trigger Processing Architecture (CRITICAL)
 

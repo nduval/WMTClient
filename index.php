@@ -179,6 +179,24 @@ if (isLoggedIn()) {
         .server-info span {
             color: #00ff00;
         }
+
+        .support-link {
+            text-align: center;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .support-link a {
+            color: #888;
+            text-decoration: none;
+            font-size: 0.85em;
+            transition: color 0.3s;
+        }
+
+        .support-link a:hover {
+            color: #ffdd00;
+        }
     </style>
 </head>
 <body>
@@ -249,6 +267,10 @@ if (isLoggedIn()) {
 
         <div class="server-info">
             Connecting to <span><?= MUD_HOST ?>:<?= MUD_PORT ?></span>
+        </div>
+
+        <div class="support-link">
+            <a href="https://buymeacoffee.com/wemudtogether" target="_blank" rel="noopener">Support this project</a>
         </div>
     </div>
 
