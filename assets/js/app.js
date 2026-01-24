@@ -29,6 +29,29 @@ class WMTClient {
         // Variables for #var/#unvar (TinTin++ style)
         this.variables = {};
 
+        // Loop control flags for #break and #continue
+        this.loopBreak = false;
+        this.loopContinue = false;
+
+        // Prompts for #prompt command (like triggers but display to split area)
+        this.prompts = [];
+
+        // Speedwalk configuration
+        this.speedwalkEnabled = false;
+        this.pathdirs = {
+            // Default TinTin++ pathdirs: {dir: {reverse, coord}}
+            'n': { reverse: 's', coord: 1 },
+            'e': { reverse: 'w', coord: 2 },
+            'ne': { reverse: 'sw', coord: 3 },
+            's': { reverse: 'n', coord: 4 },
+            'se': { reverse: 'nw', coord: 6 },
+            'w': { reverse: 'e', coord: 8 },
+            'nw': { reverse: 'se', coord: 9 },
+            'sw': { reverse: 'ne', coord: 12 },
+            'u': { reverse: 'd', coord: 16 },
+            'd': { reverse: 'u', coord: 32 }
+        };
+
         // MIP (MUD Interface Protocol) state
         this.mipEnabled = false;
         this.mipStarted = false;  // Tracks if MIP has been started this session
@@ -148,6 +171,9 @@ class WMTClient {
 
             // Load MIP conditions
             await this.loadMipConditions();
+
+            // Load prompts from localStorage
+            this.loadPrompts();
         } catch (e) {
             console.error('Failed to load settings:', e);
         }
@@ -2305,7 +2331,14 @@ class WMTClient {
             this.executeCommandString(command);
         } else {
             // Substitute variables before sending (allows alias names with $vars like celstep$num)
-            const expandedCommand = this.substituteVariables(command);
+            let expandedCommand = this.substituteVariables(command);
+
+            // Check for speedwalk expansion (e.g., "3n2e" -> "n;n;n;e;e")
+            const speedwalkExpanded = this.expandSpeedwalk(expandedCommand);
+            if (speedwalkExpanded) {
+                expandedCommand = speedwalkExpanded;
+            }
+
             // Send to server (empty commands are allowed - e.g., "press enter to continue")
             this.connection.sendCommand(expandedCommand);
         }
@@ -4644,6 +4677,45 @@ class WMTClient {
                 this.cmdLoop(args, rest);
                 break;
 
+            // Foreach command
+            case 'foreach':
+                this.cmdForeach(args, rest);
+                break;
+
+            // List command
+            case 'list':
+                this.cmdList(args, rest);
+                break;
+
+            // Loop control commands
+            case 'break':
+                this.loopBreak = true;
+                break;
+            case 'continue':
+                this.loopContinue = true;
+                break;
+
+            // Prompt command (capture to status bar)
+            case 'prompt':
+                this.cmdPrompt(args);
+                break;
+            case 'unprompt':
+                this.cmdUnprompt(args);
+                break;
+
+            // Pathdir command (for speedwalk)
+            case 'pathdir':
+                this.cmdPathdir(args);
+                break;
+            case 'unpathdir':
+                this.cmdUnpathdir(args);
+                break;
+
+            // Config command
+            case 'config':
+                this.cmdConfig(args);
+                break;
+
             // Format command
             case 'format':
                 this.cmdFormat(args);
@@ -5205,14 +5277,27 @@ class WMTClient {
         this.appendOutput('', 'system');
         this.appendOutput('Variables & Math:', 'system');
         this.appendOutput('  #var {name} {value} - Set variable ($name to use)', 'system');
+        this.appendOutput('  #var {n[key]} {val} - Set nested: $n[key], $n[k][k2]', 'system');
         this.appendOutput('  #unvar {name}       - Remove variable', 'system');
         this.appendOutput('  #math {var} {expr}  - Calculate and store result', 'system');
         this.appendOutput('  #format {var} {fmt} - Format string (like printf)', 'system');
         this.appendOutput('  #replace {var} {old} {new} - Replace text in variable', 'system');
+        this.appendOutput('  (Use &var[] for size, $var[+1]/-1 for first/last)', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Control Flow:', 'system');
         this.appendOutput('  #if {cond} {cmds}   - Conditional execution', 'system');
         this.appendOutput('  #loop {s} {e} {v} {cmds} - Loop from start to end', 'system');
+        this.appendOutput('  #foreach {list} {v} {cmds} - Iterate over list', 'system');
+        this.appendOutput('  #break              - Exit current loop', 'system');
+        this.appendOutput('  #continue           - Skip to next iteration', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Lists:', 'system');
+        this.appendOutput('  #list {var} add {items} - Add items to list', 'system');
+        this.appendOutput('  #list {var} create {items} - Create new list', 'system');
+        this.appendOutput('  #list {var} get {idx} {result} - Get item', 'system');
+        this.appendOutput('  #list {var} size {result} - Get list size', 'system');
+        this.appendOutput('  #list {var} delete {idx} - Delete item', 'system');
+        this.appendOutput('  #list {var} find {item} {result} - Find item index', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Display & Sound:', 'system');
         this.appendOutput('  #showme {msg} [row] - Display message (or in split row)', 'system');
@@ -5239,6 +5324,15 @@ class WMTClient {
         this.appendOutput('  #read {filename}    - Load and execute script file', 'system');
         this.appendOutput('  #write {file} {cls} - Save class to script file', 'system');
         this.appendOutput('  #scripts            - List available script files', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Speedwalk & Config:', 'system');
+        this.appendOutput('  #config {opt} {val} - Set config (e.g., SPEEDWALK ON)', 'system');
+        this.appendOutput('  #pathdir {d} {r} {c} - Define direction mapping', 'system');
+        this.appendOutput('  #unpathdir {dir}    - Remove direction mapping', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Prompts:', 'system');
+        this.appendOutput('  #prompt {pat} {txt} [row] - Capture to status bar', 'system');
+        this.appendOutput('  #unprompt {pattern} - Remove prompt', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Other:', 'system');
         this.appendOutput('  #info [type]        - Show counts', 'system');
@@ -5962,33 +6056,43 @@ class WMTClient {
     }
 
     // #var {name} {value} - Set a variable
+    // Supports nested syntax: #var hp[self] 34
     cmdVar(args) {
         if (args.length < 1) {
-            // List all variables
+            // List all variables (recursive display for nested)
             const vars = Object.keys(this.variables);
             if (vars.length === 0) {
                 this.appendOutput('No variables defined.', 'system');
             } else {
                 this.appendOutput('Variables:', 'system');
                 vars.forEach(name => {
-                    this.appendOutput(`  $${name} = ${this.variables[name]}`, 'system');
+                    this.displayVariable(name, this.variables[name], '  ');
                 });
             }
             return;
         }
 
-        const name = args[0];
+        const { name, keys } = this.parseVariableName(args[0]);
+
         if (args.length < 2) {
             // Show single variable or variables matching prefix
-            if (this.variables[name] !== undefined) {
-                this.appendOutput(`$${name} = ${this.variables[name]}`, 'system');
+            if (keys.length > 0) {
+                // Showing nested variable
+                const val = this.getNestedVariable(name, keys);
+                if (val !== undefined) {
+                    this.displayVariable(args[0], val, '');
+                } else {
+                    this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                }
+            } else if (this.variables[name] !== undefined) {
+                this.displayVariable(name, this.variables[name], '');
             } else {
                 // Try prefix match (TinTin++ behavior)
                 const matches = Object.keys(this.variables).filter(v => v.startsWith(name));
                 if (matches.length > 0) {
                     this.appendOutput(`Variables matching '${name}':`, 'system');
                     matches.forEach(v => {
-                        this.appendOutput(`  $${v} = ${this.variables[v]}`, 'system');
+                        this.displayVariable(v, this.variables[v], '  ');
                     });
                 } else {
                     this.appendOutput(`Variable not found: $${name}`, 'error');
@@ -5999,35 +6103,78 @@ class WMTClient {
 
         // Join all remaining args as the value (handles spaces in captured text)
         const value = args.slice(1).join(' ');
-        this.variables[name] = value;
+
+        // Set the variable (handles nested if keys present)
+        this.setNestedVariable(name, keys, value);
         // Silent - no confirmation message (TinTin++ behavior)
     }
 
+    // Display a variable value (handles nested objects)
+    displayVariable(name, value, indent) {
+        if (typeof value === 'object' && value !== null) {
+            this.appendOutput(`${indent}$${name}:`, 'system');
+            Object.keys(value).forEach(key => {
+                this.displayVariable(`${name}[${key}]`, value[key], indent + '  ');
+            });
+        } else {
+            this.appendOutput(`${indent}$${name} = ${value}`, 'system');
+        }
+    }
+
     // #unvar {name} - Remove a variable
+    // Supports nested syntax: #unvar hp[self]
     cmdUnvar(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unvar {name}', 'error');
             return;
         }
 
-        const name = args[0];
-        if (this.variables[name] !== undefined) {
-            delete this.variables[name];
-            this.appendOutput(`Variable removed: $${name}`, 'system');
+        const { name, keys } = this.parseVariableName(args[0]);
+
+        if (keys.length === 0) {
+            // Simple variable
+            if (this.variables[name] !== undefined) {
+                delete this.variables[name];
+                this.appendOutput(`Variable removed: $${name}`, 'system');
+            } else {
+                this.appendOutput(`Variable not found: $${name}`, 'error');
+            }
         } else {
-            this.appendOutput(`Variable not found: $${name}`, 'error');
+            // Nested variable - navigate to parent and delete key
+            let current = this.variables[name];
+            if (current === undefined) {
+                this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                return;
+            }
+
+            for (let i = 0; i < keys.length - 1; i++) {
+                if (current === undefined || typeof current !== 'object') {
+                    this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                    return;
+                }
+                current = current[keys[i]];
+            }
+
+            const lastKey = keys[keys.length - 1];
+            if (current && typeof current === 'object' && current[lastKey] !== undefined) {
+                delete current[lastKey];
+                this.appendOutput(`Variable removed: $${args[0]}`, 'system');
+            } else {
+                this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+            }
         }
     }
 
     // #math {variable} {expression} - Calculate and store result
     // Supports TinTin++ operators: arithmetic, bitwise, logical, comparison, dice, ternary
+    // Supports nested variables: #math hp[current] {$hp[current] - 10}
     cmdMath(args) {
         if (args.length < 2) {
             this.appendOutput('Usage: #math {variable} {expression}', 'error');
             return;
         }
 
-        const varName = args[0];
+        const { name, keys } = this.parseVariableName(args[0]);
         let expression = args[1];
 
         // Substitute variables in expression
@@ -6035,8 +6182,8 @@ class WMTClient {
 
         try {
             const result = this.evaluateMathExpression(expression);
-            this.variables[varName] = result;
-            this.appendOutput(`#math: $${varName} = ${result}`, 'system');
+            this.setNestedVariable(name, keys, result);
+            this.appendOutput(`#math: $${args[0]} = ${result}`, 'system');
         } catch (e) {
             this.appendOutput(`Math error: ${e.message}`, 'error');
         }
@@ -6608,18 +6755,168 @@ class WMTClient {
     }
 
     // Substitute $variables in a string
+    // Supports: $var, $var[key], $var[key][subkey], $var[+1], $var[-1], &var[], *var[]
     substituteVariables(str) {
         if (!str) return str;
-        return str.replace(/\$(\w+)/g, (match, name) => {
+
+        // First handle &variable[] for size (must come before $ handling)
+        str = str.replace(/&(\w+)\[\]/g, (match, name) => {
+            const val = this.variables[name];
+            if (val === undefined) return '0';
+            if (typeof val === 'object' && val !== null) {
+                return Object.keys(val).length.toString();
+            }
+            // For simple variables, size is 1
+            return '1';
+        });
+
+        // Handle *variable[] for listing all keys
+        str = str.replace(/\*(\w+)\[\]/g, (match, name) => {
+            const val = this.variables[name];
+            if (val === undefined) return '';
+            if (typeof val === 'object' && val !== null) {
+                return Object.keys(val).join(';');
+            }
+            return name;
+        });
+
+        // Handle $variable[key] and $variable[key][subkey] patterns
+        // This regex matches $varname followed by one or more [key] brackets
+        str = str.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
+            let val = this.variables[name];
+            if (val === undefined) {
+                // Try MIP variables
+                val = this.mipVars[name];
+            }
+            if (val === undefined) return match;
+
+            // Parse the bracket keys
+            const keys = [];
+            const keyRegex = /\[([^\]]*)\]/g;
+            let keyMatch;
+            while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+                keys.push(keyMatch[1]);
+            }
+
+            // Navigate through the nested structure
+            for (const key of keys) {
+                if (val === undefined || val === null) return '';
+
+                if (typeof val !== 'object') return '';
+
+                // Handle special indices
+                if (key === '') {
+                    // $var[] returns all values
+                    return Object.values(val).join(';');
+                } else if (key.startsWith('+')) {
+                    // Positive index from start (+1 = first)
+                    const idx = parseInt(key.substring(1)) - 1;
+                    const values = Object.values(val);
+                    if (idx >= 0 && idx < values.length) {
+                        val = values[idx];
+                    } else {
+                        return '';
+                    }
+                } else if (key.startsWith('-')) {
+                    // Negative index from end (-1 = last)
+                    const idx = parseInt(key);
+                    const values = Object.values(val);
+                    if (idx < 0 && Math.abs(idx) <= values.length) {
+                        val = values[values.length + idx];
+                    } else {
+                        return '';
+                    }
+                } else if (key.includes('..')) {
+                    // Range: $var[+2..4] - values from index 2 to 4
+                    const [startStr, endStr] = key.split('..');
+                    const start = parseInt(startStr.replace('+', '')) - 1;
+                    const end = parseInt(endStr) - 1;
+                    const values = Object.values(val);
+                    if (start >= 0 && end >= start && end < values.length) {
+                        return values.slice(start, end + 1).join(';');
+                    }
+                    return '';
+                } else {
+                    // Regular key access
+                    val = val[key];
+                }
+            }
+
+            if (val === undefined) return '';
+            if (typeof val === 'object') return JSON.stringify(val);
+            return String(val);
+        });
+
+        // Handle simple $variable patterns (no brackets)
+        str = str.replace(/\$(\w+)(?!\[)/g, (match, name) => {
             // Check TinTin++ variables first, then MIP variables
             if (this.variables[name] !== undefined) {
-                return this.variables[name];
+                const val = this.variables[name];
+                if (typeof val === 'object') return JSON.stringify(val);
+                return String(val);  // Ensure string return for replace
             }
             if (this.mipVars[name] !== undefined) {
-                return this.mipVars[name];
+                return String(this.mipVars[name]);  // Ensure string return
             }
             return match;
         });
+
+        return str;
+    }
+
+    // Set a nested variable value using bracket notation
+    // e.g., setNestedVariable('hp', ['self'], 34) sets variables.hp.self = 34
+    setNestedVariable(name, keys, value) {
+        if (keys.length === 0) {
+            this.variables[name] = value;
+            return;
+        }
+
+        // Ensure base variable exists and is an object
+        if (this.variables[name] === undefined || typeof this.variables[name] !== 'object') {
+            this.variables[name] = {};
+        }
+
+        let current = this.variables[name];
+        for (let i = 0; i < keys.length - 1; i++) {
+            const key = keys[i];
+            if (current[key] === undefined || typeof current[key] !== 'object') {
+                current[key] = {};
+            }
+            current = current[key];
+        }
+        current[keys[keys.length - 1]] = value;
+    }
+
+    // Get a nested variable value
+    getNestedVariable(name, keys) {
+        let val = this.variables[name];
+        if (val === undefined) return undefined;
+
+        for (const key of keys) {
+            if (val === undefined || val === null || typeof val !== 'object') {
+                return undefined;
+            }
+            val = val[key];
+        }
+        return val;
+    }
+
+    // Parse variable name with optional bracket keys
+    // Returns { name: string, keys: string[] }
+    parseVariableName(fullName) {
+        const match = fullName.match(/^(\w+)((?:\[[^\]]*\])*)$/);
+        if (!match) return { name: fullName, keys: [] };
+
+        const name = match[1];
+        const bracketStr = match[2] || '';
+        const keys = [];
+        const keyRegex = /\[([^\]]*)\]/g;
+        let keyMatch;
+        while ((keyMatch = keyRegex.exec(bracketStr)) !== null) {
+            keys.push(keyMatch[1]);
+        }
+        return { name, keys };
     }
 
     // Convert TinTin++ color codes <xyz> to ANSI escape sequences
@@ -6907,6 +7204,7 @@ class WMTClient {
     }
 
     // #loop {start} {end} {variable} {commands}
+    // Reference: https://tintin.mudhalla.net/manual/loop.php
     cmdLoop(args, rest) {
         if (args.length < 4) {
             this.appendOutput('Usage: #loop {start} {end} {variable} {commands}', 'error');
@@ -6928,14 +7226,600 @@ class WMTClient {
         const step = start <= end ? 1 : -1;
         let iterations = 0;
 
+        // Reset loop control flags
+        this.loopBreak = false;
+        this.loopContinue = false;
+
         for (let i = start; step > 0 ? i <= end : i >= end; i += step) {
             if (++iterations > maxIterations) {
                 this.appendOutput('Loop exceeded maximum iterations (1000)', 'error');
                 break;
             }
-            this.variables[varName] = i;
+            this.variables[varName] = String(i);
             this.executeCommandString(commands);
+
+            // Check for #break
+            if (this.loopBreak) {
+                this.loopBreak = false;
+                break;
+            }
+            // Check for #continue (just reset flag, loop continues normally)
+            if (this.loopContinue) {
+                this.loopContinue = false;
+            }
         }
+    }
+
+    // #foreach {list} {variable} {commands}
+    // Iterates over a list (semicolon-separated or brace-separated)
+    // Reference: https://tintin.mudhalla.net/manual/foreach.php
+    cmdForeach(args, rest) {
+        if (args.length < 3) {
+            this.appendOutput('Usage: #foreach {list} {variable} {commands}', 'error');
+            return;
+        }
+
+        const listStr = this.substituteVariables(args[0]);
+        const varName = args[1];
+        const commands = args[2];
+
+        // Parse the list - can be semicolon-separated or brace-separated
+        let items = [];
+
+        if (listStr.includes('{') && listStr.includes('}')) {
+            // Brace-separated: {{bob}{tim}{kim}}
+            const braceRegex = /\{([^{}]*)\}/g;
+            let match;
+            while ((match = braceRegex.exec(listStr)) !== null) {
+                items.push(match[1]);
+            }
+        }
+
+        // If no brace items found, try semicolon-separated
+        if (items.length === 0) {
+            items = listStr.split(';').map(s => s.trim()).filter(s => s.length > 0);
+        }
+
+        if (items.length === 0) {
+            // Empty list, nothing to iterate
+            return;
+        }
+
+        // Limit iterations to prevent infinite loops
+        const maxIterations = 1000;
+        let iterations = 0;
+
+        // Reset loop control flags
+        this.loopBreak = false;
+        this.loopContinue = false;
+
+        for (const item of items) {
+            if (++iterations > maxIterations) {
+                this.appendOutput('Foreach exceeded maximum iterations (1000)', 'error');
+                break;
+            }
+            this.variables[varName] = String(item);  // Ensure string storage
+            this.executeCommandString(commands);
+
+            // Check for #break
+            if (this.loopBreak) {
+                this.loopBreak = false;
+                break;
+            }
+            // Check for #continue (just reset flag, loop continues normally)
+            if (this.loopContinue) {
+                this.loopContinue = false;
+            }
+        }
+    }
+
+    // #list {variable} {option} [argument]
+    // Manages list variables with TinTin++ compatible operations
+    // Reference: https://tintin.mudhalla.net/manual/list.php
+    cmdList(args, rest) {
+        if (args.length < 2) {
+            this.appendOutput('Usage: #list {variable} {option} [argument]', 'error');
+            this.appendOutput('Options: add, clear, create, delete, find, get, insert, set, size, sort, reverse, shuffle', 'system');
+            return;
+        }
+
+        const varName = args[0];
+        const option = args[1].toLowerCase();
+
+        // Helper: ensure variable is an array (stored as object for TinTin++ compatibility)
+        const ensureList = () => {
+            if (this.variables[varName] === undefined) {
+                this.variables[varName] = {};
+            } else if (typeof this.variables[varName] !== 'object') {
+                // Convert simple value to single-element list
+                this.variables[varName] = { 1: this.variables[varName] };
+            }
+            return this.variables[varName];
+        };
+
+        // Helper: convert list object to array (values only)
+        const toArray = (obj) => {
+            if (typeof obj !== 'object' || obj === null) return [];
+            // Get keys sorted numerically
+            const keys = Object.keys(obj).map(k => parseInt(k)).filter(k => !isNaN(k)).sort((a, b) => a - b);
+            return keys.map(k => obj[k]);
+        };
+
+        // Helper: convert array back to 1-indexed object
+        const fromArray = (arr) => {
+            const obj = {};
+            arr.forEach((val, idx) => {
+                obj[idx + 1] = val;
+            });
+            return obj;
+        };
+
+        // Helper: resolve index (1-based, negative from end)
+        const resolveIndex = (idx, len) => {
+            let i = parseInt(idx);
+            if (isNaN(i)) return -1;
+            if (i > 0) return i - 1;  // Convert 1-based to 0-based
+            if (i < 0) return len + i;  // Negative from end
+            return -1;
+        };
+
+        switch (option) {
+            case 'add': {
+                // #list {var} add {item1} {item2} ...
+                const list = ensureList();
+                const arr = toArray(list);
+                for (let i = 2; i < args.length; i++) {
+                    const item = this.substituteVariables(args[i]);
+                    // Items can be semicolon-separated
+                    item.split(';').forEach(subItem => {
+                        if (subItem.trim()) arr.push(subItem.trim());
+                    });
+                }
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'clear': {
+                // #list {var} clear
+                this.variables[varName] = {};
+                break;
+            }
+
+            case 'create': {
+                // #list {var} create {item1} {item2} ...
+                const arr = [];
+                for (let i = 2; i < args.length; i++) {
+                    const item = this.substituteVariables(args[i]);
+                    // Items can be semicolon-separated
+                    item.split(';').forEach(subItem => {
+                        if (subItem.trim()) arr.push(subItem.trim());
+                    });
+                }
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'delete': {
+                // #list {var} delete {index}
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {var} delete {index}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const idx = resolveIndex(args[2], arr.length);
+                if (idx >= 0 && idx < arr.length) {
+                    arr.splice(idx, 1);
+                    this.variables[varName] = fromArray(arr);
+                }
+                break;
+            }
+
+            case 'find': {
+                // #list {var} find {item} {result_var}
+                if (args.length < 4) {
+                    this.appendOutput('Usage: #list {var} find {item} {result_var}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const searchItem = this.substituteVariables(args[2]);
+                const resultVar = args[3];
+                const foundIdx = arr.findIndex(item => item === searchItem);
+                // Return 1-based index, or 0 if not found
+                this.variables[resultVar] = foundIdx >= 0 ? foundIdx + 1 : 0;
+                break;
+            }
+
+            case 'get': {
+                // #list {var} get {index} {result_var}
+                if (args.length < 4) {
+                    this.appendOutput('Usage: #list {var} get {index} {result_var}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const idx = resolveIndex(args[2], arr.length);
+                const resultVar = args[3];
+                if (idx >= 0 && idx < arr.length) {
+                    this.variables[resultVar] = arr[idx];
+                } else {
+                    this.variables[resultVar] = '';
+                }
+                break;
+            }
+
+            case 'insert': {
+                // #list {var} insert {index} {item}
+                if (args.length < 4) {
+                    this.appendOutput('Usage: #list {var} insert {index} {item}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                let idx = resolveIndex(args[2], arr.length + 1);  // +1 allows inserting at end
+                const item = this.substituteVariables(args[3]);
+                if (idx < 0) idx = 0;
+                if (idx > arr.length) idx = arr.length;
+                arr.splice(idx, 0, item);
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'set': {
+                // #list {var} set {index} {item}
+                if (args.length < 4) {
+                    this.appendOutput('Usage: #list {var} set {index} {item}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const idx = resolveIndex(args[2], arr.length);
+                const item = this.substituteVariables(args[3]);
+                if (idx >= 0 && idx < arr.length) {
+                    arr[idx] = item;
+                    this.variables[varName] = fromArray(arr);
+                }
+                break;
+            }
+
+            case 'size': {
+                // #list {var} size {result_var}
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {var} size {result_var}', 'error');
+                    return;
+                }
+                const list = this.variables[varName];
+                const resultVar = args[2];
+                if (typeof list === 'object' && list !== null) {
+                    this.variables[resultVar] = Object.keys(list).length;
+                } else if (list !== undefined) {
+                    this.variables[resultVar] = 1;
+                } else {
+                    this.variables[resultVar] = 0;
+                }
+                break;
+            }
+
+            case 'sort': {
+                // #list {var} sort - Sort alphabetically
+                const list = ensureList();
+                const arr = toArray(list);
+                arr.sort((a, b) => String(a).localeCompare(String(b)));
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'order': {
+                // #list {var} order - Sort alphanumerically (numbers before letters)
+                const list = ensureList();
+                const arr = toArray(list);
+                arr.sort((a, b) => {
+                    const numA = parseFloat(a);
+                    const numB = parseFloat(b);
+                    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                    if (!isNaN(numA)) return -1;
+                    if (!isNaN(numB)) return 1;
+                    return String(a).localeCompare(String(b));
+                });
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'reverse': {
+                // #list {var} reverse
+                const list = ensureList();
+                const arr = toArray(list);
+                arr.reverse();
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'shuffle': {
+                // #list {var} shuffle
+                const list = ensureList();
+                const arr = toArray(list);
+                // Fisher-Yates shuffle
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'collapse': {
+                // #list {var} collapse {result_var} - Turn list into semicolon-separated string
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {var} collapse {result_var}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const resultVar = args[2];
+                this.variables[resultVar] = arr.join(';');
+                break;
+            }
+
+            case 'explode': {
+                // #list {var} explode {string_var} - Turn string into list
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {var} explode {string_var}', 'error');
+                    return;
+                }
+                const stringVal = this.substituteVariables('$' + args[2]);
+                const arr = stringVal.split(';').map(s => s.trim()).filter(s => s.length > 0);
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'tokenize': {
+                // #list {var} tokenize {string} - Turn string into character list
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {var} tokenize {string}', 'error');
+                    return;
+                }
+                const str = this.substituteVariables(args[2]);
+                const arr = str.split('');
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            default:
+                this.appendOutput(`Unknown list option: ${option}`, 'error');
+                this.appendOutput('Options: add, clear, create, delete, find, get, insert, set, size, sort, order, reverse, shuffle, collapse, explode, tokenize', 'system');
+        }
+    }
+
+    // #prompt {text} {new text} {row} {col}
+    // Captures prompts and displays them in the split screen status area
+    // Reference: https://tintin.mudhalla.net/manual/prompt.php
+    cmdPrompt(args) {
+        if (args.length < 1) {
+            // List existing prompts
+            if (this.prompts.length === 0) {
+                this.appendOutput('No prompts defined.', 'system');
+            } else {
+                this.appendOutput('Prompts:', 'system');
+                this.prompts.forEach(p => {
+                    const rowInfo = p.row !== undefined ? ` row:${p.row}` : '';
+                    const colInfo = p.col !== undefined ? ` col:${p.col}` : '';
+                    this.appendOutput(`  ${p.pattern} → ${p.replacement || '(original)'}${rowInfo}${colInfo}`, 'system');
+                });
+            }
+            return;
+        }
+
+        const pattern = args[0];
+        const replacement = args[1] || '';  // Empty means display original
+        const row = args[2] !== undefined ? parseInt(args[2]) : -2;  // Default row -2
+        const col = args[3] !== undefined ? parseInt(args[3]) : undefined;
+
+        // Check if prompt already exists with same pattern
+        const existing = this.prompts.findIndex(p => p.pattern === pattern);
+        if (existing >= 0) {
+            this.prompts[existing] = {
+                ...this.prompts[existing],
+                replacement,
+                row: isNaN(row) ? -2 : row,
+                col: col
+            };
+            this.appendOutput(`Prompt updated: ${pattern}`, 'system');
+        } else {
+            this.prompts.push({
+                id: this.generateId(),
+                pattern,
+                matchType: 'tintin',
+                replacement,
+                row: isNaN(row) ? -2 : row,
+                col: col,
+                enabled: true
+            });
+            this.appendOutput(`Prompt created: ${pattern}`, 'system');
+        }
+
+        // Send prompts to server for processing (like triggers)
+        this.savePrompts();
+    }
+
+    // #unprompt {pattern} - Remove a prompt
+    cmdUnprompt(args) {
+        if (args.length < 1) {
+            this.appendOutput('Usage: #unprompt {pattern}', 'error');
+            return;
+        }
+
+        const pattern = args[0];
+        const index = this.prompts.findIndex(p => p.pattern === pattern);
+        if (index >= 0) {
+            this.prompts.splice(index, 1);
+            this.appendOutput(`Prompt removed: ${pattern}`, 'system');
+            this.savePrompts();
+        } else {
+            this.appendOutput(`Prompt not found: ${pattern}`, 'error');
+        }
+    }
+
+    // Save prompts to server (similar to triggers)
+    async savePrompts() {
+        // For now, prompts are stored client-side only
+        // Server-side processing would require updating server.js
+        // Store in localStorage as a backup
+        try {
+            localStorage.setItem('wmt_prompts', JSON.stringify(this.prompts));
+        } catch (e) {
+            console.error('Failed to save prompts:', e);
+        }
+
+        // Also send to connection if available
+        if (this.connection && this.connection.isConnected()) {
+            this.connection.send('set_prompts', { prompts: this.prompts });
+        }
+    }
+
+    // Load prompts from storage
+    loadPrompts() {
+        try {
+            const stored = localStorage.getItem('wmt_prompts');
+            if (stored) {
+                this.prompts = JSON.parse(stored);
+            }
+        } catch (e) {
+            console.error('Failed to load prompts:', e);
+        }
+    }
+
+    // #pathdir {dir} {reversed dir} {coord}
+    // Defines direction mappings for speedwalk
+    // Reference: https://tintin.mudhalla.net/manual/pathdir.php
+    cmdPathdir(args) {
+        if (args.length < 1) {
+            // List all pathdirs
+            this.appendOutput('Pathdirs:', 'system');
+            Object.entries(this.pathdirs).forEach(([dir, info]) => {
+                this.appendOutput(`  ${dir} ↔ ${info.reverse} (coord: ${info.coord})`, 'system');
+            });
+            return;
+        }
+
+        if (args.length < 3) {
+            this.appendOutput('Usage: #pathdir {dir} {reversed dir} {coord}', 'error');
+            return;
+        }
+
+        const dir = args[0].toLowerCase();
+        const reverse = args[1].toLowerCase();
+        const coord = parseInt(args[2]);
+
+        if (isNaN(coord)) {
+            this.appendOutput('Coordinate must be a number', 'error');
+            return;
+        }
+
+        this.pathdirs[dir] = { reverse, coord };
+        this.appendOutput(`Pathdir set: ${dir} ↔ ${reverse} (coord: ${coord})`, 'system');
+    }
+
+    // #unpathdir {dir} - Remove a pathdir
+    cmdUnpathdir(args) {
+        if (args.length < 1) {
+            this.appendOutput('Usage: #unpathdir {dir}', 'error');
+            return;
+        }
+
+        const dir = args[0].toLowerCase();
+        if (this.pathdirs[dir]) {
+            delete this.pathdirs[dir];
+            this.appendOutput(`Pathdir removed: ${dir}`, 'system');
+        } else {
+            this.appendOutput(`Pathdir not found: ${dir}`, 'error');
+        }
+    }
+
+    // #config {option} {value} - Set configuration options
+    // Reference: https://tintin.mudhalla.net/manual/config.php
+    cmdConfig(args) {
+        if (args.length < 1) {
+            // Show current config
+            this.appendOutput('Configuration:', 'system');
+            this.appendOutput(`  SPEEDWALK: ${this.speedwalkEnabled ? 'ON' : 'OFF'}`, 'system');
+            return;
+        }
+
+        const option = args[0].toUpperCase();
+        const value = args.length > 1 ? args[1].toUpperCase() : null;
+
+        switch (option) {
+            case 'SPEEDWALK':
+                if (value === 'ON' || value === '1' || value === 'TRUE') {
+                    this.speedwalkEnabled = true;
+                    this.appendOutput('Speedwalk enabled', 'system');
+                } else if (value === 'OFF' || value === '0' || value === 'FALSE') {
+                    this.speedwalkEnabled = false;
+                    this.appendOutput('Speedwalk disabled', 'system');
+                } else if (value === null) {
+                    this.appendOutput(`SPEEDWALK: ${this.speedwalkEnabled ? 'ON' : 'OFF'}`, 'system');
+                } else {
+                    this.appendOutput('Usage: #config {SPEEDWALK} {ON|OFF}', 'error');
+                }
+                break;
+
+            default:
+                this.appendOutput(`Unknown config option: ${option}`, 'error');
+                this.appendOutput('Available options: SPEEDWALK', 'system');
+        }
+    }
+
+    // Expand speedwalk notation (e.g., "3n2e" -> "n;n;n;e;e")
+    expandSpeedwalk(input) {
+        if (!this.speedwalkEnabled) return null;
+
+        // Check if this looks like a speedwalk command
+        // Must contain only digits and valid direction letters
+        const validDirs = Object.keys(this.pathdirs).sort((a, b) => b.length - a.length);
+        const dirPattern = validDirs.map(d => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+
+        // Pattern: optional digit(s) followed by direction, repeated
+        const speedwalkRegex = new RegExp(`^(\\d*(${dirPattern}))+$`, 'i');
+
+        if (!speedwalkRegex.test(input)) return null;
+
+        // Parse and expand
+        const commands = [];
+        let remaining = input.toLowerCase();
+
+        while (remaining.length > 0) {
+            // Extract optional count
+            const countMatch = remaining.match(/^(\d+)/);
+            let count = 1;
+            if (countMatch) {
+                count = parseInt(countMatch[1]);
+                remaining = remaining.substring(countMatch[0].length);
+            }
+
+            // Find the longest matching direction
+            let foundDir = null;
+            for (const dir of validDirs) {
+                if (remaining.startsWith(dir)) {
+                    foundDir = dir;
+                    break;
+                }
+            }
+
+            if (!foundDir) {
+                // Not a valid speedwalk, return null
+                return null;
+            }
+
+            // Add the direction 'count' times
+            for (let i = 0; i < count; i++) {
+                commands.push(foundDir);
+            }
+
+            remaining = remaining.substring(foundDir.length);
+        }
+
+        return commands.length > 0 ? commands.join(';') : null;
     }
 
     // #format {variable} {format} [args...] - Format a string (TinTin++ compatible)
@@ -6949,7 +7833,7 @@ class WMTClient {
             return;
         }
 
-        const varName = args[0];
+        const { name: varName, keys: varKeys } = this.parseVariableName(args[0]);
         let format = args[1];
         let argIndex = 2;
 
@@ -7063,8 +7947,8 @@ class WMTClient {
             return this.applyFormatPadding(String(result), padDir, padWidth, maxLen);
         });
 
-        this.variables[varName] = format;
-        this.appendOutput(`#format: $${varName} = ${this.variables[varName]}`, 'system');
+        this.setNestedVariable(varName, varKeys, format);
+        this.appendOutput(`#format: $${args[0]} = ${format}`, 'system');
     }
 
     // Apply padding to formatted value
@@ -7144,24 +8028,31 @@ class WMTClient {
     }
 
     // #replace {variable} {old} {new} - Replace text in variable
+    // Supports nested variables: #replace {hp[label]} {HP} {Health}
     cmdReplace(args) {
         if (args.length < 3) {
             this.appendOutput('Usage: #replace {variable} {old} {new}', 'error');
             return;
         }
 
-        const varName = args[0];
+        const { name, keys } = this.parseVariableName(args[0]);
         const oldText = this.substituteVariables(args[1]);
         const newText = this.substituteVariables(args[2]);
 
-        if (this.variables[varName] === undefined) {
-            this.appendOutput(`Variable not found: $${varName}`, 'error');
+        // Get the current value
+        const currentVal = keys.length > 0
+            ? this.getNestedVariable(name, keys)
+            : this.variables[name];
+
+        if (currentVal === undefined) {
+            this.appendOutput(`Variable not found: $${args[0]}`, 'error');
             return;
         }
 
-        const original = this.variables[varName].toString();
-        this.variables[varName] = original.split(oldText).join(newText);
-        this.appendOutput(`#replace: $${varName} = ${this.variables[varName]}`, 'system');
+        const original = String(currentVal);
+        const replaced = original.split(oldText).join(newText);
+        this.setNestedVariable(name, keys, replaced);
+        this.appendOutput(`#replace: $${args[0]} = ${replaced}`, 'system');
     }
 
     // #split {top} [bottom] - Create split screen areas
