@@ -437,6 +437,13 @@ $wsToken = $_SESSION['ws_token'];
                     </div>
                 </div>
                 <div class="form-group">
+                    <label>Text Styles</label>
+                    <div style="display:flex; gap:20px; align-items:center;">
+                        <label style="margin:0;"><input type="checkbox" id="highlight-blink"> Blink</label>
+                        <label style="margin:0;"><input type="checkbox" id="highlight-underline"> Underline</label>
+                    </div>
+                </div>
+                <div class="form-group">
                     <label>Preview</label>
                     <div id="highlight-preview" style="padding:8px 12px; background:#000; border-radius:4px; font-family:monospace;">
                         <span id="highlight-preview-text" style="color:#ff0000;">Sample highlighted text</span>

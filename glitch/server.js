@@ -2181,11 +2181,15 @@ function processTriggers(line, triggers, loopTracker = null) {
           case 'highlight':
             const fgColor = action.fgColor || action.color || null;
             const bgColor = action.bgColor || null;
+            const blink = action.blink || false;
+            const underline = action.underline || false;
 
-            if (fgColor || bgColor) {
+            if (fgColor || bgColor || blink || underline) {
               let styleStr = '';
               if (fgColor) styleStr += `color:${fgColor};`;
               if (bgColor) styleStr += `background:${bgColor};`;
+              if (underline) styleStr += `text-decoration:underline;`;
+              if (blink) styleStr += `animation:blink 1s step-end infinite;`;
 
               let searchPattern;
               if (useTinTin) {

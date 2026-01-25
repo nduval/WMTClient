@@ -3331,9 +3331,17 @@ class WMTClient {
             } else if (type === 'highlight') {
                 return `
                     <div class="highlight-fields">
-                        <label>Text: <input type="color" class="action-fg-color" value="${fg || '#ffff00'}"></label>
-                        <label>BG: <input type="color" class="action-bg-color" value="${bg || '#000000'}"></label>
-                        <label><input type="checkbox" class="action-bg-enabled" ${bg ? 'checked' : ''}> Use BG</label>
+                        <div class="highlight-colors">
+                            <label>Text: <input type="color" class="action-fg-color" value="${fg || '#ffff00'}"></label>
+                            <label class="bg-color-label">
+                                <input type="checkbox" class="action-bg-enabled">
+                                BG: <input type="color" class="action-bg-color" value="${bg || '#000000'}">
+                            </label>
+                        </div>
+                        <div class="highlight-styles">
+                            <label><input type="checkbox" class="action-hl-blink"> Blink</label>
+                            <label><input type="checkbox" class="action-hl-underline"> Underline</label>
+                        </div>
                     </div>
                 `;
             } else if (type === 'gag') {
@@ -3363,9 +3371,43 @@ class WMTClient {
         const typeSelect = div.querySelector('.action-type');
         const fieldsContainer = div.querySelector('.action-fields');
 
+        // Helper to set up highlight field behaviors
+        const setupHighlightFields = (container, actionData) => {
+            const bgCheckbox = container.querySelector('.action-bg-enabled');
+            const bgColorInput = container.querySelector('.action-bg-color');
+            const blinkCheckbox = container.querySelector('.action-hl-blink');
+            const underlineCheckbox = container.querySelector('.action-hl-underline');
+
+            if (bgCheckbox && bgColorInput) {
+                // Set initial state from action data
+                const hasBg = actionData?.bgColor ? true : false;
+                bgCheckbox.checked = hasBg;
+                bgColorInput.disabled = !hasBg;
+                if (!hasBg) bgColorInput.style.opacity = '0.4';
+
+                // Toggle BG color picker on checkbox change
+                bgCheckbox.addEventListener('change', () => {
+                    bgColorInput.disabled = !bgCheckbox.checked;
+                    bgColorInput.style.opacity = bgCheckbox.checked ? '1' : '0.4';
+                });
+            }
+
+            // Set blink/underline from action data
+            if (blinkCheckbox && actionData?.blink) blinkCheckbox.checked = true;
+            if (underlineCheckbox && actionData?.underline) underlineCheckbox.checked = true;
+        };
+
+        // Set up highlight fields if this is a highlight action
+        if (actionType === 'highlight') {
+            setupHighlightFields(fieldsContainer, action);
+        }
+
         typeSelect.addEventListener('change', () => {
             const newType = typeSelect.value;
             fieldsContainer.innerHTML = buildInputFields(newType, '', '', '', '', '', '#ffff00', '');
+            if (newType === 'highlight') {
+                setupHighlightFields(fieldsContainer, null);
+            }
         });
 
         div.querySelector('.remove-action').addEventListener('click', () => div.remove());
@@ -3420,6 +3462,12 @@ class WMTClient {
                 const bgEnabled = item.querySelector('.action-bg-enabled')?.checked;
                 if (bgEnabled) {
                     action.bgColor = item.querySelector('.action-bg-color')?.value || '#000000';
+                }
+                if (item.querySelector('.action-hl-blink')?.checked) {
+                    action.blink = true;
+                }
+                if (item.querySelector('.action-hl-underline')?.checked) {
+                    action.underline = true;
                 }
             } else if (type === 'substitute') {
                 action.replacement = item.querySelector('.action-value')?.value || '';
@@ -3670,6 +3718,10 @@ class WMTClient {
         document.getElementById('highlight-bg-color').value = existingAction.bgColor || '#333300';
         document.getElementById('highlight-bg-enabled').checked = !!hasBgColor;
 
+        // Set blink/underline
+        document.getElementById('highlight-blink').checked = !!existingAction.blink;
+        document.getElementById('highlight-underline').checked = !!existingAction.underline;
+
         this.updateHighlightPreview();
 
         // Clear selected presets
@@ -3736,6 +3788,10 @@ class WMTClient {
             document.getElementById('highlight-fg-enabled')?.addEventListener('change', () => this.updateHighlightPreview());
             document.getElementById('highlight-bg-enabled')?.addEventListener('change', () => this.updateHighlightPreview());
 
+            // Blink/underline checkboxes
+            document.getElementById('highlight-blink')?.addEventListener('change', () => this.updateHighlightPreview());
+            document.getElementById('highlight-underline')?.addEventListener('change', () => this.updateHighlightPreview());
+
             modal.dataset.colorHandlersSet = 'true';
         }
 
@@ -3751,6 +3807,8 @@ class WMTClient {
         const bgEnabled = document.getElementById('highlight-bg-enabled')?.checked;
         const fgColor = document.getElementById('highlight-fg-color')?.value || '#ff0000';
         const bgColor = document.getElementById('highlight-bg-color')?.value || '#333300';
+        const blink = document.getElementById('highlight-blink')?.checked;
+        const underline = document.getElementById('highlight-underline')?.checked;
 
         // Apply foreground color
         previewText.style.color = fgEnabled ? fgColor : '#cccccc';
@@ -3759,6 +3817,12 @@ class WMTClient {
         previewText.style.backgroundColor = bgEnabled ? bgColor : 'transparent';
         previewText.style.padding = bgEnabled ? '2px 4px' : '0';
         previewText.style.borderRadius = bgEnabled ? '2px' : '0';
+
+        // Apply text decoration
+        previewText.style.textDecoration = underline ? 'underline' : 'none';
+
+        // Apply blink animation
+        previewText.style.animation = blink ? 'blink 1s step-end infinite' : 'none';
     }
 
     // Save highlight from modal
@@ -3768,6 +3832,8 @@ class WMTClient {
         const bgEnabled = document.getElementById('highlight-bg-enabled')?.checked;
         const fgColor = document.getElementById('highlight-fg-color')?.value;
         const bgColor = document.getElementById('highlight-bg-color')?.value;
+        const blink = document.getElementById('highlight-blink')?.checked;
+        const underline = document.getElementById('highlight-underline')?.checked;
         const classId = document.getElementById('highlight-class')?.value || null;
 
         if (!pattern) {
@@ -3775,21 +3841,27 @@ class WMTClient {
             return;
         }
 
-        if (!fgEnabled && !bgEnabled) {
-            alert('Please enable at least one color (foreground or background)');
+        if (!fgEnabled && !bgEnabled && !blink && !underline) {
+            alert('Please enable at least one style option');
             return;
         }
 
         // Auto-detect pattern type
         const matchType = this.detectPatternType(pattern);
 
-        // Build action with fg/bg colors
+        // Build action with fg/bg colors and styles
         const action = { type: 'highlight' };
         if (fgEnabled && fgColor) {
             action.fgColor = fgColor;
         }
         if (bgEnabled && bgColor) {
             action.bgColor = bgColor;
+        }
+        if (blink) {
+            action.blink = true;
+        }
+        if (underline) {
+            action.underline = true;
         }
 
         const colorDesc = [];

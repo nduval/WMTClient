@@ -2007,9 +2007,21 @@ body {
 
 .highlight-fields {
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.highlight-colors {
+    display: flex;
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+}
+
+.highlight-styles {
+    display: flex;
+    align-items: center;
+    gap: 12px;
 }
 
 .highlight-fields label {
@@ -2018,6 +2030,11 @@ body {
     gap: 4px;
     font-size: 0.9em;
     color: #aaa;
+}
+
+.highlight-fields .bg-color-label input[type="color"]:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 .highlight-fields input[type="color"] {
@@ -2033,6 +2050,12 @@ body {
     width: 16px;
     height: 16px;
     cursor: pointer;
+}
+
+/* Blink animation for highlighted text */
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
 }
 
 .gag-note {
