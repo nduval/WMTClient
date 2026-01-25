@@ -14,7 +14,7 @@ const https = require('https');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.6.5'; // Discord webhook trigger action type
+const VERSION = '2.6.6'; // Trigger loop detection
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -1118,8 +1118,27 @@ function processLine(session, line) {
     session.currentAnsiState = '';
   }
 
-  // Process triggers
-  const processed = processTriggers(line, session.triggers);
+  // Initialize loop tracker if needed
+  if (!session.loopTracker) {
+    session.loopTracker = {};
+  }
+
+  // Process triggers with loop detection
+  const processed = processTriggers(line, session.triggers, session.loopTracker);
+
+  // Handle loop detection - notify client and disable the trigger
+  if (processed.loopDetected) {
+    const loopTrigger = processed.loopDetected;
+    sendToClient(session, {
+      type: 'system',
+      message: `Loop detected! Trigger "${loopTrigger.name}" fired too many times and has been disabled.`
+    });
+    // Tell client to disable the trigger
+    sendToClient(session, {
+      type: 'disable_trigger',
+      triggerId: loopTrigger.id
+    });
+  }
 
   if (!processed.gag) {
     sendToClient(session, {
@@ -2038,17 +2057,39 @@ function isTinTinPattern(pattern) {
   return false;
 }
 
-function processTriggers(line, triggers) {
+function processTriggers(line, triggers, loopTracker = null) {
   const result = {
     line: line,
     gag: false,
     highlight: null,
     commands: [],
-    sound: null
+    sound: null,
+    loopDetected: null  // Will contain trigger info if loop detected
   };
+
+  const now = Date.now();
+  const LOOP_WINDOW_MS = 2000;  // 2 second window
+  const LOOP_THRESHOLD = 5;     // Max fires in window before considered a loop
 
   for (const trigger of triggers) {
     if (!trigger.enabled) continue;
+
+    // Check for trigger loop if we have a tracker
+    if (loopTracker && trigger.id) {
+      const tracker = loopTracker[trigger.id];
+      if (tracker) {
+        // Clean old entries outside the window
+        if (now - tracker.firstFire > LOOP_WINDOW_MS) {
+          tracker.count = 0;
+          tracker.firstFire = now;
+        }
+        // Check if this trigger is looping
+        if (tracker.count >= LOOP_THRESHOLD) {
+          // Skip this trigger - it's looping
+          continue;
+        }
+      }
+    }
 
     let matched = false;
     let matches = [];
@@ -2076,6 +2117,31 @@ function processTriggers(line, triggers) {
     }
 
     if (matched && trigger.actions) {
+      // Track this fire for loop detection
+      if (loopTracker && trigger.id) {
+        if (!loopTracker[trigger.id]) {
+          loopTracker[trigger.id] = { count: 0, firstFire: now };
+        }
+        const tracker = loopTracker[trigger.id];
+        // Reset if outside window
+        if (now - tracker.firstFire > LOOP_WINDOW_MS) {
+          tracker.count = 1;
+          tracker.firstFire = now;
+        } else {
+          tracker.count++;
+        }
+        // Check if we just hit the threshold
+        if (tracker.count === LOOP_THRESHOLD) {
+          result.loopDetected = {
+            id: trigger.id,
+            name: trigger.name || trigger.pattern,
+            pattern: trigger.pattern
+          };
+          // Skip executing this trigger's actions
+          continue;
+        }
+      }
+
       for (const action of trigger.actions) {
         switch (action.type) {
           case 'gag':
