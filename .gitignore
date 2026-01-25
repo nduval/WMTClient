@@ -34,3 +34,8 @@ __pycache__/
 
 # Claude Code
 .claude/
+
+# Screenshots/samples (local only, root level)
+/*.png
+/*.jpg
+/sample_files/
