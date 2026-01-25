@@ -309,7 +309,7 @@ const server = http.createServer((req, res) => {
       if (mudConnected || browserConnected) {
         activeSessions.push({
           userId: session.userId || null,
-          characterId: session.characterId || null,
+          characterName: session.characterName || null,
           server: session.targetHost === '3scapes.org' ? '3s' : '3k',
           mudConnected,
           browserConnected
@@ -1375,6 +1375,7 @@ wss.on('connection', (ws, req) => {
           const token = data.token;
           const userId = data.userId;
           const characterId = data.characterId;
+          const characterName = data.characterName || null;
           const isWizard = data.isWizard || false;
 
           if (!token || token.length !== 64) {
@@ -1464,10 +1465,11 @@ wss.on('connection', (ws, req) => {
             session.ws = ws;
             session.userId = userId;
             session.characterId = characterId;
+            session.characterName = characterName;
             session.isWizard = isWizard;
             sessions.set(token, session);
 
-            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterId}, wizard: ${isWizard})`);
+            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterName || characterId}, wizard: ${isWizard})`);
 
             ws.send(JSON.stringify({
               type: 'session_new'
