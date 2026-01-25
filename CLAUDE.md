@@ -19,16 +19,18 @@ Before running `git add -A` or committing, verify no secrets are being staged.
 ## IMPORTANT: Maintaining Documentation
 
 **After solving any significant bug or discovering important technical details, update the appropriate file:**
-- General bugs/fixes → `.claude/docs/troubleshooting.md`
-- TinTin++ commands/patterns → `.claude/docs/tintin-reference.md`
-- Protocol details (MIP, TCP, ANSI) → `.claude/docs/protocols.md`
-- Architecture changes → `.claude/docs/architecture.md`
+- General bugs/fixes → `docs/claude-reference/troubleshooting.md`
+- TinTin++ commands/patterns → `docs/claude-reference/tintin-reference.md`
+- Protocol details (MIP, TCP, ANSI) → `docs/claude-reference/protocols.md`
+- Architecture changes → `docs/claude-reference/architecture.md`
+
+These files are NOT auto-loaded to save context. Read them on-demand when working on related topics.
 
 ---
 
 ## Detailed Documentation
 
-This file has been split into topic-specific files in `.claude/docs/`:
+Detailed docs are in `docs/claude-reference/` (NOT auto-loaded to save context):
 
 | File | Contents |
 |------|----------|
@@ -36,6 +38,8 @@ This file has been split into topic-specific files in `.claude/docs/`:
 | `troubleshooting.md` | Common issues and solutions |
 | `protocols.md` | MIP, TCP packet handling, ANSI colors, telnet |
 | `architecture.md` | Session persistence, triggers, multi-server, mobile UI |
+
+Read these files when working on related topics.
 
 ---
 
@@ -96,7 +100,7 @@ python .claude/sync.py pull     # Pull remote changes via git
 - **Session persistence** - MUD connections survive app switches, network blips
 - **Token-based auth** - 256-bit random tokens tie browser to MUD session
 
-See `.claude/docs/architecture.md` for detailed documentation.
+See `docs/claude-reference/architecture.md` for detailed documentation.
 
 ---
 
@@ -121,7 +125,7 @@ See `.claude/docs/architecture.md` for detailed documentation.
 
 **Not Supported:** `#system` (security), multi-session, terminal manipulation
 
-See `.claude/docs/tintin-reference.md` for complete pattern and command reference.
+See `docs/claude-reference/tintin-reference.md` for complete pattern and command reference.
 
 ---
 
@@ -142,4 +146,4 @@ See `.claude/docs/tintin-reference.md` for complete pattern and command referenc
 | Mobile freezing | Check for duplicate event listeners |
 | Login loops | Cookie path mismatch, check auth logs |
 
-See `.claude/docs/troubleshooting.md` for detailed solutions.
+See `docs/claude-reference/troubleshooting.md` for detailed solutions.
