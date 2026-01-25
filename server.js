@@ -284,6 +284,44 @@ const server = http.createServer((req, res) => {
       mud: `${MUD_HOST}:${MUD_PORT}`,
       activeSessions: sessions.size
     }));
+  } else if (req.url === '/sessions' && req.method === 'GET') {
+    // Admin endpoint to list active sessions
+    const adminKey = req.headers['x-admin-key'];
+
+    if (!ADMIN_KEY) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Not configured (ADMIN_KEY not set)' }));
+      return;
+    }
+
+    if (adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+
+    // Build list of active sessions
+    const activeSessions = [];
+    for (const [token, session] of sessions) {
+      const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
+      const browserConnected = session.ws && session.ws.readyState === WebSocket.OPEN;
+
+      if (mudConnected || browserConnected) {
+        activeSessions.push({
+          userId: session.userId || null,
+          characterId: session.characterId || null,
+          server: session.targetHost === '3scapes.org' ? '3s' : '3k',
+          mudConnected,
+          browserConnected
+        });
+      }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      sessions: activeSessions
+    }));
   } else if (req.url === '/broadcast' && req.method === 'POST') {
     // Admin broadcast endpoint
     const adminKey = req.headers['x-admin-key'];
