@@ -705,6 +705,25 @@ class WMTClient {
                 }
                 break;
 
+            case 'disable_trigger':
+                // Server detected a trigger loop - disable the offending trigger
+                if (data.triggerId) {
+                    const trigger = this.triggers.find(t => t.id === data.triggerId);
+                    if (trigger && trigger.enabled) {
+                        trigger.enabled = false;
+                        this.saveTriggers();
+                        this.renderScriptsSidebar();
+                    }
+                }
+                break;
+
+            case 'trigger_chatmon':
+                // Trigger sent a message to ChatMon
+                if (data.message) {
+                    this.appendChatMessage(data.message, 'trigger', data.channel || 'trigger');
+                }
+                break;
+
             case 'mip_stats':
                 // Update MIP status bar with stats from server
                 if (data.stats) {
@@ -3279,46 +3298,71 @@ class WMTClient {
         const container = document.getElementById('trigger-actions');
         const div = document.createElement('div');
         div.className = 'action-item';
-        const isCommand = !action || action.type === 'command';
-        const value = this.escapeHtml(action?.command || action?.color || action?.replacement || '');
+        const actionType = action?.type || 'command';
+        const value = this.escapeHtml(action?.command || action?.replacement || '');
+        const webhookUrl = this.escapeHtml(action?.webhookUrl || '');
+        const discordMessage = this.escapeHtml(action?.type === 'discord' ? (action?.message || '') : '');
+        const chatmonMessage = this.escapeHtml(action?.type === 'chatmon' ? (action?.message || '') : '');
+        const chatmonChannel = this.escapeHtml(action?.channel || '');
+        const fgColor = action?.fgColor || action?.color || '#ffff00';
+        const bgColor = action?.bgColor || '';
+
+        // Build the input fields HTML based on action type
+        const buildInputFields = (type, val, webhook, discMsg, chatMsg, chatChan, fg, bg) => {
+            if (type === 'command') {
+                return `<textarea class="action-value" placeholder="Command(s) - use semicolons or newlines to separate" rows="2">${val}</textarea>`;
+            } else if (type === 'discord') {
+                return `
+                    <div class="discord-fields">
+                        <input type="text" class="action-webhook" placeholder="Discord Webhook URL" value="${webhook}">
+                        <input type="text" class="action-message" placeholder="Message (use %1, %2, $var)" value="${discMsg}">
+                    </div>
+                `;
+            } else if (type === 'chatmon') {
+                return `
+                    <div class="chatmon-fields">
+                        <input type="text" class="action-chatmon-msg" placeholder="Message (use %1, %2, $var)" value="${chatMsg}">
+                        <input type="text" class="action-chatmon-channel" placeholder="Channel (optional)" value="${chatChan}">
+                    </div>
+                `;
+            } else if (type === 'highlight') {
+                return `
+                    <div class="highlight-fields">
+                        <label>Text: <input type="color" class="action-fg-color" value="${fg || '#ffff00'}"></label>
+                        <label>BG: <input type="color" class="action-bg-color" value="${bg || '#000000'}"></label>
+                        <label><input type="checkbox" class="action-bg-enabled" ${bg ? 'checked' : ''}> Use BG</label>
+                    </div>
+                `;
+            } else if (type === 'gag') {
+                return `<span class="gag-note">Line will be hidden</span>`;
+            } else {
+                return `<input type="text" class="action-value" placeholder="Value" value="${val}">`;
+            }
+        };
 
         div.innerHTML = `
             <select class="action-type">
-                <option value="command" ${action?.type === 'command' ? 'selected' : ''}>Send Command</option>
-                <option value="highlight" ${action?.type === 'highlight' ? 'selected' : ''}>Highlight</option>
-                <option value="gag" ${action?.type === 'gag' ? 'selected' : ''}>Gag (Hide)</option>
-                <option value="substitute" ${action?.type === 'substitute' ? 'selected' : ''}>Substitute</option>
-                <option value="sound" ${action?.type === 'sound' ? 'selected' : ''}>Play Sound</option>
+                <option value="command" ${actionType === 'command' ? 'selected' : ''}>Send Command</option>
+                <option value="chatmon" ${actionType === 'chatmon' ? 'selected' : ''}>Send to ChatMon</option>
+                <option value="discord" ${actionType === 'discord' ? 'selected' : ''}>Send to Discord</option>
+                <option value="highlight" ${actionType === 'highlight' ? 'selected' : ''}>Highlight</option>
+                <option value="gag" ${actionType === 'gag' ? 'selected' : ''}>Gag (Hide)</option>
+                <option value="substitute" ${actionType === 'substitute' ? 'selected' : ''}>Substitute</option>
+                <option value="sound" ${actionType === 'sound' ? 'selected' : ''}>Play Sound</option>
             </select>
-            ${isCommand
-                ? `<textarea class="action-value" placeholder="Command(s) - use semicolons or newlines to separate" rows="2">${value}</textarea>`
-                : `<input type="text" class="action-value" placeholder="Value" value="${value}">`
-            }
+            <div class="action-fields">
+                ${buildInputFields(actionType, value, webhookUrl, discordMessage, chatmonMessage, chatmonChannel, fgColor, bgColor)}
+            </div>
             <button type="button" class="btn btn-sm btn-danger remove-action">X</button>
         `;
 
-        // Switch between input/textarea based on action type
+        // Switch between input types based on action type
         const typeSelect = div.querySelector('.action-type');
-        typeSelect.addEventListener('change', () => {
-            const valueEl = div.querySelector('.action-value');
-            const currentValue = valueEl.value;
-            const isNowCommand = typeSelect.value === 'command';
+        const fieldsContainer = div.querySelector('.action-fields');
 
-            if (isNowCommand && valueEl.tagName === 'INPUT') {
-                const textarea = document.createElement('textarea');
-                textarea.className = 'action-value';
-                textarea.placeholder = 'Command(s) - use semicolons or newlines to separate';
-                textarea.rows = 2;
-                textarea.value = currentValue;
-                valueEl.replaceWith(textarea);
-            } else if (!isNowCommand && valueEl.tagName === 'TEXTAREA') {
-                const input = document.createElement('input');
-                input.type = 'text';
-                input.className = 'action-value';
-                input.placeholder = 'Value';
-                input.value = currentValue;
-                valueEl.replaceWith(input);
-            }
+        typeSelect.addEventListener('change', () => {
+            const newType = typeSelect.value;
+            fieldsContainer.innerHTML = buildInputFields(newType, '', '', '', '', '', '#ffff00', '');
         });
 
         div.querySelector('.remove-action').addEventListener('click', () => div.remove());
@@ -3358,13 +3402,27 @@ class WMTClient {
         const actions = [];
         document.querySelectorAll('#trigger-actions .action-item').forEach(item => {
             const type = item.querySelector('.action-type').value;
-            const value = item.querySelector('.action-value').value;
 
             const action = { type };
-            if (type === 'command') action.command = value;
-            if (type === 'highlight') action.color = value || '#ffff00';
-            if (type === 'substitute') action.replacement = value;
-            if (type === 'sound') action.sound = value || 'beep';
+            if (type === 'command') {
+                action.command = item.querySelector('.action-value')?.value || '';
+            } else if (type === 'discord') {
+                action.webhookUrl = item.querySelector('.action-webhook')?.value || '';
+                action.message = item.querySelector('.action-message')?.value || '';
+            } else if (type === 'chatmon') {
+                action.message = item.querySelector('.action-chatmon-msg')?.value || '';
+                action.channel = item.querySelector('.action-chatmon-channel')?.value || 'trigger';
+            } else if (type === 'highlight') {
+                action.fgColor = item.querySelector('.action-fg-color')?.value || '#ffff00';
+                const bgEnabled = item.querySelector('.action-bg-enabled')?.checked;
+                if (bgEnabled) {
+                    action.bgColor = item.querySelector('.action-bg-color')?.value || '#000000';
+                }
+            } else if (type === 'substitute') {
+                action.replacement = item.querySelector('.action-value')?.value || '';
+            } else if (type === 'sound') {
+                action.sound = item.querySelector('.action-value')?.value || 'beep';
+            }
 
             actions.push(action);
         });

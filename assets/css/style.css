@@ -1950,7 +1950,12 @@ body {
     margin-bottom: 5px;
 }
 
-.action-item select,
+.action-item > select.action-type {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 140px;
+}
+
 .action-item input,
 .action-item textarea {
     flex: 1;
@@ -1963,8 +1968,96 @@ body {
     font-size: inherit;
 }
 
+.action-item > .remove-action {
+    flex: 0 0 auto;
+}
+
 .add-action-btn {
     margin-top: 10px;
+}
+
+.action-fields {
+    flex: 1;
+    min-width: 0;
+}
+
+.action-fields textarea,
+.action-fields input {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.discord-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.discord-fields input {
+    width: 100%;
+}
+
+.action-webhook {
+    font-size: 0.9em;
+}
+
+.action-message {
+    font-size: 0.9em;
+}
+
+.highlight-fields {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.highlight-fields label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.9em;
+    color: #aaa;
+}
+
+.highlight-fields input[type="color"] {
+    width: 40px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #444;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.highlight-fields input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.gag-note {
+    color: #888;
+    font-style: italic;
+    font-size: 0.9em;
+}
+
+.chatmon-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.chatmon-fields input {
+    width: 100%;
+}
+
+.action-chatmon-msg {
+    font-size: 0.9em;
+}
+
+.action-chatmon-channel {
+    font-size: 0.85em;
+    max-width: 150px;
 }
 
 /* Responsive - Large screens (below 1200px) */

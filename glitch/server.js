@@ -14,7 +14,7 @@ const https = require('https');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.5.0'; // Multi-device session management - close old sessions when same user+character connects from different device
+const VERSION = '2.6.6'; // Trigger loop detection
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -1118,8 +1118,27 @@ function processLine(session, line) {
     session.currentAnsiState = '';
   }
 
-  // Process triggers
-  const processed = processTriggers(line, session.triggers);
+  // Initialize loop tracker if needed
+  if (!session.loopTracker) {
+    session.loopTracker = {};
+  }
+
+  // Process triggers with loop detection
+  const processed = processTriggers(line, session.triggers, session.loopTracker);
+
+  // Handle loop detection - notify client and disable the trigger
+  if (processed.loopDetected) {
+    const loopTrigger = processed.loopDetected;
+    sendToClient(session, {
+      type: 'system',
+      message: `Loop detected! Trigger "${loopTrigger.name}" fired too many times and has been disabled.`
+    });
+    // Tell client to disable the trigger
+    sendToClient(session, {
+      type: 'disable_trigger',
+      triggerId: loopTrigger.id
+    });
+  }
 
   if (!processed.gag) {
     sendToClient(session, {
@@ -1158,6 +1177,29 @@ function processLine(session, line) {
       });
     }
   });
+
+  // Send Discord webhooks (with user variable substitution)
+  if (processed.discordWebhooks) {
+    processed.discordWebhooks.forEach(webhook => {
+      sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+    });
+  }
+
+  // Send ChatMon messages (with user variable substitution)
+  if (processed.chatmonMessages) {
+    processed.chatmonMessages.forEach(chat => {
+      // Substitute user variables ($varname)
+      let finalMessage = chat.message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+        const vars = session.variables || {};
+        return vars[varName] !== undefined ? String(vars[varName]) : match;
+      });
+      sendToClient(session, {
+        type: 'trigger_chatmon',
+        message: finalMessage,
+        channel: chat.channel
+      });
+    });
+  }
 }
 
 /**
@@ -1591,6 +1633,28 @@ wss.on('connection', (ws, req) => {
                 });
               }
             });
+
+            // Send Discord webhooks (with user variable substitution)
+            if (processed.discordWebhooks) {
+              processed.discordWebhooks.forEach(webhook => {
+                sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+              });
+            }
+
+            // Send ChatMon messages (with user variable substitution)
+            if (processed.chatmonMessages) {
+              processed.chatmonMessages.forEach(chat => {
+                let finalMessage = chat.message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+                  const vars = session.variables || {};
+                  return vars[varName] !== undefined ? String(vars[varName]) : match;
+                });
+                sendToClient(session, {
+                  type: 'trigger_chatmon',
+                  message: finalMessage,
+                  channel: chat.channel
+                });
+              });
+            }
           }
           break;
 
@@ -2024,17 +2088,39 @@ function isTinTinPattern(pattern) {
   return false;
 }
 
-function processTriggers(line, triggers) {
+function processTriggers(line, triggers, loopTracker = null) {
   const result = {
     line: line,
     gag: false,
     highlight: null,
     commands: [],
-    sound: null
+    sound: null,
+    loopDetected: null  // Will contain trigger info if loop detected
   };
+
+  const now = Date.now();
+  const LOOP_WINDOW_MS = 2000;  // 2 second window
+  const LOOP_THRESHOLD = 50;    // Max fires in window before considered a loop
 
   for (const trigger of triggers) {
     if (!trigger.enabled) continue;
+
+    // Check for trigger loop if we have a tracker
+    if (loopTracker && trigger.id) {
+      const tracker = loopTracker[trigger.id];
+      if (tracker) {
+        // Clean old entries outside the window
+        if (now - tracker.firstFire > LOOP_WINDOW_MS) {
+          tracker.count = 0;
+          tracker.firstFire = now;
+        }
+        // Check if this trigger is looping
+        if (tracker.count >= LOOP_THRESHOLD) {
+          // Skip this trigger - it's looping
+          continue;
+        }
+      }
+    }
 
     let matched = false;
     let matches = [];
@@ -2062,6 +2148,31 @@ function processTriggers(line, triggers) {
     }
 
     if (matched && trigger.actions) {
+      // Track this fire for loop detection
+      if (loopTracker && trigger.id) {
+        if (!loopTracker[trigger.id]) {
+          loopTracker[trigger.id] = { count: 0, firstFire: now };
+        }
+        const tracker = loopTracker[trigger.id];
+        // Reset if outside window
+        if (now - tracker.firstFire > LOOP_WINDOW_MS) {
+          tracker.count = 1;
+          tracker.firstFire = now;
+        } else {
+          tracker.count++;
+        }
+        // Check if we just hit the threshold
+        if (tracker.count === LOOP_THRESHOLD) {
+          result.loopDetected = {
+            id: trigger.id,
+            name: trigger.name || trigger.pattern,
+            pattern: trigger.pattern
+          };
+          // Skip executing this trigger's actions
+          continue;
+        }
+      }
+
       for (const action of trigger.actions) {
         switch (action.type) {
           case 'gag':
@@ -2119,12 +2230,90 @@ function processTriggers(line, triggers) {
               result.line = result.line.replace(searchPattern, replacement);
             }
             break;
+          case 'discord':
+            // Queue Discord webhook to be sent by caller (needs session for variable substitution)
+            if (action.webhookUrl && action.message) {
+              let message = action.message;
+              if (matches.length) {
+                message = replaceTinTinVars(message, matches);
+              }
+              if (!result.discordWebhooks) result.discordWebhooks = [];
+              result.discordWebhooks.push({
+                webhookUrl: action.webhookUrl,
+                message: message
+              });
+            }
+            break;
+          case 'chatmon':
+            // Queue ChatMon message to be sent to client (needs session for variable substitution)
+            if (action.message) {
+              let message = action.message;
+              if (matches.length) {
+                message = replaceTinTinVars(message, matches);
+              }
+              if (!result.chatmonMessages) result.chatmonMessages = [];
+              result.chatmonMessages.push({
+                message: message,
+                channel: action.channel || 'trigger'
+              });
+            }
+            break;
         }
       }
     }
   }
 
   return result;
+}
+
+/**
+ * Send a message to a Discord webhook
+ * @param {string} webhookUrl - The Discord webhook URL
+ * @param {string} message - The message to send
+ * @param {Object} variables - User variables for $var substitution
+ */
+function sendDiscordWebhook(webhookUrl, message, variables = {}) {
+  // Validate webhook URL - only allow Discord webhook URLs
+  const discordPattern = /^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]+$/;
+  if (!discordPattern.test(webhookUrl)) {
+    console.error('Invalid Discord webhook URL:', webhookUrl);
+    return;
+  }
+
+  // Substitute user variables ($varname)
+  let finalMessage = message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+    return variables[varName] !== undefined ? String(variables[varName]) : match;
+  });
+
+  // Prepare the payload
+  const payload = JSON.stringify({ content: finalMessage });
+
+  const url = new URL(webhookUrl);
+  const options = {
+    hostname: url.hostname,
+    port: 443,
+    path: url.pathname,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
+    }
+  };
+
+  const req = https.request(options, (res) => {
+    if (res.statusCode === 204 || res.statusCode === 200) {
+      console.log('Discord webhook sent successfully');
+    } else {
+      console.error('Discord webhook error:', res.statusCode);
+    }
+  });
+
+  req.on('error', (e) => {
+    console.error('Discord webhook request failed:', e.message);
+  });
+
+  req.write(payload);
+  req.end();
 }
 
 server.listen(PORT, () => {

@@ -970,6 +970,40 @@ Any refactoring that moves trigger processing to the client will break:
 
 If you need client-side pattern matching (e.g., for #regexp), implement it as a SEPARATE function, not by moving the main trigger engine.
 
+### Discord Webhook Triggers (v2.6.5+)
+
+Triggers can send messages to Discord webhooks as an action type. This replaces the need for `#system` commands to call external scripts.
+
+**UI:** In the trigger modal, select "Send to Discord" as the action type. Two fields appear:
+1. **Webhook URL** - Must be a valid Discord webhook URL (`https://discord.com/api/webhooks/...`)
+2. **Message** - The message to send (supports variable substitution)
+
+**Variable Substitution:**
+- `%1`, `%2`, etc. - Captured groups from the trigger pattern
+- `$varname` - User-defined variables set with `#var`
+
+**Example:**
+```
+Pattern: -== %1 REPORT : %2 has reported %3 ==-
+Action: Send to Discord
+Webhook: https://discord.com/api/webhooks/123456/abcdef...
+Message: $rtype REPORT : $rperson has reported $rdata
+```
+
+Note: The trigger can also set variables in a separate "Send Command" action:
+```
+#var rtype %1;#var rperson %2;#var rdata %3
+```
+
+**Server-side Implementation:**
+- Webhook URL is validated (only Discord webhook URLs allowed)
+- POST request sent with `{ "content": "message" }` payload
+- Runs server-side like all triggers, so works even during browser disconnects
+
+**Key files:**
+- `assets/js/app.js` - `addTriggerAction()` builds the UI for discord action type
+- `glitch/server.js` - `sendDiscordWebhook()` function, discord case in `processTriggers()`
+
 ## Storage Limits
 
 - 25 MB total per user
