@@ -3306,12 +3306,12 @@ class WMTClient {
         const webhookUrl = this.escapeHtml(action?.webhookUrl || '');
         const discordMessage = this.escapeHtml(action?.type === 'discord' ? (action?.message || '') : '');
         const chatmonMessage = this.escapeHtml(action?.type === 'chatmon' ? (action?.message || '') : '');
-        const chatmonChannel = this.escapeHtml(action?.channel || '');
+        const soundType = action?.sound || 'classic';
         const fgColor = action?.fgColor || action?.color || '#ffff00';
         const bgColor = action?.bgColor || '';
 
         // Build the input fields HTML based on action type
-        const buildInputFields = (type, val, webhook, discMsg, chatMsg, chatChan, fg, bg) => {
+        const buildInputFields = (type, val, webhook, discMsg, chatMsg, fg, bg, sound) => {
             if (type === 'command') {
                 return `<textarea class="action-value" placeholder="Command(s) - use semicolons or newlines to separate" rows="2">${val}</textarea>`;
             } else if (type === 'discord') {
@@ -3322,12 +3322,7 @@ class WMTClient {
                     </div>
                 `;
             } else if (type === 'chatmon') {
-                return `
-                    <div class="chatmon-fields">
-                        <input type="text" class="action-chatmon-msg" placeholder="Message (use %1, %2, $var)" value="${chatMsg}">
-                        <input type="text" class="action-chatmon-channel" placeholder="Channel (optional)" value="${chatChan}">
-                    </div>
-                `;
+                return `<input type="text" class="action-chatmon-msg" placeholder="Message (use %1, %2, $var)" value="${chatMsg}">`;
             } else if (type === 'highlight') {
                 return `
                     <div class="highlight-fields">
@@ -3346,6 +3341,17 @@ class WMTClient {
                 `;
             } else if (type === 'gag') {
                 return `<span class="gag-note">Line will be hidden</span>`;
+            } else if (type === 'sound') {
+                return `
+                    <select class="action-sound">
+                        <option value="classic" ${sound === 'classic' ? 'selected' : ''}>Classic Beep</option>
+                        <option value="ping" ${sound === 'ping' ? 'selected' : ''}>Ping</option>
+                        <option value="double" ${sound === 'double' ? 'selected' : ''}>Double Beep</option>
+                        <option value="chime" ${sound === 'chime' ? 'selected' : ''}>Chime</option>
+                        <option value="alert" ${sound === 'alert' ? 'selected' : ''}>Alert</option>
+                        <option value="gentle" ${sound === 'gentle' ? 'selected' : ''}>Gentle</option>
+                    </select>
+                `;
             } else {
                 return `<input type="text" class="action-value" placeholder="Value" value="${val}">`;
             }
@@ -3362,7 +3368,7 @@ class WMTClient {
                 <option value="sound" ${actionType === 'sound' ? 'selected' : ''}>Play Sound</option>
             </select>
             <div class="action-fields">
-                ${buildInputFields(actionType, value, webhookUrl, discordMessage, chatmonMessage, chatmonChannel, fgColor, bgColor)}
+                ${buildInputFields(actionType, value, webhookUrl, discordMessage, chatmonMessage, fgColor, bgColor, soundType)}
             </div>
             <button type="button" class="btn btn-sm btn-danger remove-action">X</button>
         `;
@@ -3404,7 +3410,7 @@ class WMTClient {
 
         typeSelect.addEventListener('change', () => {
             const newType = typeSelect.value;
-            fieldsContainer.innerHTML = buildInputFields(newType, '', '', '', '', '', '#ffff00', '');
+            fieldsContainer.innerHTML = buildInputFields(newType, '', '', '', '', '#ffff00', '', 'classic');
             if (newType === 'highlight') {
                 setupHighlightFields(fieldsContainer, null);
             }
@@ -3456,7 +3462,6 @@ class WMTClient {
                 action.message = item.querySelector('.action-message')?.value || '';
             } else if (type === 'chatmon') {
                 action.message = item.querySelector('.action-chatmon-msg')?.value || '';
-                action.channel = item.querySelector('.action-chatmon-channel')?.value || 'trigger';
             } else if (type === 'highlight') {
                 action.fgColor = item.querySelector('.action-fg-color')?.value || '#ffff00';
                 const bgEnabled = item.querySelector('.action-bg-enabled')?.checked;
@@ -3472,7 +3477,7 @@ class WMTClient {
             } else if (type === 'substitute') {
                 action.replacement = item.querySelector('.action-value')?.value || '';
             } else if (type === 'sound') {
-                action.sound = item.querySelector('.action-value')?.value || 'beep';
+                action.sound = item.querySelector('.action-sound')?.value || 'classic';
             }
 
             actions.push(action);
