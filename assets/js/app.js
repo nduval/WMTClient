@@ -2997,14 +2997,17 @@ class WMTClient {
         const hasGag = trigger.actions.some(a => a.type === 'gag');
         const hasHighlight = trigger.actions.some(a => a.type === 'highlight');
         const hasSubstitute = trigger.actions.some(a => a.type === 'substitute');
-        const hasCommand = trigger.actions.some(a => a.type === 'command');
+        // "Complex" actions that make this a full trigger (not a simple gag/highlight/substitute)
+        const hasComplexAction = trigger.actions.some(a =>
+            a.type === 'command' || a.type === 'discord' || a.type === 'chatmon' || a.type === 'sound'
+        );
 
         // If only gag action, it's a gag
-        if (hasGag && !hasHighlight && !hasSubstitute && !hasCommand) return 'gag';
+        if (hasGag && !hasHighlight && !hasSubstitute && !hasComplexAction) return 'gag';
         // If only highlight action, it's a highlight
-        if (hasHighlight && !hasGag && !hasSubstitute && !hasCommand) return 'highlight';
+        if (hasHighlight && !hasGag && !hasSubstitute && !hasComplexAction) return 'highlight';
         // If only substitute action, it's a substitute
-        if (hasSubstitute && !hasGag && !hasHighlight && !hasCommand) return 'substitute';
+        if (hasSubstitute && !hasGag && !hasHighlight && !hasComplexAction) return 'substitute';
         // Otherwise it's a regular trigger
         return 'trigger';
     }
