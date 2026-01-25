@@ -1184,6 +1184,22 @@ function processLine(session, line) {
       sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
     });
   }
+
+  // Send ChatMon messages (with user variable substitution)
+  if (processed.chatmonMessages) {
+    processed.chatmonMessages.forEach(chat => {
+      // Substitute user variables ($varname)
+      let finalMessage = chat.message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+        const vars = session.variables || {};
+        return vars[varName] !== undefined ? String(vars[varName]) : match;
+      });
+      sendToClient(session, {
+        type: 'trigger_chatmon',
+        message: finalMessage,
+        channel: chat.channel
+      });
+    });
+  }
 }
 
 /**
@@ -1622,6 +1638,21 @@ wss.on('connection', (ws, req) => {
             if (processed.discordWebhooks) {
               processed.discordWebhooks.forEach(webhook => {
                 sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+              });
+            }
+
+            // Send ChatMon messages (with user variable substitution)
+            if (processed.chatmonMessages) {
+              processed.chatmonMessages.forEach(chat => {
+                let finalMessage = chat.message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+                  const vars = session.variables || {};
+                  return vars[varName] !== undefined ? String(vars[varName]) : match;
+                });
+                sendToClient(session, {
+                  type: 'trigger_chatmon',
+                  message: finalMessage,
+                  channel: chat.channel
+                });
               });
             }
           }
@@ -2069,7 +2100,7 @@ function processTriggers(line, triggers, loopTracker = null) {
 
   const now = Date.now();
   const LOOP_WINDOW_MS = 2000;  // 2 second window
-  const LOOP_THRESHOLD = 5;     // Max fires in window before considered a loop
+  const LOOP_THRESHOLD = 50;    // Max fires in window before considered a loop
 
   for (const trigger of triggers) {
     if (!trigger.enabled) continue;
@@ -2210,6 +2241,20 @@ function processTriggers(line, triggers, loopTracker = null) {
               result.discordWebhooks.push({
                 webhookUrl: action.webhookUrl,
                 message: message
+              });
+            }
+            break;
+          case 'chatmon':
+            // Queue ChatMon message to be sent to client (needs session for variable substitution)
+            if (action.message) {
+              let message = action.message;
+              if (matches.length) {
+                message = replaceTinTinVars(message, matches);
+              }
+              if (!result.chatmonMessages) result.chatmonMessages = [];
+              result.chatmonMessages.push({
+                message: message,
+                channel: action.channel || 'trigger'
               });
             }
             break;
