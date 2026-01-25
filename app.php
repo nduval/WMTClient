@@ -411,7 +411,7 @@ $wsToken = $_SESSION['ws_token'];
                     <div style="margin-top:8px; display:flex; align-items:center; gap:10px;">
                         <label for="highlight-fg-color" style="margin:0; white-space:nowrap;">Custom:</label>
                         <input type="color" id="highlight-fg-color" value="#ff0000" style="width:50px; height:30px; padding:0; border:none; cursor:pointer;">
-                        <label style="margin:0;"><input type="checkbox" id="highlight-fg-enabled" checked> Enable</label>
+                        <label style="margin:0; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="highlight-fg-enabled" checked> Enable</label>
                     </div>
                 </div>
                 <div class="form-group">
@@ -433,14 +433,14 @@ $wsToken = $_SESSION['ws_token'];
                     <div style="margin-top:8px; display:flex; align-items:center; gap:10px;">
                         <label for="highlight-bg-color" style="margin:0; white-space:nowrap;">Custom:</label>
                         <input type="color" id="highlight-bg-color" value="#333300" style="width:50px; height:30px; padding:0; border:none; cursor:pointer;">
-                        <label style="margin:0;"><input type="checkbox" id="highlight-bg-enabled"> Enable</label>
+                        <label style="margin:0; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="highlight-bg-enabled"> Enable</label>
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Text Styles</label>
                     <div style="display:flex; gap:20px; align-items:center;">
-                        <label style="margin:0;"><input type="checkbox" id="highlight-blink"> Blink</label>
-                        <label style="margin:0;"><input type="checkbox" id="highlight-underline"> Underline</label>
+                        <span style="color:#888; white-space:nowrap;">Text Styles:</span>
+                        <label style="margin:0; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="highlight-blink"> Blink</label>
+                        <label style="margin:0; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="highlight-underline"> Underline</label>
                     </div>
                 </div>
                 <div class="form-group">
