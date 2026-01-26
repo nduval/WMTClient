@@ -978,6 +978,8 @@ function parseFFFStats(session, data) {
  * Process a single line from MUD
  */
 function processLine(session, line) {
+  // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
+  line = line.replace(/\r/g, '');
   if (line.trim() === '') return;
 
   // FIRST LINE OF DEFENSE: Gag MIP protocol lines
