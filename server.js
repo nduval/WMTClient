@@ -2168,6 +2168,10 @@ function processTriggers(line, triggers, loopTracker = null) {
     let matches = [];
     const pattern = trigger.pattern;
 
+    // Strip ANSI codes for matching (MUD lines contain color codes that break patterns)
+    // Keep original line for output (preserves colors)
+    const matchLine = stripAnsi(line);
+
     // Auto-detect pattern type: TinTin++ syntax or simple contains
     const useTinTin = isTinTinPattern(pattern);
 
@@ -2176,7 +2180,7 @@ function processTriggers(line, triggers, loopTracker = null) {
       try {
         const regexPattern = tinTinToRegex(pattern);
         const regex = new RegExp(regexPattern);
-        const match = line.match(regex);
+        const match = matchLine.match(regex);
         if (match) {
           matched = true;
           matches = match;
@@ -2186,7 +2190,7 @@ function processTriggers(line, triggers, loopTracker = null) {
       }
     } else {
       // Simple case-sensitive contains match
-      matched = line.includes(pattern);
+      matched = matchLine.includes(pattern);
     }
 
     if (matched && trigger.actions) {
