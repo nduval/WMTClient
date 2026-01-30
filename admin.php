@@ -799,6 +799,130 @@ $backups = getBackupFiles();
             color: #888;
             text-transform: uppercase;
         }
+
+        /* User cards */
+        .user-card {
+            background: #222;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 12px 15px;
+            margin-bottom: 8px;
+        }
+
+        .user-card.online {
+            border-left: 3px solid #00ff00;
+        }
+
+        .user-row-1 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .user-name {
+            font-size: 16px;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            text-transform: uppercase;
+        }
+
+        .badge-admin {
+            background: #ff6600;
+            color: #000;
+        }
+
+        .badge-wizard {
+            background: #00cccc;
+            color: #000;
+        }
+
+        .user-email {
+            color: #888;
+            font-size: 13px;
+        }
+
+        .user-stats {
+            display: flex;
+            gap: 15px;
+        }
+
+        .stat-item {
+            font-size: 13px;
+        }
+
+        .stat-dim {
+            color: #555;
+            font-size: 11px;
+            margin-left: 2px;
+        }
+
+        .user-row-2 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        .user-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 180px;
+        }
+
+        .status-indicator {
+            font-size: 10px;
+        }
+
+        .status-indicator.offline {
+            color: #555;
+        }
+
+        .status-indicator.online {
+            color: #00ff00;
+        }
+
+        .status-indicator.partial {
+            color: #ffff00;
+        }
+
+        .status-text {
+            color: #888;
+        }
+
+        .status-detail {
+            color: #00ff00;
+            font-size: 12px;
+        }
+
+        .user-login {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .user-actions {
+            display: flex;
+            gap: 5px;
+        }
+
+        .user-actions .btn-sm {
+            padding: 4px 8px;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
@@ -819,6 +943,10 @@ $backups = getBackupFiles();
             <div class="stat">
                 <div class="stat-value"><?= count($usersIndex) ?></div>
                 <div class="stat-label">Users</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="online-count">-</div>
+                <div class="stat-label">Online</div>
             </div>
             <div class="stat">
                 <div class="stat-value"><?= count($orphans) ?></div>
@@ -908,92 +1036,73 @@ $backups = getBackupFiles();
             <?php if (empty($usersIndex)): ?>
                 <p style="color: #888;">No users registered.</p>
             <?php else: ?>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Username</th>
-                            <th>Email</th>
-                            <th>Storage</th>
-                            <th>Files</th>
-                            <th>Last Login</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($usersIndex as $user):
-                            $stats = getUserStorageStats($user['id']);
-                            $isAdmin = in_array($user['username'], $ADMIN_USERS);
-                            $isWizard = $user['isWizard'] ?? false;
-                        ?>
-                            <tr>
-                                <td>
-                                    <?= htmlspecialchars($user['username']) ?>
+                <div id="users-list">
+                    <?php foreach ($usersIndex as $user):
+                        $stats = getUserStorageStats($user['id']);
+                        $isAdmin = in_array($user['username'], $ADMIN_USERS);
+                        $isWizard = $user['isWizard'] ?? false;
+                    ?>
+                        <div class="user-card" data-user-id="<?= htmlspecialchars($user['id']) ?>">
+                            <div class="user-row-1">
+                                <div class="user-info">
+                                    <span class="user-name"><?= htmlspecialchars($user['username']) ?></span>
                                     <?php if ($isAdmin): ?>
-                                        <span style="color: #ff6600; font-size: 11px;">(admin)</span>
+                                        <span class="badge badge-admin">admin</span>
                                     <?php endif; ?>
                                     <?php if ($isWizard): ?>
-                                        <span style="color: #00ffff; font-size: 11px;">(wizard)</span>
+                                        <span class="badge badge-wizard">wizard</span>
                                     <?php endif; ?>
-                                </td>
-                                <td>
                                     <?php if (!empty($user['email'])): ?>
-                                        <span style="color: #00ff00;"><?= htmlspecialchars($user['email']) ?></span>
-                                    <?php else: ?>
-                                        <span style="color: #666;">-</span>
+                                        <span class="user-email"><?= htmlspecialchars($user['email']) ?></span>
                                     <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span style="color: <?= $stats['percent_used'] > 80 ? '#ff6600' : '#888' ?>;">
-                                        <?= $stats['used_mb'] ?> MB
+                                </div>
+                                <div class="user-stats">
+                                    <span class="stat-item" title="Storage used">
+                                        <span style="color: <?= $stats['percent_used'] > 80 ? '#ff6600' : '#888' ?>;"><?= $stats['used_mb'] ?></span><span class="stat-dim">MB</span>
                                     </span>
-                                    <span style="color: #444; font-size: 11px;">/ <?= $stats['max_mb'] ?></span>
-                                </td>
-                                <td>
-                                    <span style="color: <?= ($stats['files'] / $stats['max_files']) > 0.8 ? '#ff6600' : '#888' ?>;">
-                                        <?= $stats['files'] ?>
+                                    <span class="stat-item" title="Files count">
+                                        <span style="color: <?= ($stats['files'] / $stats['max_files']) > 0.8 ? '#ff6600' : '#888' ?>;"><?= $stats['files'] ?></span><span class="stat-dim">files</span>
                                     </span>
-                                    <span style="color: #444; font-size: 11px;">/ <?= $stats['max_files'] ?></span>
-                                </td>
-                                <td>
+                                </div>
+                            </div>
+                            <div class="user-row-2">
+                                <div class="user-status">
+                                    <span class="status-indicator offline" title="Offline">●</span>
+                                    <span class="status-text">Offline</span>
+                                    <span class="status-detail"></span>
+                                </div>
+                                <div class="user-login">
                                     <?php if (!empty($user['last_login'])): ?>
-                                        <span style="color: #888;"><?= date('M j, Y g:i A', strtotime($user['last_login'])) ?></span>
+                                        Last login: <?= date('M j g:ia', strtotime($user['last_login'])) ?>
                                     <?php else: ?>
-                                        <span style="color: #666;">Never</span>
+                                        Never logged in
                                     <?php endif; ?>
-                                </td>
-                                <td>
-                                    <div style="display: flex; gap: 5px; flex-wrap: wrap;">
-                                        <?php if (!empty($user['email'])): ?>
-                                            <form method="post" style="margin: 0;" onsubmit="return confirm('Send password reset email to <?= htmlspecialchars($user['email']) ?>?');">
-                                                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                                                <input type="hidden" name="action" value="send_reset_email">
-                                                <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
-                                                <button type="submit" class="btn btn-primary btn-sm" title="Send reset email to <?= htmlspecialchars($user['email']) ?>">
-                                                    Email Reset
-                                                </button>
-                                            </form>
-                                        <?php endif; ?>
-                                        <form method="post" style="margin: 0;">
+                                </div>
+                                <div class="user-actions">
+                                    <?php if (!empty($user['email'])): ?>
+                                        <form method="post" style="margin: 0; display: inline;" onsubmit="return confirm('Send password reset email?');">
                                             <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                                            <input type="hidden" name="action" value="toggle_wizard">
+                                            <input type="hidden" name="action" value="send_reset_email">
                                             <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
-                                            <button type="submit" class="btn btn-sm <?= $isWizard ? 'btn-info' : 'btn-secondary' ?>"
-                                                    title="<?= $isWizard ? 'Disable wizard (enable session timeout)' : 'Enable wizard (disable session timeout)' ?>">
-                                                <?= $isWizard ? '★ Wiz' : '☆ Wiz' ?>
-                                            </button>
+                                            <button type="submit" class="btn btn-primary btn-sm" title="Send reset email">Reset</button>
                                         </form>
-                                        <?php if (!$isAdmin): ?>
-                                            <button type="button" class="btn btn-danger btn-sm"
-                                                    onclick="showDeleteModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">
-                                                Delete
-                                            </button>
-                                        <?php endif; ?>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+                                    <?php endif; ?>
+                                    <form method="post" style="margin: 0; display: inline;">
+                                        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+                                        <input type="hidden" name="action" value="toggle_wizard">
+                                        <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
+                                        <button type="submit" class="btn btn-sm <?= $isWizard ? 'btn-info' : 'btn-secondary' ?>" title="Toggle wizard status">
+                                            <?= $isWizard ? '★Wiz' : '☆Wiz' ?>
+                                        </button>
+                                    </form>
+                                    <?php if (!$isAdmin): ?>
+                                        <button type="button" class="btn btn-danger btn-sm" onclick="showDeleteModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">Del</button>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
             <?php endif; ?>
         </div>
 
@@ -1126,6 +1235,83 @@ $backups = getBackupFiles();
                 hideDeleteModal();
             }
         });
+
+        // Fetch and display online sessions
+        async function fetchSessions() {
+            try {
+                const proxyUrl = '<?= WS_CLIENT_URL ?>'.replace('wss://', 'https://').replace('ws://', 'http://');
+                const response = await fetch(proxyUrl + '/sessions', {
+                    method: 'GET',
+                    headers: {
+                        'X-Admin-Key': '<?= RENDER_ADMIN_KEY ?? '' ?>'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    updateOnlineStatus(result.sessions);
+                }
+            } catch (e) {
+                console.error('Failed to fetch sessions:', e);
+            }
+        }
+
+        function updateOnlineStatus(sessions) {
+            // Group sessions by userId
+            const userSessions = {};
+            sessions.forEach(s => {
+                if (s.userId) {
+                    if (!userSessions[s.userId]) {
+                        userSessions[s.userId] = [];
+                    }
+                    userSessions[s.userId].push(s);
+                }
+            });
+
+            // Update online count
+            const onlineCount = Object.keys(userSessions).length;
+            document.getElementById('online-count').textContent = onlineCount;
+
+            // Update each user card
+            document.querySelectorAll('.user-card[data-user-id]').forEach(card => {
+                const userId = card.getAttribute('data-user-id');
+                const indicator = card.querySelector('.status-indicator');
+                const statusText = card.querySelector('.status-text');
+                const statusDetail = card.querySelector('.status-detail');
+                const userSessionList = userSessions[userId];
+
+                if (userSessionList && userSessionList.length > 0) {
+                    // User is online
+                    card.classList.add('online');
+
+                    // Check if all sessions have MUD connected
+                    const allConnected = userSessionList.every(s => s.mudConnected);
+                    const anyConnected = userSessionList.some(s => s.mudConnected);
+
+                    indicator.className = 'status-indicator ' + (allConnected ? 'online' : 'partial');
+                    statusText.textContent = 'Online';
+
+                    // Build character list
+                    const charList = userSessionList.map(s => {
+                        const charName = s.characterName || '?';
+                        const serverTag = s.server === '3s' ? '3S' : '3K';
+                        return `${charName}@${serverTag}`;
+                    }).join(', ');
+                    statusDetail.textContent = charList;
+                } else {
+                    // User is offline
+                    card.classList.remove('online');
+                    indicator.className = 'status-indicator offline';
+                    statusText.textContent = 'Offline';
+                    statusDetail.textContent = '';
+                }
+            });
+        }
+
+        // Fetch sessions on page load and periodically
+        fetchSessions();
+        setInterval(fetchSessions, 30000); // Refresh every 30 seconds
 
         // Broadcast functionality
         async function sendBroadcast() {

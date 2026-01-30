@@ -67,6 +67,7 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
     };
 
     const req = https.request(options, (res) => {
+      res.resume(); // Must consume response to free connection
       if (res.statusCode !== 204 && res.statusCode !== 200) {
         console.error('Discord webhook error:', res.statusCode);
       }
@@ -283,6 +284,44 @@ const server = http.createServer((req, res) => {
       version: VERSION,
       mud: `${MUD_HOST}:${MUD_PORT}`,
       activeSessions: sessions.size
+    }));
+  } else if (req.url === '/sessions' && req.method === 'GET') {
+    // Admin endpoint to list active sessions
+    const adminKey = req.headers['x-admin-key'];
+
+    if (!ADMIN_KEY) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Not configured (ADMIN_KEY not set)' }));
+      return;
+    }
+
+    if (adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+
+    // Build list of active sessions
+    const activeSessions = [];
+    for (const [token, session] of sessions) {
+      const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
+      const browserConnected = session.ws && session.ws.readyState === WebSocket.OPEN;
+
+      if (mudConnected || browserConnected) {
+        activeSessions.push({
+          userId: session.userId || null,
+          characterName: session.characterName || null,
+          server: session.targetHost === '3scapes.org' ? '3s' : '3k',
+          mudConnected,
+          browserConnected
+        });
+      }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      sessions: activeSessions
     }));
   } else if (req.url === '/broadcast' && req.method === 'POST') {
     // Admin broadcast endpoint
@@ -940,6 +979,8 @@ function parseFFFStats(session, data) {
  * Process a single line from MUD
  */
 function processLine(session, line) {
+  // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
+  line = line.replace(/\r/g, '');
   if (line.trim() === '') return;
 
   // FIRST LINE OF DEFENSE: Gag MIP protocol lines
@@ -1337,6 +1378,7 @@ wss.on('connection', (ws, req) => {
           const token = data.token;
           const userId = data.userId;
           const characterId = data.characterId;
+          const characterName = data.characterName || null;
           const isWizard = data.isWizard || false;
 
           if (!token || token.length !== 64) {
@@ -1426,10 +1468,11 @@ wss.on('connection', (ws, req) => {
             session.ws = ws;
             session.userId = userId;
             session.characterId = characterId;
+            session.characterName = characterName;
             session.isWizard = isWizard;
             sessions.set(token, session);
 
-            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterId}, wizard: ${isWizard})`);
+            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterName || characterId}, wizard: ${isWizard})`);
 
             ws.send(JSON.stringify({
               type: 'session_new'
@@ -2126,6 +2169,10 @@ function processTriggers(line, triggers, loopTracker = null) {
     let matches = [];
     const pattern = trigger.pattern;
 
+    // Strip ANSI codes for matching (MUD lines contain color codes that break patterns)
+    // Keep original line for output (preserves colors)
+    const matchLine = stripAnsi(line);
+
     // Auto-detect pattern type: TinTin++ syntax or simple contains
     const useTinTin = isTinTinPattern(pattern);
 
@@ -2134,7 +2181,7 @@ function processTriggers(line, triggers, loopTracker = null) {
       try {
         const regexPattern = tinTinToRegex(pattern);
         const regex = new RegExp(regexPattern);
-        const match = line.match(regex);
+        const match = matchLine.match(regex);
         if (match) {
           matched = true;
           matches = match;
@@ -2144,7 +2191,7 @@ function processTriggers(line, triggers, loopTracker = null) {
       }
     } else {
       // Simple case-sensitive contains match
-      matched = line.includes(pattern);
+      matched = matchLine.includes(pattern);
     }
 
     if (matched && trigger.actions) {
@@ -2305,15 +2352,17 @@ function sendDiscordWebhook(webhookUrl, message, variables = {}) {
   };
 
   const req = https.request(options, (res) => {
+    // Must consume response data to free up the connection
+    res.resume();
     if (res.statusCode === 204 || res.statusCode === 200) {
-      console.log('Discord webhook sent successfully');
+      console.log(`Discord webhook sent successfully to ...${webhookUrl.slice(-10)}`);
     } else {
-      console.error('Discord webhook error:', res.statusCode);
+      console.error(`Discord webhook error: ${res.statusCode} for ...${webhookUrl.slice(-10)}`);
     }
   });
 
   req.on('error', (e) => {
-    console.error('Discord webhook request failed:', e.message);
+    console.error(`Discord webhook request failed for ...${webhookUrl.slice(-10)}:`, e.message);
   });
 
   req.write(payload);

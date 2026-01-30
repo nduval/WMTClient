@@ -226,6 +226,20 @@ class WMTClient {
             }
         }
 
+        // Restore ChatMon state (desktop only)
+        const isMobile = window.innerWidth <= 768;
+        if (!isMobile) {
+            // Restore anchor position
+            if (prefs.chatWindowMode) {
+                this.chatWindowMode = prefs.chatWindowMode;
+            }
+            // Restore open state - actually open the window if it was open
+            if (prefs.chatWindowOpen && !this.chatWindowOpen) {
+                // Defer to ensure DOM is ready, use openChatWindow to avoid re-saving
+                setTimeout(() => this.openChatWindow(), 0);
+            }
+        }
+
         // Update MIP-dependent UI (HP bar, ChatMon button)
         this.updateMipDependentUI(prefs.mipEnabled !== false);
 
@@ -486,6 +500,7 @@ class WMTClient {
         const wsToken = window.WMT_CONFIG?.wsToken || null;
         const userId = window.WMT_CONFIG?.userId || null;
         const characterId = window.WMT_CONFIG?.characterId || null;
+        const characterName = window.WMT_CONFIG?.characterName || null;
         const isWizard = window.WMT_CONFIG?.isWizard || false;
 
         this.connection = new MudConnection({
@@ -493,6 +508,7 @@ class WMTClient {
             wsToken: wsToken,
             userId: userId,
             characterId: characterId,
+            characterName: characterName,
             isWizard: isWizard,
             onConnect: () => this.onConnect(),
             onDisconnect: () => this.onDisconnect(),
@@ -569,9 +585,10 @@ class WMTClient {
             this.appendOutput('Session resumed - MUD connection active.', 'system');
             // Re-send triggers and aliases in case they changed
             this.sendFilteredTriggersAndAliases();
-            // MIP state is preserved server-side, but re-enable client tracking
+            // Re-enable MIP if it was enabled - proxy lost settings on WebSocket reconnect
             if (this.preferences.mipEnabled !== false) {
-                this.mipEnabled = true;
+                // mipId may be lost after page refresh, so re-enable MIP fully
+                this.enableMip();
             }
         } else {
             this.appendOutput('Session resumed - MUD was disconnected.', 'system');
@@ -679,12 +696,14 @@ class WMTClient {
                 break;
 
             case 'broadcast':
-                // Admin broadcast message - display prominently
+                // Admin broadcast message - display prominently in terminal
                 this.appendOutput('', 'system');
-                this.appendOutput('==================== BROADCAST ====================', 'system');
+                this.appendOutput('============== WMT Client Broadcast ===============', 'system');
                 this.appendOutput(data.message, 'system');
                 this.appendOutput('===================================================', 'system');
                 this.appendOutput('', 'system');
+                // Also add to ChatMon so user doesn't miss it
+                this.appendChatMessage(`[WMT Client Broadcast] ${data.message}`, 'system', 'broadcast');
                 // Play notification sound if available
                 this.playSound('beep');
                 break;
@@ -1453,7 +1472,7 @@ class WMTClient {
             // On mobile, always use docked mode
             const isMobile = window.innerWidth <= 768;
             const mode = isMobile ? 'docked' : this.chatWindowMode;
-            this.setChatMode(mode);
+            this.setChatMode(mode, true); // skipSave=true, we save below
             document.getElementById('chat-toggle-btn')?.classList.add('active');
             this.clearChatNotification();
         } else {
@@ -1462,9 +1481,36 @@ class WMTClient {
             terminalArea?.classList.remove('chat-docked', 'chat-docked-left', 'chat-docked-right');
             document.getElementById('chat-toggle-btn')?.classList.remove('active');
         }
+
+        // Save open state (desktop only)
+        const isMobile = window.innerWidth <= 768;
+        if (!isMobile) {
+            fetch('api/preferences.php?action=save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preferences: { chatWindowOpen: this.chatWindowOpen } })
+            }).catch(e => console.error('Failed to save chatWindowOpen:', e));
+        }
     }
 
-    setChatMode(mode) {
+    // Open ChatMon without saving (used when restoring from preferences)
+    openChatWindow() {
+        if (this.chatWindowOpen) return; // Already open
+
+        const chatWindow = document.getElementById('chat-window');
+        if (!chatWindow) return;
+
+        this.chatWindowOpen = true;
+        chatWindow.classList.remove('hidden');
+
+        const isMobile = window.innerWidth <= 768;
+        const mode = isMobile ? 'docked' : this.chatWindowMode;
+        this.setChatMode(mode, true); // skipSave=true
+        document.getElementById('chat-toggle-btn')?.classList.add('active');
+        this.clearChatNotification();
+    }
+
+    setChatMode(mode, skipSave = false) {
         const chatWindow = document.getElementById('chat-window');
         const terminalArea = document.querySelector('.terminal-area');
         if (!chatWindow) return;
@@ -1510,6 +1556,16 @@ class WMTClient {
             chatWindow.classList.add('floating');
             document.getElementById('chat-float-btn')?.classList.add('active');
             this.updateDockButtonTitle('none');
+        }
+
+        // Save preference for persistence (desktop only)
+        const isMobile = window.innerWidth <= 768;
+        if (!isMobile && !skipSave) {
+            fetch('api/preferences.php?action=save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preferences: { chatWindowMode: mode } })
+            }).catch(e => console.error('Failed to save chatWindowMode:', e));
         }
     }
 
@@ -2527,7 +2583,7 @@ class WMTClient {
     }
 
     reconnect() {
-        this.appendOutput('Attempting to reconnect...', 'system');
+        this.appendOutput('Reconnecting...', 'system');
         // Reset flags so credentials will be sent again
         this.passwordSent = false;
         this.mipStarted = false;
@@ -2535,16 +2591,9 @@ class WMTClient {
         this.mipReady = false;
         this.pendingReconnect = true;  // Flag to trigger credential send on reconnect
 
-        // Check WebSocket state - if not open, we need a full reconnect
-        const socket = this.connection?.socket;
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-            this.appendOutput('WebSocket not connected, performing full reconnect...', 'system');
-            // Full WebSocket reconnect (disconnect + connect)
-            this.connection.reconnect();
-        } else {
-            // WebSocket is open, just request MUD reconnection
-            this.connection.requestReconnect();
-        }
+        // Always do a full teardown and fresh connection
+        // Don't try to reuse the WebSocket - it may be a zombie connection
+        this.connection.reconnect();
     }
 
     disconnect() {

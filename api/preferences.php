@@ -204,6 +204,17 @@ switch ($action) {
             $validated['notificationVolume'] = max(0, min(100, $volume));
         }
 
+        // ChatMon window mode (whitelist allowed values)
+        $allowedChatModes = ['floating', 'docked', 'docked-left', 'docked-right'];
+        if (isset($preferences['chatWindowMode']) && in_array($preferences['chatWindowMode'], $allowedChatModes)) {
+            $validated['chatWindowMode'] = $preferences['chatWindowMode'];
+        }
+
+        // ChatMon window open state
+        if (isset($preferences['chatWindowOpen'])) {
+            $validated['chatWindowOpen'] = (bool)$preferences['chatWindowOpen'];
+        }
+
         // Load existing and merge
         $existing = loadJsonFile(getPreferencesPath($userId, $characterId));
         $merged = array_merge($existing, $validated);

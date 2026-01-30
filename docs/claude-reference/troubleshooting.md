@@ -195,6 +195,36 @@ if (isset($_COOKIE[SESSION_NAME])) {
 
 **Solution:** Loop detection tracks fire count per trigger within 2-second window. Threshold of 50 fires auto-disables trigger and notifies user.
 
+### Triggers not firing on MUD text but working with #showme (v2.6.7+)
+
+**Problem:** A trigger like `tells you` fires when tested with `#showme` but not on actual MUD output showing the same visible text.
+
+**Root Cause:** MUD output contains embedded ANSI color codes (e.g., `\x1b[1;33mHot\x1b[0m tells you`). The trigger pattern matched against the raw line including invisible ANSI codes, which broke the match. `#showme` sends clean text without ANSI.
+
+**Fix:** Strip ANSI codes from the line before trigger matching (but preserve them in the output for colors):
+```javascript
+const matchLine = stripAnsi(line);
+// Use matchLine for pattern matching, keep original line for output
+```
+
+**Lesson:** Always match triggers against stripped text. TinTin++ does this internally.
+
+### Discord webhooks silently failing when multiple webhooks fire (v2.6.7+)
+
+**Problem:** Trigger with two Discord webhook actions — first webhook sends, second silently fails.
+
+**Root Cause:** Node.js `https.request()` response body was not being consumed. Without `res.resume()`, the connection stays in the pool and can block subsequent requests.
+
+**Fix:** Add `res.resume()` to all Discord webhook response handlers:
+```javascript
+const req = https.request(options, (res) => {
+  res.resume(); // Must consume response to free connection
+  // ... status check
+});
+```
+
+**Lesson:** In Node.js, always consume HTTP response bodies even if you don't need the data. Use `res.resume()` to drain and free the connection.
+
 ### Wrong modal opening for triggers with highlight+discord
 
 **Problem:** Triggers with highlight AND discord/chatmon opened highlight modal instead of trigger modal.

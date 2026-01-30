@@ -9,6 +9,7 @@ class MudConnection {
         this.wsToken = options.wsToken || null;  // Session token for reconnection
         this.userId = options.userId || null;    // User ID for multi-device session management
         this.characterId = options.characterId || null;  // Character ID for multi-device session management
+        this.characterName = options.characterName || null;  // Character name for admin display
         this.isWizard = options.isWizard || false;  // Wizard flag (no session timeout)
         this.socket = null;
         this.connected = false;
@@ -59,6 +60,7 @@ class MudConnection {
                     token: this.wsToken,
                     userId: this.userId,
                     characterId: this.characterId,
+                    characterName: this.characterName,
                     isWizard: this.isWizard
                 }));
             } else {

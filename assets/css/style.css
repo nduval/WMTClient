@@ -436,14 +436,14 @@ body {
     font-size: var(--mud-font-size, 14px);
     color: var(--mud-text-color, #00ff00);
     background: var(--mud-bg-color, #000000);
-    line-height: 1.4;
+    line-height: 1.15;
     white-space: pre-wrap;
     word-wrap: break-word;
 }
 
 #mud-output .line {
     margin: 0;
-    padding: 1px 0;
+    padding: 0;
 }
 
 #mud-output .line.system {
