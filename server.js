@@ -67,6 +67,7 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
     };
 
     const req = https.request(options, (res) => {
+      res.resume(); // Must consume response to free connection
       if (res.statusCode !== 204 && res.statusCode !== 200) {
         console.error('Discord webhook error:', res.statusCode);
       }
@@ -2351,15 +2352,17 @@ function sendDiscordWebhook(webhookUrl, message, variables = {}) {
   };
 
   const req = https.request(options, (res) => {
+    // Must consume response data to free up the connection
+    res.resume();
     if (res.statusCode === 204 || res.statusCode === 200) {
-      console.log('Discord webhook sent successfully');
+      console.log(`Discord webhook sent successfully to ...${webhookUrl.slice(-10)}`);
     } else {
-      console.error('Discord webhook error:', res.statusCode);
+      console.error(`Discord webhook error: ${res.statusCode} for ...${webhookUrl.slice(-10)}`);
     }
   });
 
   req.on('error', (e) => {
-    console.error('Discord webhook request failed:', e.message);
+    console.error(`Discord webhook request failed for ...${webhookUrl.slice(-10)}:`, e.message);
   });
 
   req.write(payload);
