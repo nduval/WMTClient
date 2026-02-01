@@ -167,19 +167,6 @@ if (isLoggedIn()) {
             display: none;
         }
 
-        .server-info {
-            text-align: center;
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            color: #888;
-            font-size: 0.85em;
-        }
-
-        .server-info span {
-            color: #00ff00;
-        }
-
         .support-link {
             text-align: center;
             margin-top: 15px;
@@ -196,6 +183,49 @@ if (isLoggedIn()) {
 
         .support-link a:hover {
             color: #ffdd00;
+        }
+
+        .guest-section {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .guest-section p.guest-label {
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 10px;
+        }
+
+        .guest-links {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-bottom: 10px;
+        }
+
+        .guest-links a {
+            color: #00ff00;
+            text-decoration: none;
+            font-size: 0.9em;
+            padding: 6px 14px;
+            border: 1px solid rgba(0, 255, 0, 0.3);
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+
+        .guest-links a:hover {
+            background: rgba(0, 255, 0, 0.1);
+            border-color: #00ff00;
+        }
+
+        .guest-section p.guest-note {
+            color: #666;
+            font-size: 0.75em;
+            line-height: 1.4;
+            max-width: 340px;
+            margin: 0 auto;
         }
     </style>
 </head>
@@ -265,8 +295,13 @@ if (isLoggedIn()) {
             </form>
         </div>
 
-        <div class="server-info">
-            Connecting to <span><?= MUD_HOST ?>:<?= MUD_PORT ?></span>
+        <div class="guest-section">
+            <p class="guest-label">Or try it without an account:</p>
+            <div class="guest-links">
+                <a href="guest.php?server=3k">Guest on 3Kingdoms</a>
+                <a href="guest.php?server=3s">Guest on 3Scapes</a>
+            </div>
+            <p class="guest-note">Guest accounts are very limited, but can move around town, look at things, and get a feel for the MUD. They do not save, and cannot interact with other players.</p>
         </div>
 
         <div class="support-link">

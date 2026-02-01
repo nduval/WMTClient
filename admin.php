@@ -269,6 +269,7 @@ function getOrphanedDirectories(): array {
     foreach ($userDirs as $userDir) {
         $dirName = basename($userDir);
         if ($dirName === 'backups') continue;
+        if (str_starts_with($dirName, 'guest_')) continue;
 
         if (!in_array($dirName, $indexedIds)) {
             $orphan = [

@@ -21,8 +21,11 @@ $username = getCurrentUsername();
 $characterId = getCurrentCharacterId();
 $characterName = getCurrentCharacterName();
 $characterServer = getCurrentCharacterServer();
-$characters = getCharacters($userId);
-$isWizard = isUserWizard($userId);
+$isGuest = !empty($_SESSION['is_guest']);
+
+// Guest users have no stored data - skip file-based lookups
+$characters = $isGuest ? [] : getCharacters($userId);
+$isWizard = $isGuest ? false : isUserWizard($userId);
 
 // Determine MUD host/port based on character server
 $mudHost = MUD_HOST;

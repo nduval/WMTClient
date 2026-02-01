@@ -9,6 +9,11 @@ require_once __DIR__ . '/../includes/auth.php';
 initSession();
 requireAuth();
 
+// Block guest write operations
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    denyGuest();
+}
+
 $userId = getCurrentUserId();
 $characterId = getCurrentCharacterId();
 

@@ -652,3 +652,19 @@ function requireCharacter(): void {
         exit;
     }
 }
+
+/**
+ * Check if the current session is a guest
+ */
+function isGuest(): bool {
+    return !empty($_SESSION['is_guest']);
+}
+
+/**
+ * Block write operations for guest sessions
+ */
+function denyGuest(): void {
+    if (isGuest()) {
+        errorResponse('Guest accounts cannot save data', 403);
+    }
+}

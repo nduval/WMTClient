@@ -20,6 +20,7 @@ const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endp
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
 const SESSION_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes without browser = close MUD connection
+const CHAT_BUFFER_MAX = 100;  // Max ChatMon messages to preserve across session resume
 
 // Persistent sessions store: token -> session object
 const sessions = new Map();
@@ -552,7 +553,10 @@ function createSession(token) {
 
     // Server-side tickers
     tickers: [],           // Array of ticker objects
-    tickerIntervals: {}    // Map of ticker id -> interval timer
+    tickerIntervals: {},   // Map of ticker id -> interval timer
+
+    // ChatMon message buffer (persists across session resume)
+    chatBuffer: []
   };
 }
 
@@ -642,6 +646,14 @@ function clearAllTickers(session) {
  * Buffer keeps the MOST RECENT lines - old lines are dropped when full
  */
 function sendToClient(session, message) {
+  // Buffer ChatMon messages for replay on session resume
+  if (message.type === 'mip_chat' || message.type === 'trigger_chatmon') {
+    session.chatBuffer.push(message);
+    if (session.chatBuffer.length > CHAT_BUFFER_MAX) {
+      session.chatBuffer.shift();
+    }
+  }
+
   if (session.ws && session.ws.readyState === WebSocket.OPEN) {
     try {
       session.ws.send(JSON.stringify(message));
@@ -1461,6 +1473,19 @@ wss.on('connection', (ws, req) => {
                 type: 'mip_stats',
                 stats: session.mipStats
               }));
+            }
+
+            // Replay ChatMon buffer so chat history survives refresh
+            if (session.chatBuffer.length > 0) {
+              console.log(`Replaying ${session.chatBuffer.length} ChatMon messages`);
+              for (const msg of session.chatBuffer) {
+                try {
+                  ws.send(JSON.stringify(msg));
+                } catch (e) {
+                  console.error('Error replaying chat buffer:', e.message);
+                  break;
+                }
+              }
             }
           } else {
             // Create new session

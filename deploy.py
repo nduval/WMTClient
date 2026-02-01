@@ -18,6 +18,7 @@ IONOS_DEPLOY_FILES = [
     'index.php',
     'app.php',
     'characters.php',
+    'guest.php',
     'admin.php',
     'reset-password.php',
     'composer.json',

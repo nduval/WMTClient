@@ -2422,12 +2422,18 @@ class WMTClient {
             btn.addEventListener('click', () => this.closePanel());
         });
 
-        // Modal close
+        // Modal close - only close if mousedown AND mouseup both on overlay
+        // (prevents closing when drag-selecting text overshoots the modal border)
         document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            let mouseDownOnOverlay = false;
+            overlay.addEventListener('mousedown', (e) => {
+                mouseDownOnOverlay = (e.target === overlay);
+            });
             overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) {
+                if (e.target === overlay && mouseDownOnOverlay) {
                     this.closeModal();
                 }
+                mouseDownOnOverlay = false;
             });
         });
 
