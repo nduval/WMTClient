@@ -40,12 +40,14 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
 
 // Generate or retrieve WebSocket session token for reconnection
 // This token allows the proxy to identify this user/character session
-if (!isset($_SESSION['ws_token']) || !isset($_SESSION['ws_token_char']) || $_SESSION['ws_token_char'] !== $characterId) {
-    // Generate new token for this character session
-    $_SESSION['ws_token'] = bin2hex(random_bytes(32));
-    $_SESSION['ws_token_char'] = $characterId;
+// Tokens are stored per-character so multiple tabs (different characters) don't conflict
+if (!isset($_SESSION['ws_tokens'])) {
+    $_SESSION['ws_tokens'] = [];
 }
-$wsToken = $_SESSION['ws_token'];
+if (!isset($_SESSION['ws_tokens'][$characterId])) {
+    $_SESSION['ws_tokens'][$characterId] = bin2hex(random_bytes(32));
+}
+$wsToken = $_SESSION['ws_tokens'][$characterId];
 ?>
 <!DOCTYPE html>
 <html lang="en">

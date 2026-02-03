@@ -2380,6 +2380,9 @@ class WMTClient {
         // Handle app returning from background (mobile app switching)
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
+                // Don't auto-reconnect if user explicitly disconnected
+                if (this.connection && this.connection.intentionalDisconnect) return;
+
                 // PWA on iOS needs a moment to stabilize after unfreeze
                 const isPWA = window.navigator.standalone === true;
                 const delay = isPWA ? 500 : 50;
@@ -2439,7 +2442,7 @@ class WMTClient {
 
         // Window focus - prevent multiple connections
         window.addEventListener('focus', () => {
-            if (!this.connection.isConnected()) {
+            if (!this.connection.isConnected() && !this.connection.intentionalDisconnect) {
                 this.connection.connect();
             }
         });
