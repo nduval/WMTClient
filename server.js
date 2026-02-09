@@ -250,7 +250,7 @@ setInterval(() => {
       }
       const elapsed = now - session.disconnectedAt;
       if (elapsed > SESSION_TIMEOUT_MS) {
-        console.log(`Session timeout for token ${token.substring(0, 8)}... (${Math.round(elapsed / 1000)}s without browser)`);
+        console.log(`SESSION_TIMEOUT: token=${token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} disconnectedFor=${Math.round(elapsed / 1000)}s`);
         closeSession(session, 'timeout');
       }
     }
@@ -740,7 +740,8 @@ function replayBuffer(session) {
  * Close a session completely
  */
 function closeSession(session, reason) {
-  console.log(`Closing session ${session.token.substring(0, 8)}...: ${reason}`);
+  const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
+  console.log(`SESSION_CLOSE: token=${session.token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} reason="${reason}" mudWasConnected=${mudConnected} wizard=${session.isWizard}`);
 
   // Clear all tickers
   clearAllTickers(session);
@@ -1407,7 +1408,9 @@ wss.on('connection', (ws, req) => {
 
             if (existingToken && existingToken !== token && sessions.has(existingToken)) {
               const oldSession = sessions.get(existingToken);
-              console.log(`Closing old session for user ${userId} character ${characterId} (different device)`);
+              const oldMudConnected = oldSession.mudSocket && !oldSession.mudSocket.destroyed;
+              const disconnectDuration = oldSession.disconnectedAt ? Math.round((Date.now() - oldSession.disconnectedAt) / 1000) : 0;
+              console.log(`SESSION_REPLACE: user=${userId} char=${characterName || characterId} oldToken=${existingToken.substring(0, 8)}... newToken=${token.substring(0, 8)}... oldMudConnected=${oldMudConnected} oldBrowserConnected=${!!oldSession.ws} disconnectedFor=${disconnectDuration}s wizard=${isWizard}`);
 
               // Notify old client and close its MUD connection
               if (oldSession.ws && oldSession.ws.readyState === WebSocket.OPEN) {
@@ -1434,7 +1437,7 @@ wss.on('connection', (ws, req) => {
 
             // Check if another browser is already connected
             if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-              console.log(`Taking over session ${token.substring(0, 8)}... from another browser`);
+              console.log(`SESSION_TAKEOVER: token=${token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} (new browser taking over from existing browser)`);
               try {
                 // Send session_taken so old client knows not to reconnect
                 session.ws.send(JSON.stringify({
@@ -1456,7 +1459,8 @@ wss.on('connection', (ws, req) => {
             }
 
             const mudConnected = session.mudSocket && !session.mudSocket.destroyed && session.mudSocket.writable;
-            console.log(`Resumed session ${token.substring(0, 8)}... (MUD ${mudConnected ? 'connected' : 'disconnected'})`);
+            const disconnectDuration = session.disconnectedAt ? Math.round((Date.now() - session.disconnectedAt) / 1000) : 0;
+            console.log(`SESSION_RESUME: token=${token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} mudConnected=${mudConnected} disconnectedFor=${disconnectDuration}s wizard=${session.isWizard} bufferSize=${session.buffer.length} chatBuffer=${session.chatBuffer.length}`);
 
             ws.send(JSON.stringify({
               type: 'session_resumed',
@@ -1497,7 +1501,7 @@ wss.on('connection', (ws, req) => {
             session.isWizard = isWizard;
             sessions.set(token, session);
 
-            console.log(`New session ${token.substring(0, 8)}... (user: ${userId}, char: ${characterName || characterId}, wizard: ${isWizard})`);
+            console.log(`SESSION_NEW: token=${token.substring(0, 8)}... user=${userId} char=${characterName || characterId} wizard=${isWizard}`);
 
             ws.send(JSON.stringify({
               type: 'session_new'
@@ -1728,7 +1732,7 @@ wss.on('connection', (ws, req) => {
 
         case 'disconnect':
           // Explicit disconnect - close MUD connection
-          console.log('Explicit disconnect requested');
+          console.log(`SESSION_EXPLICIT_DISCONNECT: token=${session.token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId}`);
           session.explicitDisconnect = true;
           closeSession(session, 'explicit disconnect');
           break;
@@ -1750,9 +1754,8 @@ wss.on('connection', (ws, req) => {
       session.ws = null;
       session.disconnectedAt = Date.now();
 
-      if (session.mudSocket && !session.mudSocket.destroyed) {
-        console.log(`Browser disconnected, keeping MUD session for ${session.token.substring(0, 8)}...`);
-      }
+      const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
+      console.log(`SESSION_BROWSER_DISCONNECT: token=${session.token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} mudConnected=${mudConnected} wizard=${session.isWizard} willTimeout=${!session.isWizard}`);
     }
   });
 
