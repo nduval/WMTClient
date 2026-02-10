@@ -187,6 +187,43 @@ switch ($action) {
         }
         break;
 
+    case 'session-logs':
+        // Admin-only endpoint to fetch auth/session logs for debugging
+        requireAuth();
+
+        $ADMIN_USERS = ['nathan'];
+        if (!in_array(getCurrentUsername(), $ADMIN_USERS)) {
+            errorResponse('Admin access required', 403);
+        }
+
+        $logFile = __DIR__ . '/../data/logs/auth.log';
+        $lines = [];
+        $limit = isset($_GET['limit']) ? min(500, max(1, (int)$_GET['limit'])) : 200;
+
+        if (file_exists($logFile)) {
+            // Read last N lines efficiently
+            $file = new SplFileObject($logFile, 'r');
+            $file->seek(PHP_INT_MAX);
+            $totalLines = $file->key();
+
+            $startLine = max(0, $totalLines - $limit);
+            $file->seek($startLine);
+
+            while (!$file->eof()) {
+                $line = trim($file->fgets());
+                if (!empty($line)) {
+                    $lines[] = $line;
+                }
+            }
+        }
+
+        successResponse([
+            'count' => count($lines),
+            'limit' => $limit,
+            'logs' => $lines
+        ]);
+        break;
+
     default:
         errorResponse('Invalid action', 400);
 }

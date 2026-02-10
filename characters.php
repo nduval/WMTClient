@@ -13,6 +13,7 @@ $userId = getCurrentUserId();
 $username = getCurrentUsername();
 $characters = getCharacters($userId);
 $csrfToken = generateCsrfToken();
+$isAccountWizard = isUserWizard($userId);
 
 // Auto-backup: create daily backup if admin user and >24 hours since last backup
 $ADMIN_USERS = ['nathan'];
@@ -151,6 +152,39 @@ if (in_array($username, $ADMIN_USERS)) {
         .character-item:hover {
             border-color: #00ff00;
             background: #222;
+        }
+
+        .character-item.dragging {
+            opacity: 0.5;
+            border-color: #00ff00;
+        }
+
+        .character-item.drag-over {
+            border-color: #00ff00;
+            border-style: dashed;
+            background: #1a2a1a;
+        }
+
+        .drag-handle {
+            cursor: grab;
+            padding: 5px 10px;
+            color: #555;
+            font-size: 16px;
+            user-select: none;
+            margin-right: 10px;
+        }
+
+        .drag-handle:hover {
+            color: #888;
+        }
+
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+
+        .character-info {
+            display: flex;
+            align-items: center;
         }
 
         .character-name {
@@ -378,6 +412,34 @@ if (in_array($username, $ADMIN_USERS)) {
             color: #aaa;
         }
 
+        /* Wizard Toggle */
+        .btn-wizard {
+            background: transparent;
+            color: #666;
+            border: 1px solid #444;
+            padding: 5px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .btn-wizard:hover {
+            border-color: #888;
+            color: #888;
+        }
+
+        .btn-wizard.is-wizard {
+            color: #ffcc00;
+            border-color: #ffcc00;
+            background: rgba(255, 204, 0, 0.1);
+        }
+
+        .btn-wizard.is-wizard:hover {
+            background: #ffcc00;
+            color: #000;
+        }
+
         /* Responsive styles */
         @media (max-width: 600px) {
             .characters-container {
@@ -412,6 +474,15 @@ if (in_array($username, $ADMIN_USERS)) {
 
             .character-name {
                 font-size: 16px;
+            }
+
+            .character-info {
+                flex: 1;
+            }
+
+            .drag-handle {
+                padding: 10px 12px;
+                font-size: 18px;
             }
 
             .character-actions {
@@ -480,17 +551,26 @@ if (in_array($username, $ADMIN_USERS)) {
             <ul class="character-list" id="character-list">
                 <?php foreach ($characters as $char):
                     $charServer = $char['server'] ?? '3k';
+                    $charIsWizard = $char['isWizard'] ?? false;
                 ?>
-                    <li class="character-item" data-id="<?= htmlspecialchars($char['id']) ?>" data-server="<?= $charServer ?>">
+                    <li class="character-item" data-id="<?= htmlspecialchars($char['id']) ?>" data-server="<?= $charServer ?>" data-wizard="<?= $charIsWizard ? '1' : '0' ?>" draggable="true">
                         <div class="character-info">
-                            <div class="character-name"><?= htmlspecialchars($char['name']) ?></div>
-                            <div class="character-created">Created <?= date('M j, Y', strtotime($char['created_at'])) ?></div>
+                            <span class="drag-handle" title="Drag to reorder">&#9776;</span>
+                            <div>
+                                <div class="character-name"><?= htmlspecialchars($char['name']) ?><?php if ($charIsWizard): ?> <span style="color: #ffcc00;">★</span><?php endif; ?></div>
+                                <div class="character-created">Created <?= date('M j, Y', strtotime($char['created_at'])) ?></div>
+                            </div>
                         </div>
                         <div class="character-actions">
                             <span class="server-toggle <?= $charServer === '3s' ? 'is-3s' : '' ?>" onclick="toggleServer('<?= $char['id'] ?>', '<?= $charServer ?>'); event.stopPropagation();" title="Click to switch server">
                                 <span class="server-option <?= $charServer === '3k' ? 'active' : '' ?>">3K</span>
                                 <span class="server-option <?= $charServer === '3s' ? 'active' : '' ?>">3S</span>
                             </span>
+                            <?php if ($isAccountWizard): ?>
+                            <button class="btn-wizard <?= $charIsWizard ? 'is-wizard' : '' ?>" onclick="toggleCharacterWizard('<?= $char['id'] ?>', <?= $charIsWizard ? 'true' : 'false' ?>); event.stopPropagation();" title="<?= $charIsWizard ? 'Wizard session enabled - click to disable' : 'Enable wizard session (no timeout)' ?>">
+                                <?= $charIsWizard ? '★Wiz' : '☆Wiz' ?>
+                            </button>
+                            <?php endif; ?>
                             <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved - click to change' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
@@ -748,6 +828,56 @@ if (in_array($username, $ADMIN_USERS)) {
             }
         }
 
+        async function toggleCharacterWizard(characterId, currentWizard) {
+            const newWizard = !currentWizard;
+
+            try {
+                const res = await fetch('api/characters.php?action=set_character_wizard', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        character_id: characterId,
+                        is_wizard: newWizard,
+                        csrf_token: csrfToken
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    // Update UI without full reload
+                    const item = document.querySelector(`[data-id="${characterId}"]`);
+                    if (item) {
+                        item.dataset.wizard = newWizard ? '1' : '0';
+                        const btn = item.querySelector('.btn-wizard');
+                        if (btn) {
+                            btn.classList.toggle('is-wizard', newWizard);
+                            btn.setAttribute('onclick', `toggleCharacterWizard('${characterId}', ${newWizard}); event.stopPropagation();`);
+                            btn.textContent = newWizard ? '★Wiz' : '☆Wiz';
+                            btn.title = newWizard ? 'Wizard session enabled - click to disable' : 'Enable wizard session (no timeout)';
+                        }
+                        // Update star next to name
+                        const nameDiv = item.querySelector('.character-name');
+                        if (nameDiv) {
+                            // Remove existing star span if any
+                            const existingStar = nameDiv.querySelector('span');
+                            if (existingStar) existingStar.remove();
+                            // Add star if wizard
+                            if (newWizard) {
+                                const star = document.createElement('span');
+                                star.style.color = '#ffcc00';
+                                star.textContent = ' ★';
+                                nameDiv.appendChild(star);
+                            }
+                        }
+                    }
+                    showMessage(newWizard ? 'Wizard session enabled for this character' : 'Wizard session disabled');
+                } else {
+                    showMessage(data.error || 'Failed to update wizard status', true);
+                }
+            } catch (e) {
+                showMessage('Failed to update wizard status', true);
+            }
+        }
+
         async function toggleServer(characterId, currentServer) {
             const newServer = currentServer === '3k' ? '3s' : '3k';
 
@@ -873,9 +1003,163 @@ if (in_array($username, $ADMIN_USERS)) {
 
         // Click on character item to select
         document.querySelectorAll('.character-item').forEach(item => {
-            item.addEventListener('click', () => {
+            item.addEventListener('click', (e) => {
+                // Don't select if clicking on drag handle
+                if (e.target.classList.contains('drag-handle')) return;
                 selectCharacter(item.dataset.id);
             });
+        });
+
+        // Drag and drop reordering (desktop + mobile touch)
+        let draggedItem = null;
+        let touchStartY = 0;
+        let touchCurrentItem = null;
+
+        // Touch event handlers for mobile
+        function handleTouchStart(e, item) {
+            // Only handle touch on drag handle
+            if (!e.target.classList.contains('drag-handle')) return;
+
+            touchStartY = e.touches[0].clientY;
+            touchCurrentItem = item;
+            item.classList.add('dragging');
+            e.preventDefault();
+        }
+
+        function handleTouchMove(e) {
+            if (!touchCurrentItem) return;
+            e.preventDefault();
+
+            const touch = e.touches[0];
+            const list = document.getElementById('character-list');
+            const items = Array.from(list.querySelectorAll('.character-item'));
+
+            // Find which item we're over
+            items.forEach(item => {
+                item.classList.remove('drag-over');
+                const rect = item.getBoundingClientRect();
+                if (touch.clientY >= rect.top && touch.clientY <= rect.bottom && item !== touchCurrentItem) {
+                    item.classList.add('drag-over');
+                }
+            });
+        }
+
+        async function handleTouchEnd(e) {
+            if (!touchCurrentItem) return;
+
+            touchCurrentItem.classList.remove('dragging');
+            const dragOverItem = document.querySelector('.character-item.drag-over');
+
+            if (dragOverItem) {
+                dragOverItem.classList.remove('drag-over');
+
+                // Reorder in DOM
+                const list = document.getElementById('character-list');
+                const items = Array.from(list.querySelectorAll('.character-item'));
+                const fromIndex = items.indexOf(touchCurrentItem);
+                const toIndex = items.indexOf(dragOverItem);
+
+                if (fromIndex < toIndex) {
+                    dragOverItem.after(touchCurrentItem);
+                } else {
+                    dragOverItem.before(touchCurrentItem);
+                }
+
+                // Save new order to server
+                const newOrder = Array.from(list.querySelectorAll('.character-item'))
+                    .map(i => i.dataset.id);
+
+                try {
+                    const res = await fetch('api/characters.php?action=reorder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order: newOrder, csrf_token: csrfToken })
+                    });
+                    const data = await res.json();
+                    if (!data.success) {
+                        showMessage(data.error || 'Failed to save order', true);
+                        window.location.reload();
+                    }
+                } catch (err) {
+                    showMessage('Failed to save order', true);
+                    window.location.reload();
+                }
+            }
+
+            touchCurrentItem = null;
+        }
+
+        document.querySelectorAll('.character-item').forEach(item => {
+            item.addEventListener('dragstart', (e) => {
+                draggedItem = item;
+                item.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', item.dataset.id);
+            });
+
+            item.addEventListener('dragend', () => {
+                item.classList.remove('dragging');
+                document.querySelectorAll('.character-item').forEach(i => {
+                    i.classList.remove('drag-over');
+                });
+                draggedItem = null;
+            });
+
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (draggedItem && item !== draggedItem) {
+                    item.classList.add('drag-over');
+                }
+            });
+
+            item.addEventListener('dragleave', () => {
+                item.classList.remove('drag-over');
+            });
+
+            item.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                item.classList.remove('drag-over');
+
+                if (!draggedItem || item === draggedItem) return;
+
+                // Reorder in DOM
+                const list = document.getElementById('character-list');
+                const items = Array.from(list.querySelectorAll('.character-item'));
+                const fromIndex = items.indexOf(draggedItem);
+                const toIndex = items.indexOf(item);
+
+                if (fromIndex < toIndex) {
+                    item.after(draggedItem);
+                } else {
+                    item.before(draggedItem);
+                }
+
+                // Save new order to server
+                const newOrder = Array.from(list.querySelectorAll('.character-item'))
+                    .map(i => i.dataset.id);
+
+                try {
+                    const res = await fetch('api/characters.php?action=reorder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order: newOrder, csrf_token: csrfToken })
+                    });
+                    const data = await res.json();
+                    if (!data.success) {
+                        showMessage(data.error || 'Failed to save order', true);
+                        window.location.reload(); // Reset to server state
+                    }
+                } catch (err) {
+                    showMessage('Failed to save order', true);
+                    window.location.reload();
+                }
+            });
+
+            // Mobile touch events
+            item.addEventListener('touchstart', (e) => handleTouchStart(e, item), { passive: false });
+            item.addEventListener('touchmove', handleTouchMove, { passive: false });
+            item.addEventListener('touchend', handleTouchEnd);
         });
 
         // Server toggle click handlers for create forms

@@ -25,7 +25,9 @@ $isGuest = !empty($_SESSION['is_guest']);
 
 // Guest users have no stored data - skip file-based lookups
 $characters = $isGuest ? [] : getCharacters($userId);
-$isWizard = $isGuest ? false : isUserWizard($userId);
+// Check if this specific character has wizard status (unlimited session timeout)
+// Note: Only wizard accounts can set character-level wizard status
+$isWizard = $isGuest ? false : isCharacterWizard($userId, $characterId);
 
 // Determine MUD host/port based on character server
 $mudHost = MUD_HOST;
@@ -41,13 +43,45 @@ $newMudChar = isset($_GET['newchar']) ? trim($_GET['newchar']) : '';
 // Generate or retrieve WebSocket session token for reconnection
 // This token allows the proxy to identify this user/character session
 // Tokens are stored per-character so multiple tabs (different characters) don't conflict
+// Tokens are ALSO stored in cookies to survive PHP session garbage collection
+// (PHP sessions can be GC'd after ~24 min on shared hosting, even if cookie lives 7 days)
 if (!isset($_SESSION['ws_tokens'])) {
     $_SESSION['ws_tokens'] = [];
 }
+
+$tokenCookieName = 'ws_token_' . $characterId;
+$tokenSource = 'session'; // Track where token came from for debugging
+
 if (!isset($_SESSION['ws_tokens'][$characterId])) {
-    $_SESSION['ws_tokens'][$characterId] = bin2hex(random_bytes(32));
+    // Check if we have a token cookie (survives PHP session GC)
+    if (isset($_COOKIE[$tokenCookieName]) && strlen($_COOKIE[$tokenCookieName]) === 64) {
+        // Recover token from cookie
+        $_SESSION['ws_tokens'][$characterId] = $_COOKIE[$tokenCookieName];
+        $tokenSource = 'cookie_recovered';
+    } else {
+        // Generate new token
+        $_SESSION['ws_tokens'][$characterId] = bin2hex(random_bytes(32));
+        $tokenSource = 'new';
+    }
 }
+
 $wsToken = $_SESSION['ws_tokens'][$characterId];
+
+// Log token resolution for debugging session issues
+$tokenShort = substr($wsToken, 0, 8) . '...';
+$hadCookie = isset($_COOKIE[$tokenCookieName]) ? 'yes' : 'no';
+$cookieLen = isset($_COOKIE[$tokenCookieName]) ? strlen($_COOKIE[$tokenCookieName]) : 0;
+authLog("TOKEN: user=$username char=$characterName token=$tokenShort source=$tokenSource hadCookie=$hadCookie cookieLen=$cookieLen wizard=" . ($isWizard ? 'yes' : 'no'));
+
+// Set/refresh the token cookie (extends lifetime on each visit)
+// 30-day lifetime ensures wizard sessions can persist through long idle periods
+setcookie($tokenCookieName, $wsToken, [
+    'expires' => time() + (86400 * 30),
+    'path' => '/',
+    'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
+    'httponly' => true,
+    'samesite' => 'Lax'
+]);
 ?>
 <!DOCTYPE html>
 <html lang="en">

@@ -451,6 +451,20 @@ function endUserSession(): void {
         );
     }
 
+    // Clear WebSocket token cookies (ws_token_* pattern)
+    // These persist session tokens for reconnection; clear them on logout
+    foreach ($_COOKIE as $name => $value) {
+        if (strpos($name, 'ws_token_') === 0) {
+            setcookie($name, '', [
+                'expires' => time() - 3600,
+                'path' => '/',
+                'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
+                'httponly' => true,
+                'samesite' => 'Lax'
+            ]);
+        }
+    }
+
     session_destroy();
 }
 

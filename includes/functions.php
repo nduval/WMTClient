@@ -372,6 +372,40 @@ function getCharacter(string $userId, string $characterId): ?array {
 }
 
 /**
+ * Reorder characters based on array of IDs
+ */
+function reorderCharacters(string $userId, array $orderedIds): bool {
+    $characters = getCharacters($userId);
+
+    // Build a map of id => character for quick lookup
+    $charMap = [];
+    foreach ($characters as $char) {
+        $charMap[$char['id']] = $char;
+    }
+
+    // Validate all IDs exist
+    foreach ($orderedIds as $id) {
+        if (!isset($charMap[$id])) {
+            return false; // Invalid ID in order list
+        }
+    }
+
+    // Rebuild array in new order
+    $newOrder = [];
+    foreach ($orderedIds as $id) {
+        $newOrder[] = $charMap[$id];
+        unset($charMap[$id]);
+    }
+
+    // Append any characters not in the order list (shouldn't happen, but safety)
+    foreach ($charMap as $char) {
+        $newOrder[] = $char;
+    }
+
+    return saveJsonFile(getCharactersListPath($userId), $newOrder);
+}
+
+/**
  * Delete a character
  */
 function deleteCharacter(string $userId, string $characterId): bool {
@@ -449,6 +483,37 @@ function updateCharacterPassword(string $userId, string $characterId, string $pa
 function getCharacterPassword(string $userId, string $characterId): string {
     $character = getCharacter($userId, $characterId);
     return $character['password'] ?? '';
+}
+
+/**
+ * Check if character has wizard status (unlimited session timeout)
+ */
+function isCharacterWizard(string $userId, string $characterId): bool {
+    $character = getCharacter($userId, $characterId);
+    return $character['isWizard'] ?? false;
+}
+
+/**
+ * Set wizard status for a character
+ * Note: This only sets the flag - caller should verify account-level wizard status first
+ */
+function setCharacterWizard(string $userId, string $characterId, bool $isWizard): bool {
+    $characters = getCharacters($userId);
+    $found = false;
+
+    foreach ($characters as &$char) {
+        if ($char['id'] === $characterId) {
+            $char['isWizard'] = $isWizard;
+            $found = true;
+            break;
+        }
+    }
+
+    if (!$found) {
+        return false;
+    }
+
+    return saveJsonFile(getCharactersListPath($userId), $characters);
 }
 
 /**

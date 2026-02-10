@@ -6,6 +6,76 @@
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/auth.php';
 
+$action = $_GET['action'] ?? '';
+
+// Special handling for server-to-server endpoint (admin key auth, not session auth)
+// This must be handled completely separately before session auth
+if ($action === 'get_discord_prefs') {
+    // Server-to-server endpoint for WebSocket proxy to fetch Discord prefs
+    // This allows the proxy to have Discord prefs even after restart
+    // Requires admin key authentication (not user session)
+
+    $adminKey = $_SERVER['HTTP_X_ADMIN_KEY'] ?? '';
+
+    // Load admin key from config
+    $configAdminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+
+    if (!$configAdminKey) {
+        errorResponse('Admin key not configured', 500);
+    }
+
+    if ($adminKey !== $configAdminKey) {
+        errorResponse('Invalid admin key', 403);
+    }
+
+    // Get user_id and character_id from query params (not session)
+    $reqUserId = $_GET['user_id'] ?? '';
+    $reqCharacterId = $_GET['character_id'] ?? '';
+
+    if (empty($reqUserId) || empty($reqCharacterId)) {
+        errorResponse('user_id and character_id are required', 400);
+    }
+
+    // Validate user exists
+    $user = findUserById($reqUserId);
+    if (!$user) {
+        errorResponse('User not found', 404);
+    }
+
+    // Load preferences for this character
+    $prefsPath = getPreferencesPath($reqUserId, $reqCharacterId);
+    if (!file_exists($prefsPath)) {
+        // No preferences file - return empty prefs
+        successResponse([
+            'channelPrefs' => [],
+            'discordUsername' => $user['username'] ?? 'WMT Client'
+        ]);
+        exit;
+    }
+
+    $preferences = loadJsonFile($prefsPath);
+
+    // Extract just the Discord-relevant parts
+    $channelPrefs = $preferences['channelPrefs'] ?? [];
+
+    // Get character name for Discord username
+    $characters = getCharacters($reqUserId);
+    $characterName = 'WMT Client';
+    foreach ($characters as $char) {
+        if ($char['id'] === $reqCharacterId) {
+            $characterName = $char['name'];
+            break;
+        }
+    }
+
+    successResponse([
+        'channelPrefs' => $channelPrefs,
+        'discordUsername' => $characterName
+    ]);
+    exit;
+}
+
+// All other actions require session auth
 initSession();
 requireAuth();
 
@@ -20,8 +90,6 @@ $characterId = getCurrentCharacterId();
 if (!$characterId) {
     errorResponse('No character selected', 400);
 }
-
-$action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'get':

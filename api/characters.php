@@ -6,6 +6,53 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
 
+$action = $_GET['action'] ?? '';
+
+// Special handling for server-to-server endpoint (admin key auth, not session auth)
+// This must be handled completely separately before session auth
+if ($action === 'get_password_admin') {
+    // Server-to-server endpoint for WebSocket proxy to fetch character password
+    // Used for auto-login after server restart
+    // Requires admin key authentication (not user session)
+
+    $adminKey = $_SERVER['HTTP_X_ADMIN_KEY'] ?? '';
+
+    // Load admin key from config
+    require_once __DIR__ . '/../config/config.php';
+    $configAdminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+
+    if (!$configAdminKey) {
+        errorResponse('Admin key not configured', 500);
+    }
+
+    if ($adminKey !== $configAdminKey) {
+        errorResponse('Invalid admin key', 403);
+    }
+
+    // Get user_id and character_id from query params (not session)
+    $reqUserId = $_GET['user_id'] ?? '';
+    $reqCharacterId = $_GET['character_id'] ?? '';
+
+    if (empty($reqUserId) || empty($reqCharacterId)) {
+        errorResponse('user_id and character_id are required', 400);
+    }
+
+    // Validate user exists
+    $user = findUserById($reqUserId);
+    if (!$user) {
+        errorResponse('User not found', 404);
+    }
+
+    // Get password for this character
+    $password = getCharacterPassword($reqUserId, $reqCharacterId);
+
+    successResponse([
+        'password' => $password
+    ]);
+    exit;
+}
+
+// All other actions require session auth
 initSession();
 requireAuth();
 
@@ -14,7 +61,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     denyGuest();
 }
 
-$action = $_GET['action'] ?? '';
 $userId = getCurrentUserId();
 
 switch ($action) {
@@ -236,6 +282,75 @@ switch ($action) {
 
         $server = getCharacterServer($userId, $characterId);
         successResponse(['server' => $server]);
+        break;
+
+    case 'reorder':
+        $input = json_decode(file_get_contents('php://input'), true);
+
+        if (!validateCsrfToken($input['csrf_token'] ?? null)) {
+            errorResponse('Invalid CSRF token', 403);
+        }
+
+        $orderedIds = $input['order'] ?? [];
+
+        if (!is_array($orderedIds) || empty($orderedIds)) {
+            errorResponse('Order array is required');
+        }
+
+        if (!reorderCharacters($userId, $orderedIds)) {
+            errorResponse('Failed to reorder characters');
+        }
+
+        successResponse(['message' => 'Characters reordered']);
+        break;
+
+    case 'set_character_wizard':
+        // Toggle wizard status for a specific character
+        // Only wizard accounts can mark characters as wizards
+        $input = json_decode(file_get_contents('php://input'), true);
+
+        if (!validateCsrfToken($input['csrf_token'] ?? null)) {
+            errorResponse('Invalid CSRF token', 403);
+        }
+
+        // Check if account has wizard privileges
+        if (!isUserWizard($userId)) {
+            errorResponse('Only wizard accounts can set character wizard status', 403);
+        }
+
+        $characterId = $input['character_id'] ?? '';
+        $isWizard = $input['is_wizard'] ?? false;
+
+        if (empty($characterId)) {
+            errorResponse('Character ID is required');
+        }
+
+        // Verify character belongs to this user
+        $character = getCharacter($userId, $characterId);
+        if (!$character) {
+            errorResponse('Character not found', 404);
+        }
+
+        if (!setCharacterWizard($userId, $characterId, (bool)$isWizard)) {
+            errorResponse('Failed to update wizard status');
+        }
+
+        successResponse([
+            'message' => $isWizard ? 'Character marked as wizard' : 'Character wizard status removed',
+            'isWizard' => (bool)$isWizard
+        ]);
+        break;
+
+    case 'get_character_wizard':
+        // Get wizard status for a character
+        $characterId = $_GET['character_id'] ?? getCurrentCharacterId();
+
+        if (empty($characterId)) {
+            errorResponse('Character ID is required');
+        }
+
+        $isWizard = isCharacterWizard($userId, $characterId);
+        successResponse(['isWizard' => $isWizard]);
         break;
 
     default:
