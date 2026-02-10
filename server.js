@@ -111,6 +111,92 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
   }
 }
 
+// PHP API URL for fetching Discord prefs (survives server restart)
+const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
+
+/**
+ * Fetch Discord channel preferences from PHP backend
+ * This ensures Discord prefs persist across server restarts
+ * Called when creating/resuming sessions
+ */
+async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
+  if (!userId || !characterId || !ADMIN_KEY) {
+    return;
+  }
+
+  const url = `${PHP_API_URL}?action=get_discord_prefs&user_id=${encodeURIComponent(userId)}&character_id=${encodeURIComponent(characterId)}`;
+  const sessionToken = session.token; // Capture token for later verification
+
+  try {
+    const response = await new Promise((resolve, reject) => {
+      const req = https.get(url, {
+        headers: {
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try {
+              resolve(JSON.parse(data));
+            } catch (e) {
+              reject(new Error(`Invalid JSON: ${data.substring(0, 100)}`));
+            }
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
+    });
+
+    // Verify session still exists (might have been closed during async fetch)
+    if (!sessions.has(sessionToken)) {
+      return;
+    }
+
+    if (response.success && response.channelPrefs) {
+      // Only update if session still has empty prefs (browser might have sent them meanwhile)
+      if (Object.keys(session.discordChannelPrefs).length === 0) {
+        // Populate session with fetched prefs
+        session.discordChannelPrefs = response.channelPrefs;
+        session.discordUsername = response.discordUsername || 'WMT Client';
+
+        // Count webhooks for logging
+        let webhookCount = 0;
+        for (const channel of Object.keys(response.channelPrefs)) {
+          if (response.channelPrefs[channel]?.discord && response.channelPrefs[channel]?.webhookUrl) {
+            webhookCount++;
+          }
+        }
+
+        logSessionEvent('DISCORD_PREFS_FETCHED', {
+          token: session.token.substring(0, 8),
+          user: userId,
+          char: session.characterName || characterId,
+          webhookCount: webhookCount,
+          totalChannels: Object.keys(response.channelPrefs).length,
+          channels: Object.keys(response.channelPrefs).join(',')
+        });
+      }
+    }
+  } catch (e) {
+    logSessionEvent('DISCORD_PREFS_FETCH_ERROR', {
+      token: session.token.substring(0, 8),
+      user: userId,
+      char: session.characterName || characterId,
+      error: e.message
+    });
+  }
+}
+
 // Telnet protocol constants
 const TELNET = {
   IAC: 255,   // Interpret As Command
@@ -1560,6 +1646,12 @@ wss.on('connection', (ws, req) => {
               chatBuffer: session.chatBuffer.length
             });
 
+            // If Discord prefs are empty, fetch from PHP backend
+            // This handles the case where server restarted while browser was disconnected
+            if (Object.keys(session.discordChannelPrefs).length === 0) {
+              fetchDiscordPrefsFromPHP(session.userId, session.characterId, session);
+            }
+
             ws.send(JSON.stringify({
               type: 'session_resumed',
               mudConnected: mudConnected
@@ -1605,6 +1697,10 @@ wss.on('connection', (ws, req) => {
               char: characterName || characterId,
               wizard: isWizard
             });
+
+            // Fetch Discord prefs from PHP backend (survives server restarts)
+            // Do this async so we don't block the session creation
+            fetchDiscordPrefsFromPHP(userId, characterId, session);
 
             ws.send(JSON.stringify({
               type: 'session_new'
