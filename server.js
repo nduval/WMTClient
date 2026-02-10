@@ -912,6 +912,13 @@ function parseMipMessage(session, msgType, msgData) {
         if (rawText) {
           const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
           if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+            logSessionEvent('DISCORD_SEND', {
+              token: session.token.substring(0, 8),
+              user: session.userId,
+              char: session.characterName,
+              channel: 'tell',
+              messagePreview: rawText.substring(0, 50)
+            });
             sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
           }
         }
@@ -955,6 +962,13 @@ function parseMipMessage(session, msgType, msgData) {
         if (rawText && channel) {
           const channelPrefs = session.discordChannelPrefs[channel] || session.discordChannelPrefs[channel.toLowerCase()];
           if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+            logSessionEvent('DISCORD_SEND', {
+              token: session.token.substring(0, 8),
+              user: session.userId,
+              char: session.characterName,
+              channel: channel,
+              messagePreview: rawText.substring(0, 50)
+            });
             sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
           }
         }
@@ -1713,7 +1727,14 @@ wss.on('connection', (ws, req) => {
               }
             }
           }
-          console.log(`Discord prefs updated: ${webhookCount} channel(s) with webhooks, ${Object.keys(session.discordChannelPrefs).length} total channels`);
+          logSessionEvent('DISCORD_PREFS_SET', {
+            token: session.token.substring(0, 8),
+            user: session.userId,
+            char: session.characterName,
+            webhookCount: webhookCount,
+            totalChannels: Object.keys(session.discordChannelPrefs).length,
+            channels: Object.keys(session.discordChannelPrefs).join(',')
+          });
           break;
 
         case 'set_server':
