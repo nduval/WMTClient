@@ -29,6 +29,32 @@ const sessions = new Map();
 // Used to close old sessions when same user+character connects from different device
 const userCharacterSessions = new Map();
 
+// Session event log buffer for debugging (circular buffer)
+const SESSION_LOG_MAX = 500;
+const sessionLogs = [];
+
+/**
+ * Log a session event to both console and the in-memory buffer
+ * Events are structured for easy analysis
+ */
+function logSessionEvent(type, data) {
+  const event = {
+    time: new Date().toISOString(),
+    type: type,
+    ...data
+  };
+
+  // Add to buffer (circular)
+  sessionLogs.push(event);
+  if (sessionLogs.length > SESSION_LOG_MAX) {
+    sessionLogs.shift();
+  }
+
+  // Also log to console for Render's log viewer
+  const logParts = Object.entries(data).map(([k, v]) => `${k}=${v}`).join(' ');
+  console.log(`${type}: ${logParts}`);
+}
+
 /**
  * Send message to Discord webhook (fire and forget)
  * Used for server-side notifications when browser is disconnected
@@ -250,7 +276,12 @@ setInterval(() => {
       }
       const elapsed = now - session.disconnectedAt;
       if (elapsed > SESSION_TIMEOUT_MS) {
-        console.log(`SESSION_TIMEOUT: token=${token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} disconnectedFor=${Math.round(elapsed / 1000)}s`);
+        logSessionEvent('SESSION_TIMEOUT', {
+          token: token.substring(0, 8),
+          user: session.userId,
+          char: session.characterName || session.characterId,
+          disconnectedFor: Math.round(elapsed / 1000)
+        });
         closeSession(session, 'timeout');
       }
     }
@@ -323,6 +354,29 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       success: true,
       sessions: activeSessions
+    }));
+  } else if (req.url === '/logs' && req.method === 'GET') {
+    // Admin endpoint to fetch session event logs for debugging
+    const adminKey = req.headers['x-admin-key'];
+
+    if (!ADMIN_KEY) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Not configured (ADMIN_KEY not set)' }));
+      return;
+    }
+
+    if (adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      count: sessionLogs.length,
+      maxSize: SESSION_LOG_MAX,
+      logs: sessionLogs
     }));
   } else if (req.url === '/broadcast' && req.method === 'POST') {
     // Admin broadcast endpoint
@@ -741,7 +795,14 @@ function replayBuffer(session) {
  */
 function closeSession(session, reason) {
   const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
-  console.log(`SESSION_CLOSE: token=${session.token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} reason="${reason}" mudWasConnected=${mudConnected} wizard=${session.isWizard}`);
+  logSessionEvent('SESSION_CLOSE', {
+    token: session.token.substring(0, 8),
+    user: session.userId,
+    char: session.characterName || session.characterId,
+    reason: reason,
+    mudWasConnected: mudConnected,
+    wizard: session.isWizard
+  });
 
   // Clear all tickers
   clearAllTickers(session);
@@ -1410,7 +1471,16 @@ wss.on('connection', (ws, req) => {
               const oldSession = sessions.get(existingToken);
               const oldMudConnected = oldSession.mudSocket && !oldSession.mudSocket.destroyed;
               const disconnectDuration = oldSession.disconnectedAt ? Math.round((Date.now() - oldSession.disconnectedAt) / 1000) : 0;
-              console.log(`SESSION_REPLACE: user=${userId} char=${characterName || characterId} oldToken=${existingToken.substring(0, 8)}... newToken=${token.substring(0, 8)}... oldMudConnected=${oldMudConnected} oldBrowserConnected=${!!oldSession.ws} disconnectedFor=${disconnectDuration}s wizard=${isWizard}`);
+              logSessionEvent('SESSION_REPLACE', {
+                user: userId,
+                char: characterName || characterId,
+                oldToken: existingToken.substring(0, 8),
+                newToken: token.substring(0, 8),
+                oldMudConnected: oldMudConnected,
+                oldBrowserConnected: !!oldSession.ws,
+                disconnectedFor: disconnectDuration,
+                wizard: isWizard
+              });
 
               // Notify old client and close its MUD connection
               if (oldSession.ws && oldSession.ws.readyState === WebSocket.OPEN) {
@@ -1437,7 +1507,12 @@ wss.on('connection', (ws, req) => {
 
             // Check if another browser is already connected
             if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-              console.log(`SESSION_TAKEOVER: token=${token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} (new browser taking over from existing browser)`);
+              logSessionEvent('SESSION_TAKEOVER', {
+                token: token.substring(0, 8),
+                user: session.userId,
+                char: session.characterName || session.characterId,
+                note: 'new browser taking over from existing browser'
+              });
               try {
                 // Send session_taken so old client knows not to reconnect
                 session.ws.send(JSON.stringify({
@@ -1460,7 +1535,16 @@ wss.on('connection', (ws, req) => {
 
             const mudConnected = session.mudSocket && !session.mudSocket.destroyed && session.mudSocket.writable;
             const disconnectDuration = session.disconnectedAt ? Math.round((Date.now() - session.disconnectedAt) / 1000) : 0;
-            console.log(`SESSION_RESUME: token=${token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} mudConnected=${mudConnected} disconnectedFor=${disconnectDuration}s wizard=${session.isWizard} bufferSize=${session.buffer.length} chatBuffer=${session.chatBuffer.length}`);
+            logSessionEvent('SESSION_RESUME', {
+              token: token.substring(0, 8),
+              user: session.userId,
+              char: session.characterName || session.characterId,
+              mudConnected: mudConnected,
+              disconnectedFor: disconnectDuration,
+              wizard: session.isWizard,
+              bufferSize: session.buffer.length,
+              chatBuffer: session.chatBuffer.length
+            });
 
             ws.send(JSON.stringify({
               type: 'session_resumed',
@@ -1501,7 +1585,12 @@ wss.on('connection', (ws, req) => {
             session.isWizard = isWizard;
             sessions.set(token, session);
 
-            console.log(`SESSION_NEW: token=${token.substring(0, 8)}... user=${userId} char=${characterName || characterId} wizard=${isWizard}`);
+            logSessionEvent('SESSION_NEW', {
+              token: token.substring(0, 8),
+              user: userId,
+              char: characterName || characterId,
+              wizard: isWizard
+            });
 
             ws.send(JSON.stringify({
               type: 'session_new'
@@ -1732,7 +1821,11 @@ wss.on('connection', (ws, req) => {
 
         case 'disconnect':
           // Explicit disconnect - close MUD connection
-          console.log(`SESSION_EXPLICIT_DISCONNECT: token=${session.token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId}`);
+          logSessionEvent('SESSION_EXPLICIT_DISCONNECT', {
+            token: session.token.substring(0, 8),
+            user: session.userId,
+            char: session.characterName || session.characterId
+          });
           session.explicitDisconnect = true;
           closeSession(session, 'explicit disconnect');
           break;
@@ -1755,7 +1848,14 @@ wss.on('connection', (ws, req) => {
       session.disconnectedAt = Date.now();
 
       const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
-      console.log(`SESSION_BROWSER_DISCONNECT: token=${session.token.substring(0, 8)}... user=${session.userId} char=${session.characterName || session.characterId} mudConnected=${mudConnected} wizard=${session.isWizard} willTimeout=${!session.isWizard}`);
+      logSessionEvent('SESSION_BROWSER_DISCONNECT', {
+        token: session.token.substring(0, 8),
+        user: session.userId,
+        char: session.characterName || session.characterId,
+        mudConnected: mudConnected,
+        wizard: session.isWizard,
+        willTimeout: !session.isWizard
+      });
     }
   });
 
