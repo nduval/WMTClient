@@ -225,7 +225,7 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
  */
 async function persistWizardSessions() {
   if (!ADMIN_KEY) {
-    console.log('No ADMIN_KEY configured, skipping session persistence');
+    logSessionEvent('PERSIST_SKIP', { reason: 'no admin key' });
     return;
   }
 
@@ -245,11 +245,14 @@ async function persistWizardSessions() {
   }
 
   if (wizardSessions.length === 0) {
-    console.log('No wizard sessions to persist');
+    logSessionEvent('PERSIST_SKIP', { reason: 'no wizard sessions' });
     return;
   }
 
-  console.log(`Persisting ${wizardSessions.length} wizard session(s)...`);
+  logSessionEvent('PERSIST_START', {
+    count: wizardSessions.length,
+    chars: wizardSessions.map(s => s.characterName).join(',')
+  });
 
   try {
     const payload = JSON.stringify({ sessions: wizardSessions });
@@ -272,7 +275,7 @@ async function persistWizardSessions() {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           if (res.statusCode === 200) {
-            console.log('Wizard sessions persisted successfully');
+            logSessionEvent('PERSIST_SUCCESS', { count: wizardSessions.length });
             resolve(JSON.parse(data));
           } else {
             reject(new Error(`HTTP ${res.statusCode}: ${data}`));
@@ -290,7 +293,7 @@ async function persistWizardSessions() {
       req.end();
     });
   } catch (e) {
-    console.error('Failed to persist wizard sessions:', e.message);
+    logSessionEvent('PERSIST_ERROR', { error: e.message });
   }
 }
 
@@ -416,8 +419,15 @@ async function removePersistentSession(token) {
 function autoLoginToMud(session, password) {
   return new Promise((resolve) => {
     const serverName = session.targetHost === '3scapes.org' ? '3Scapes' : '3Kingdoms';
+    const charName = session.characterName;
+    const tokenShort = session.token.substring(0, 8);
 
-    console.log(`Auto-login: Connecting to ${session.targetHost}:${session.targetPort} for ${session.characterName}...`);
+    logSessionEvent('AUTOLOGIN_START', {
+      token: tokenShort,
+      char: charName,
+      server: serverName,
+      host: session.targetHost
+    });
 
     session.mudSocket = new net.Socket();
     let loginState = 'CONNECTING';
@@ -426,7 +436,11 @@ function autoLoginToMud(session, password) {
 
     // Set a timeout for the entire login process
     loginTimeout = setTimeout(() => {
-      console.error(`Auto-login timeout for ${session.characterName}`);
+      logSessionEvent('AUTOLOGIN_TIMEOUT', {
+        token: tokenShort,
+        char: charName,
+        state: loginState
+      });
       if (session.mudSocket && !session.mudSocket.destroyed) {
         session.mudSocket.destroy();
       }
@@ -441,7 +455,11 @@ function autoLoginToMud(session, password) {
     };
 
     session.mudSocket.connect(session.targetPort, session.targetHost, () => {
-      console.log(`Auto-login: Connected to ${session.targetHost} for ${session.characterName}`);
+      logSessionEvent('AUTOLOGIN_CONNECTED', {
+        token: tokenShort,
+        char: charName,
+        host: session.targetHost
+      });
       loginState = 'WAITING_FOR_NAME_PROMPT';
     });
 
@@ -450,16 +468,16 @@ function autoLoginToMud(session, password) {
       const text = cleanData.toString('utf8');
       dataBuffer += text;
 
-      // Log for debugging (first 200 chars)
-      // console.log(`Auto-login data (${loginState}): ${text.substring(0, 200).replace(/\n/g, '\\n')}`);
-
       switch (loginState) {
         case 'WAITING_FOR_NAME_PROMPT':
           // Look for login prompt - both 3K and 3S have similar prompts
           if (dataBuffer.includes('Enter your character name') ||
               dataBuffer.includes('What is your name') ||
               dataBuffer.includes('Login:')) {
-            console.log(`Auto-login: Sending name for ${session.characterName}`);
+            logSessionEvent('AUTOLOGIN_SENDING_NAME', {
+              token: tokenShort,
+              char: charName
+            });
             session.mudSocket.write(session.characterName + '\r\n');
             loginState = 'WAITING_FOR_PASSWORD_PROMPT';
             dataBuffer = '';
@@ -468,7 +486,10 @@ function autoLoginToMud(session, password) {
 
         case 'WAITING_FOR_PASSWORD_PROMPT':
           if (dataBuffer.includes('Password:') || dataBuffer.includes('password:')) {
-            console.log(`Auto-login: Sending password for ${session.characterName}`);
+            logSessionEvent('AUTOLOGIN_SENDING_PASSWORD', {
+              token: tokenShort,
+              char: charName
+            });
             session.mudSocket.write(password + '\r\n');
             loginState = 'WAITING_FOR_LOGIN_RESULT';
             dataBuffer = '';
@@ -482,7 +503,11 @@ function autoLoginToMud(session, password) {
               dataBuffer.includes('Last login:') ||
               dataBuffer.includes('Welcome back') ||
               dataBuffer.includes('You last quit from')) {
-            console.log(`Auto-login: Success for ${session.characterName}!`);
+            logSessionEvent('AUTOLOGIN_SUCCESS', {
+              token: tokenShort,
+              char: charName,
+              server: serverName
+            });
             cleanup();
             loginState = 'LOGGED_IN';
 
@@ -535,7 +560,17 @@ function autoLoginToMud(session, password) {
               dataBuffer.includes('Invalid password') ||
               dataBuffer.includes('No such player') ||
               dataBuffer.includes('already logged in')) {
-            console.error(`Auto-login: Failed for ${session.characterName} - login rejected`);
+            // Extract the specific error for logging
+            let reason = 'unknown';
+            if (dataBuffer.includes('Unknown user') || dataBuffer.includes('No such player')) reason = 'unknown_user';
+            else if (dataBuffer.includes('Bad password') || dataBuffer.includes('Invalid password')) reason = 'bad_password';
+            else if (dataBuffer.includes('already logged in')) reason = 'already_logged_in';
+
+            logSessionEvent('AUTOLOGIN_REJECTED', {
+              token: tokenShort,
+              char: charName,
+              reason: reason
+            });
             cleanup();
             session.mudSocket.destroy();
             resolve(false);
@@ -546,14 +581,22 @@ function autoLoginToMud(session, password) {
 
     session.mudSocket.on('close', () => {
       if (loginState !== 'LOGGED_IN') {
-        console.error(`Auto-login: Connection closed during login for ${session.characterName}`);
+        logSessionEvent('AUTOLOGIN_CLOSED', {
+          token: tokenShort,
+          char: charName,
+          state: loginState
+        });
         cleanup();
         resolve(false);
       }
     });
 
     session.mudSocket.on('error', (err) => {
-      console.error(`Auto-login: Socket error for ${session.characterName}:`, err.message);
+      logSessionEvent('AUTOLOGIN_ERROR', {
+        token: tokenShort,
+        char: charName,
+        error: err.message
+      });
       cleanup();
       resolve(false);
     });
@@ -564,24 +607,34 @@ function autoLoginToMud(session, password) {
  * Restore persistent sessions on startup
  */
 async function restorePersistentSessions() {
-  console.log('Checking for persistent sessions to restore...');
+  logSessionEvent('RESTORE_CHECK', { note: 'checking for sessions to restore' });
 
   const persistentSessions = await fetchPersistentSessions();
 
   if (persistentSessions.length === 0) {
-    console.log('No persistent sessions to restore');
+    logSessionEvent('RESTORE_NONE', { note: 'no sessions to restore' });
     return;
   }
 
-  console.log(`Found ${persistentSessions.length} session(s) to restore`);
+  logSessionEvent('RESTORE_START', {
+    count: persistentSessions.length,
+    chars: persistentSessions.map(s => s.characterName).join(',')
+  });
 
   for (const ps of persistentSessions) {
-    console.log(`Restoring session for ${ps.characterName} (${ps.server})...`);
+    logSessionEvent('RESTORE_SESSION', {
+      token: ps.token.substring(0, 8),
+      char: ps.characterName,
+      server: ps.server
+    });
 
     // Fetch password
     const password = await fetchCharacterPassword(ps.userId, ps.characterId);
     if (!password) {
-      console.error(`No password found for ${ps.characterName}, skipping`);
+      logSessionEvent('RESTORE_NO_PASSWORD', {
+        token: ps.token.substring(0, 8),
+        char: ps.characterName
+      });
       await removePersistentSession(ps.token);
       continue;
     }
@@ -616,10 +669,12 @@ async function restorePersistentSessions() {
         char: ps.characterName,
         server: ps.server
       });
-
-      console.log(`Session restored for ${ps.characterName}`);
     } else {
-      console.error(`Failed to restore session for ${ps.characterName}`);
+      logSessionEvent('RESTORE_FAILED', {
+        token: ps.token.substring(0, 8),
+        char: ps.characterName,
+        server: ps.server
+      });
     }
 
     // Remove from persistent storage regardless of success
@@ -630,7 +685,7 @@ async function restorePersistentSessions() {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
 
-  console.log('Session restoration complete');
+  logSessionEvent('RESTORE_COMPLETE', { note: 'session restoration finished' });
 }
 
 // Telnet protocol constants
