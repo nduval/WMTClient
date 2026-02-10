@@ -14,7 +14,7 @@ const https = require('https');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.6.6'; // Trigger loop detection
+const VERSION = '2.7.0'; // Auto-restore wizard sessions after restart
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -131,8 +131,10 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
   }
 }
 
-// PHP API URL for fetching Discord prefs (survives server restart)
+// PHP API URLs (survive server restart)
 const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
+const PHP_SESSIONS_URL = 'https://client.wemudtogether.com/api/persistent_sessions.php';
+const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
 
 /**
  * Fetch Discord channel preferences from PHP backend
@@ -215,6 +217,420 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
       error: e.message
     });
   }
+}
+
+/**
+ * Persist all active wizard sessions to PHP backend
+ * Called on SIGTERM before server shutdown
+ */
+async function persistWizardSessions() {
+  if (!ADMIN_KEY) {
+    console.log('No ADMIN_KEY configured, skipping session persistence');
+    return;
+  }
+
+  const wizardSessions = [];
+
+  for (const [token, session] of sessions) {
+    // Only persist wizard sessions with active MUD connections
+    if (session.isWizard && session.mudSocket && !session.mudSocket.destroyed) {
+      wizardSessions.push({
+        userId: session.userId,
+        characterId: session.characterId,
+        characterName: session.characterName,
+        server: session.targetHost === '3scapes.org' ? '3s' : '3k',
+        token: token
+      });
+    }
+  }
+
+  if (wizardSessions.length === 0) {
+    console.log('No wizard sessions to persist');
+    return;
+  }
+
+  console.log(`Persisting ${wizardSessions.length} wizard session(s)...`);
+
+  try {
+    const payload = JSON.stringify({ sessions: wizardSessions });
+    const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            console.log('Wizard sessions persisted successfully');
+            resolve(JSON.parse(data));
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
+
+      req.write(payload);
+      req.end();
+    });
+  } catch (e) {
+    console.error('Failed to persist wizard sessions:', e.message);
+  }
+}
+
+/**
+ * Fetch character password from PHP backend
+ */
+async function fetchCharacterPassword(userId, characterId) {
+  if (!ADMIN_KEY) return null;
+
+  const url = `${PHP_CHARACTERS_URL}?action=get_password_admin&user_id=${encodeURIComponent(userId)}&character_id=${encodeURIComponent(characterId)}`;
+
+  try {
+    const response = await new Promise((resolve, reject) => {
+      const req = https.get(url, {
+        headers: { 'X-Admin-Key': ADMIN_KEY },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve(JSON.parse(data));
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
+    });
+
+    return response.password || null;
+  } catch (e) {
+    console.error(`Failed to fetch password for ${userId}/${characterId}:`, e.message);
+    return null;
+  }
+}
+
+/**
+ * Fetch persistent sessions from PHP backend
+ */
+async function fetchPersistentSessions() {
+  if (!ADMIN_KEY) return [];
+
+  const url = `${PHP_SESSIONS_URL}?action=list`;
+
+  try {
+    const response = await new Promise((resolve, reject) => {
+      const req = https.get(url, {
+        headers: { 'X-Admin-Key': ADMIN_KEY },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve(JSON.parse(data));
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
+    });
+
+    return response.sessions || [];
+  } catch (e) {
+    console.error('Failed to fetch persistent sessions:', e.message);
+    return [];
+  }
+}
+
+/**
+ * Remove a persistent session from PHP backend after successful restore
+ */
+async function removePersistentSession(token) {
+  if (!ADMIN_KEY) return;
+
+  try {
+    const payload = JSON.stringify({ token });
+    const url = new URL(`${PHP_SESSIONS_URL}?action=remove`);
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve());
+      });
+
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  } catch (e) {
+    console.error('Failed to remove persistent session:', e.message);
+  }
+}
+
+/**
+ * Auto-login to MUD for a restored session
+ * Returns true on success, false on failure
+ */
+function autoLoginToMud(session, password) {
+  return new Promise((resolve) => {
+    const serverName = session.targetHost === '3scapes.org' ? '3Scapes' : '3Kingdoms';
+
+    console.log(`Auto-login: Connecting to ${session.targetHost}:${session.targetPort} for ${session.characterName}...`);
+
+    session.mudSocket = new net.Socket();
+    let loginState = 'CONNECTING';
+    let dataBuffer = '';
+    let loginTimeout = null;
+
+    // Set a timeout for the entire login process
+    loginTimeout = setTimeout(() => {
+      console.error(`Auto-login timeout for ${session.characterName}`);
+      if (session.mudSocket && !session.mudSocket.destroyed) {
+        session.mudSocket.destroy();
+      }
+      resolve(false);
+    }, 30000); // 30 second timeout
+
+    const cleanup = () => {
+      if (loginTimeout) {
+        clearTimeout(loginTimeout);
+        loginTimeout = null;
+      }
+    };
+
+    session.mudSocket.connect(session.targetPort, session.targetHost, () => {
+      console.log(`Auto-login: Connected to ${session.targetHost} for ${session.characterName}`);
+      loginState = 'WAITING_FOR_NAME_PROMPT';
+    });
+
+    session.mudSocket.on('data', (data) => {
+      const { buffer: cleanData } = stripTelnetSequences(data);
+      const text = cleanData.toString('utf8');
+      dataBuffer += text;
+
+      // Log for debugging (first 200 chars)
+      // console.log(`Auto-login data (${loginState}): ${text.substring(0, 200).replace(/\n/g, '\\n')}`);
+
+      switch (loginState) {
+        case 'WAITING_FOR_NAME_PROMPT':
+          // Look for login prompt - both 3K and 3S have similar prompts
+          if (dataBuffer.includes('Enter your character name') ||
+              dataBuffer.includes('What is your name') ||
+              dataBuffer.includes('Login:')) {
+            console.log(`Auto-login: Sending name for ${session.characterName}`);
+            session.mudSocket.write(session.characterName + '\r\n');
+            loginState = 'WAITING_FOR_PASSWORD_PROMPT';
+            dataBuffer = '';
+          }
+          break;
+
+        case 'WAITING_FOR_PASSWORD_PROMPT':
+          if (dataBuffer.includes('Password:') || dataBuffer.includes('password:')) {
+            console.log(`Auto-login: Sending password for ${session.characterName}`);
+            session.mudSocket.write(password + '\r\n');
+            loginState = 'WAITING_FOR_LOGIN_RESULT';
+            dataBuffer = '';
+          }
+          break;
+
+        case 'WAITING_FOR_LOGIN_RESULT':
+          // Check for success indicators
+          // MIP initialization is a strong indicator of successful login
+          if (dataBuffer.includes('#K%') ||
+              dataBuffer.includes('Last login:') ||
+              dataBuffer.includes('Welcome back') ||
+              dataBuffer.includes('You last quit from')) {
+            console.log(`Auto-login: Success for ${session.characterName}!`);
+            cleanup();
+            loginState = 'LOGGED_IN';
+
+            // Now set up normal data handler
+            session.mudSocket.removeAllListeners('data');
+            session.lineBuffer = '';
+            session.currentAnsiState = '';
+
+            session.mudSocket.on('data', (data) => {
+              const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
+              const text = cleanData.toString('utf8');
+
+              if (session.lineBufferTimeout) {
+                clearTimeout(session.lineBufferTimeout);
+                session.lineBufferTimeout = null;
+              }
+
+              const fullText = session.lineBuffer + text;
+              const parts = fullText.split('\n');
+
+              if (hasGA) {
+                session.lineBuffer = '';
+                parts.forEach(line => processLine(session, line));
+                return;
+              }
+
+              if (!text.endsWith('\n') && parts.length > 0) {
+                session.lineBuffer = parts.pop();
+                if (session.lineBuffer) {
+                  session.lineBufferTimeout = setTimeout(() => {
+                    if (session.lineBuffer) {
+                      processLine(session, session.lineBuffer);
+                      session.lineBuffer = '';
+                    }
+                  }, 500);
+                }
+              } else {
+                session.lineBuffer = '';
+              }
+
+              parts.forEach(line => processLine(session, line));
+            });
+
+            resolve(true);
+          }
+
+          // Check for failure indicators
+          if (dataBuffer.includes('Unknown user') ||
+              dataBuffer.includes('Bad password') ||
+              dataBuffer.includes('Invalid password') ||
+              dataBuffer.includes('No such player') ||
+              dataBuffer.includes('already logged in')) {
+            console.error(`Auto-login: Failed for ${session.characterName} - login rejected`);
+            cleanup();
+            session.mudSocket.destroy();
+            resolve(false);
+          }
+          break;
+      }
+    });
+
+    session.mudSocket.on('close', () => {
+      if (loginState !== 'LOGGED_IN') {
+        console.error(`Auto-login: Connection closed during login for ${session.characterName}`);
+        cleanup();
+        resolve(false);
+      }
+    });
+
+    session.mudSocket.on('error', (err) => {
+      console.error(`Auto-login: Socket error for ${session.characterName}:`, err.message);
+      cleanup();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Restore persistent sessions on startup
+ */
+async function restorePersistentSessions() {
+  console.log('Checking for persistent sessions to restore...');
+
+  const persistentSessions = await fetchPersistentSessions();
+
+  if (persistentSessions.length === 0) {
+    console.log('No persistent sessions to restore');
+    return;
+  }
+
+  console.log(`Found ${persistentSessions.length} session(s) to restore`);
+
+  for (const ps of persistentSessions) {
+    console.log(`Restoring session for ${ps.characterName} (${ps.server})...`);
+
+    // Fetch password
+    const password = await fetchCharacterPassword(ps.userId, ps.characterId);
+    if (!password) {
+      console.error(`No password found for ${ps.characterName}, skipping`);
+      await removePersistentSession(ps.token);
+      continue;
+    }
+
+    // Create session object
+    const session = createSession(ps.token);
+    session.userId = ps.userId;
+    session.characterId = ps.characterId;
+    session.characterName = ps.characterName;
+    session.isWizard = true; // Only wizard sessions are persisted
+    session.targetHost = ps.server === '3s' ? '3scapes.org' : '3k.org';
+    session.targetPort = ps.server === '3s' ? 3200 : 3000;
+    session.disconnectedAt = Date.now(); // No browser connected yet
+
+    // Try to auto-login
+    const success = await autoLoginToMud(session, password);
+
+    if (success) {
+      // Register the session
+      sessions.set(ps.token, session);
+
+      // Register in user+character tracking
+      const userCharKey = `${ps.userId}:${ps.characterId}`;
+      userCharacterSessions.set(userCharKey, ps.token);
+
+      // Fetch Discord prefs
+      fetchDiscordPrefsFromPHP(ps.userId, ps.characterId, session);
+
+      logSessionEvent('SESSION_RESTORED', {
+        token: ps.token.substring(0, 8),
+        user: ps.userId,
+        char: ps.characterName,
+        server: ps.server
+      });
+
+      console.log(`Session restored for ${ps.characterName}`);
+    } else {
+      console.error(`Failed to restore session for ${ps.characterName}`);
+    }
+
+    // Remove from persistent storage regardless of success
+    // (if failed, user will need to reconnect manually anyway)
+    await removePersistentSession(ps.token);
+
+    // Small delay between restores to avoid overwhelming the MUD
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  console.log('Session restoration complete');
 }
 
 // Telnet protocol constants
@@ -2634,6 +3050,35 @@ function sendDiscordWebhook(webhookUrl, message, variables = {}) {
   req.end();
 }
 
-server.listen(PORT, () => {
+// SIGTERM handler - persist wizard sessions before shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, persisting wizard sessions...');
+  await persistWizardSessions();
+
+  // Give a moment for persistence to complete
+  setTimeout(() => {
+    console.log('Shutting down...');
+    process.exit(0);
+  }, 1000);
+});
+
+// Also handle SIGINT (Ctrl+C) for local development
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, persisting wizard sessions...');
+  await persistWizardSessions();
+
+  setTimeout(() => {
+    console.log('Shutting down...');
+    process.exit(0);
+  }, 1000);
+});
+
+server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
+
+  // Restore persistent sessions after startup
+  // Small delay to ensure server is fully ready
+  setTimeout(async () => {
+    await restorePersistentSessions();
+  }, 2000);
 });
