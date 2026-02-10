@@ -94,13 +94,33 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
     };
 
     const req = https.request(options, (res) => {
-      res.resume(); // Must consume response to free connection
-      if (res.statusCode !== 204 && res.statusCode !== 200) {
-        console.error('Discord webhook error:', res.statusCode);
-      }
+      let responseBody = '';
+      res.on('data', chunk => responseBody += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 204 && res.statusCode !== 200) {
+          // Log webhook errors to session log buffer for debugging
+          sessionLogs.push({
+            time: new Date().toISOString(),
+            type: 'DISCORD_WEBHOOK_ERROR',
+            statusCode: res.statusCode,
+            response: responseBody.substring(0, 200),
+            webhookSuffix: webhookUrl.slice(-15)
+          });
+          if (sessionLogs.length > SESSION_LOG_MAX) sessionLogs.shift();
+          console.error('Discord webhook error:', res.statusCode, responseBody);
+        }
+      });
     });
 
     req.on('error', (e) => {
+      // Log network errors
+      sessionLogs.push({
+        time: new Date().toISOString(),
+        type: 'DISCORD_WEBHOOK_ERROR',
+        error: e.message,
+        webhookSuffix: webhookUrl.slice(-15)
+      });
+      if (sessionLogs.length > SESSION_LOG_MAX) sessionLogs.shift();
       console.error('Discord webhook error:', e.message);
     });
 
