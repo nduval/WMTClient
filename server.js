@@ -14,7 +14,7 @@ const https = require('https');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.7.0'; // Auto-restore wizard sessions after restart
+const VERSION = '2.7.1'; // Route Discord webhooks through IONOS proxy
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -56,11 +56,12 @@ function logSessionEvent(type, data) {
 }
 
 /**
- * Send message to Discord webhook (fire and forget)
+ * Send message to Discord webhook via IONOS proxy (fire and forget)
+ * Routes through IONOS to avoid Cloudflare blocking Render's IPs
  * Used for server-side notifications when browser is disconnected
  */
 function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
-  if (!webhookUrl) return;
+  if (!webhookUrl || !ADMIN_KEY) return;
 
   // Validate webhook URL
   if (!webhookUrl.startsWith('https://discord.com/api/webhooks/') &&
@@ -75,21 +76,24 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
     .replace(/<@[!&]?\d+>/g, '[mention]')  // Escape mentions
     .substring(0, 1997) + (message.length > 1997 ? '...' : '');
 
+  // Route through IONOS proxy instead of directly to Discord
   const payload = JSON.stringify({
-    content: sanitizedMessage,
+    webhook_url: webhookUrl,
+    message: sanitizedMessage,
     username: username
   });
 
   try {
-    const urlObj = new URL(webhookUrl);
+    const urlObj = new URL(PHP_DISCORD_PROXY_URL);
     const options = {
       hostname: urlObj.hostname,
       port: 443,
-      path: urlObj.pathname + urlObj.search,
+      path: urlObj.pathname,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload)
+        'Content-Length': Buffer.byteLength(payload),
+        'X-Admin-Key': ADMIN_KEY
       }
     };
 
@@ -97,7 +101,7 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
       let responseBody = '';
       res.on('data', chunk => responseBody += chunk);
       res.on('end', () => {
-        if (res.statusCode !== 204 && res.statusCode !== 200) {
+        if (res.statusCode !== 200) {
           // Log webhook errors to session log buffer for debugging
           sessionLogs.push({
             time: new Date().toISOString(),
@@ -107,7 +111,7 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
             webhookSuffix: webhookUrl.slice(-15)
           });
           if (sessionLogs.length > SESSION_LOG_MAX) sessionLogs.shift();
-          console.error('Discord webhook error:', res.statusCode, responseBody);
+          console.error('Discord webhook proxy error:', res.statusCode, responseBody);
         }
       });
     });
@@ -121,13 +125,13 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
         webhookSuffix: webhookUrl.slice(-15)
       });
       if (sessionLogs.length > SESSION_LOG_MAX) sessionLogs.shift();
-      console.error('Discord webhook error:', e.message);
+      console.error('Discord webhook proxy error:', e.message);
     });
 
     req.write(payload);
     req.end();
   } catch (e) {
-    console.error('Discord webhook exception:', e.message);
+    console.error('Discord webhook proxy exception:', e.message);
   }
 }
 
@@ -135,6 +139,7 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
 const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
 const PHP_SESSIONS_URL = 'https://client.wemudtogether.com/api/persistent_sessions.php';
 const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
+const PHP_DISCORD_PROXY_URL = 'https://client.wemudtogether.com/api/discord_proxy.php';
 
 /**
  * Fetch Discord channel preferences from PHP backend
