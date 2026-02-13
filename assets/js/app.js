@@ -106,6 +106,10 @@ class WMTClient {
         this.healthCheckPending = false;
         this.healthCheckInterval = null;
 
+        // Brief reconnect suppression - hides noise from WiFi blips
+        this.lastDisconnectTime = null;   // When browser WS last disconnected (null on fresh page load)
+        this.reconnectingSince = null;    // When auto-reconnect cycle started (for status bar suppression)
+
         // Idle disconnect (deadman switch) - disconnects if user hasn't typed in X minutes
         this.lastUserInput = Date.now();
         this.idleCheckInterval = null;
@@ -581,8 +585,17 @@ class WMTClient {
         // Fire SESSION_RESUMED event
         this.fireEvent('SESSION_RESUMED');
 
+        // Detect brief reconnects (WiFi blips) vs. page refresh or long disconnects
+        // lastDisconnectTime is null on fresh page load, so refreshes always show messages
+        const briefReconnect = this.lastDisconnectTime &&
+            (Date.now() - this.lastDisconnectTime < 5000);
+        this.lastDisconnectTime = null;
+        this.reconnectingSince = null;
+
         if (mudConnected) {
-            this.appendOutput('Session resumed - MUD connection active.', 'system');
+            if (!briefReconnect) {
+                this.appendOutput('Session resumed - MUD connection active.', 'system');
+            }
             // Re-send triggers and aliases in case they changed
             this.sendFilteredTriggersAndAliases();
             // Re-enable MIP if it was enabled - proxy lost settings on WebSocket reconnect
@@ -591,6 +604,7 @@ class WMTClient {
                 this.enableMip();
             }
         } else {
+            // MUD disconnected while we were away - always show this, it's important
             this.appendOutput('Session resumed - MUD was disconnected.', 'system');
             // MUD connection closed while we were away, treat like fresh connect
             this.onConnect();
@@ -603,6 +617,10 @@ class WMTClient {
         this.stopPeriodicHealthCheck();
         // Stop idle checker when disconnected
         this.stopIdleChecker();
+
+        // Track disconnect time for brief reconnect suppression
+        // On fresh page load this is null, so page-refresh reconnects always show messages
+        this.lastDisconnectTime = Date.now();
 
         // Fire SESSION_DISCONNECTED event
         this.fireEvent('SESSION_DISCONNECTED');
@@ -1996,11 +2014,34 @@ class WMTClient {
     }
 
     updateConnectionStatus(status) {
+        // Suppress status bar flicker during brief reconnects (WiFi blips)
+        if (status === 'reconnecting') {
+            if (!this.reconnectingSince) {
+                this.reconnectingSince = Date.now();
+            }
+            return; // Don't update status bar - keep showing "Connected"
+        }
+
+        if (this.reconnectingSince) {
+            const elapsed = Date.now() - this.reconnectingSince;
+            if (elapsed < 5000) {
+                if (status === 'connected') {
+                    // Reconnected quickly - status bar already shows connected, no flicker
+                    this.reconnectingSince = null;
+                    return;
+                }
+                // Suppress intermediate states (connecting, authenticating)
+                return;
+            }
+            // Been reconnecting too long (>5s) - start showing real status
+            this.reconnectingSince = null;
+        }
+
         const indicator = document.querySelector('.status-indicator');
         const text = document.querySelector('.status-text');
 
         if (indicator) {
-            indicator.className = 'status-indicator ' + status;
+            indicator.className = 'status-indicator ' + (status === 'reconnecting' ? 'connecting' : status);
         }
 
         if (text) {
@@ -2009,6 +2050,7 @@ class WMTClient {
                 'connected': `Connected to ${mudHost}`,
                 'connecting': 'Connecting...',
                 'authenticating': 'Authenticating...',
+                'reconnecting': 'Reconnecting...',
                 'disconnected': 'Disconnected',
                 'mud_disconnected': `Disconnected from ${mudHost}`
             };

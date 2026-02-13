@@ -73,12 +73,16 @@ class MudConnection {
         this.socket.onclose = (event) => {
             this.connected = false;
             this.authenticated = false;
-            this.onStatusChange('disconnected');
             this.stopKeepAlive();
+
+            const willAutoReconnect = !this.intentionalDisconnect &&
+                this.reconnectAttempts < this.maxReconnectAttempts;
+
+            // Use 'reconnecting' status for auto-reconnects to suppress status bar flicker
+            this.onStatusChange(willAutoReconnect ? 'reconnecting' : 'disconnected');
             this.onDisconnect(event);
 
-            // Only attempt reconnect if not intentional
-            if (!this.intentionalDisconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+            if (willAutoReconnect) {
                 this.reconnectAttempts++;
                 setTimeout(() => this.connect(), this.reconnectDelay);
             }
