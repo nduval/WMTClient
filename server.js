@@ -10,11 +10,12 @@ const WebSocket = require('ws');
 const net = require('net');
 const http = require('http');
 const https = require('https');
+const url = require('url');
 
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.7.1'; // Route Discord webhooks through IONOS proxy
+const VERSION = '2.8.0'; // Persist server logs to IONOS
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -33,6 +34,11 @@ const userCharacterSessions = new Map();
 const SESSION_LOG_MAX = 500;
 const sessionLogs = [];
 
+// Log persistence tracking - index of next entry to flush to IONOS
+let lastFlushedIndex = 0;
+let flushInProgress = false;
+const LOG_FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Log a session event to both console and the in-memory buffer
  * Events are structured for easy analysis
@@ -48,11 +54,79 @@ function logSessionEvent(type, data) {
   sessionLogs.push(event);
   if (sessionLogs.length > SESSION_LOG_MAX) {
     sessionLogs.shift();
+    // Adjust flush index since we dropped an entry from the front
+    if (lastFlushedIndex > 0) {
+      lastFlushedIndex--;
+    }
+    // Buffer wrapped — flush immediately so we don't lose entries
+    flushLogsToIONOS();
   }
 
   // Also log to console for Render's log viewer
   const logParts = Object.entries(data).map(([k, v]) => `${k}=${v}`).join(' ');
   console.log(`${type}: ${logParts}`);
+}
+
+/**
+ * Flush unflushed session logs to IONOS for persistence
+ * Fire-and-forget: doesn't block on failure, just logs to console
+ */
+async function flushLogsToIONOS() {
+  if (!ADMIN_KEY || flushInProgress) return;
+
+  // Grab entries that haven't been flushed yet
+  const unflushed = sessionLogs.slice(lastFlushedIndex);
+  if (unflushed.length === 0) return;
+
+  flushInProgress = true;
+  const flushCount = unflushed.length;
+
+  try {
+    const payload = JSON.stringify({ logs: unflushed });
+    const url = new URL(`${PHP_LOGS_URL}?action=save`);
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve(JSON.parse(data));
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
+
+      req.write(payload);
+      req.end();
+    });
+
+    // Mark as flushed only on success
+    lastFlushedIndex = sessionLogs.length;
+    console.log(`LOG_FLUSH: sent ${flushCount} entries to IONOS`);
+  } catch (e) {
+    console.error('LOG_FLUSH_ERROR:', e.message);
+  } finally {
+    flushInProgress = false;
+  }
 }
 
 /**
@@ -140,6 +214,7 @@ const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
 const PHP_SESSIONS_URL = 'https://client.wemudtogether.com/api/persistent_sessions.php';
 const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
 const PHP_DISCORD_PROXY_URL = 'https://client.wemudtogether.com/api/discord_proxy.php';
+const PHP_LOGS_URL = 'https://client.wemudtogether.com/api/server_logs.php';
 
 /**
  * Fetch Discord channel preferences from PHP backend
@@ -871,7 +946,7 @@ setInterval(() => {
 }, 60000);
 
 // Create HTTP server for health checks and admin endpoints
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   // Enable CORS for admin endpoints
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -883,7 +958,9 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === '/') {
+  const parsedUrl = url.parse(req.url);
+
+  if (parsedUrl.pathname === '/') {
     const activeSessions = Array.from(sessions.values()).filter(s => s.mudSocket && !s.mudSocket.destroyed).length;
     const connectedBrowsers = Array.from(sessions.values()).filter(s => s.ws).length;
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -937,7 +1014,7 @@ const server = http.createServer((req, res) => {
       success: true,
       sessions: activeSessions
     }));
-  } else if (req.url === '/logs' && req.method === 'GET') {
+  } else if (parsedUrl.pathname === '/logs' && req.method === 'GET') {
     // Admin endpoint to fetch session event logs for debugging
     const adminKey = req.headers['x-admin-key'];
 
@@ -953,13 +1030,79 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      success: true,
-      count: sessionLogs.length,
-      maxSize: SESSION_LOG_MAX,
-      logs: sessionLogs
-    }));
+    const logsParams = new URLSearchParams(parsedUrl.query || '');
+    const wantPersisted = logsParams.get('persisted') === 'true';
+    const typeFilter = logsParams.get('type') || '';
+
+    if (!wantPersisted) {
+      // Default: in-memory only (fast, unchanged behavior)
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        count: sessionLogs.length,
+        maxSize: SESSION_LOG_MAX,
+        logs: sessionLogs
+      }));
+    } else {
+      // Fetch persisted logs from IONOS and merge with in-memory
+      try {
+        let fetchUrl = `${PHP_LOGS_URL}?action=list&limit=2000`;
+        if (typeFilter) fetchUrl += `&type=${encodeURIComponent(typeFilter)}`;
+
+        const persisted = await new Promise((resolve, reject) => {
+          const reqPHP = https.get(fetchUrl, {
+            headers: { 'X-Admin-Key': ADMIN_KEY },
+            timeout: 5000
+          }, (phpRes) => {
+            let data = '';
+            phpRes.on('data', chunk => data += chunk);
+            phpRes.on('end', () => {
+              if (phpRes.statusCode === 200) {
+                try { resolve(JSON.parse(data)); }
+                catch (e) { reject(new Error('Invalid JSON from IONOS')); }
+              } else {
+                reject(new Error(`IONOS HTTP ${phpRes.statusCode}`));
+              }
+            });
+          });
+          reqPHP.on('error', reject);
+          reqPHP.on('timeout', () => { reqPHP.destroy(); reject(new Error('IONOS timeout')); });
+        });
+
+        // Merge: persisted logs + in-memory (deduplicate by time+type)
+        const persistedLogs = persisted.logs || [];
+        const seen = new Set(persistedLogs.map(l => l.time + '|' + l.type));
+        const uniqueMemory = sessionLogs.filter(l => !seen.has(l.time + '|' + l.type));
+        let merged = [...persistedLogs, ...uniqueMemory];
+
+        // Apply type filter to in-memory entries too
+        if (typeFilter) {
+          merged = merged.filter(l => l.type && l.type.startsWith(typeFilter));
+        }
+
+        // Sort by time
+        merged.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          count: merged.length,
+          persistedCount: persistedLogs.length,
+          memoryCount: sessionLogs.length,
+          logs: merged
+        }));
+      } catch (e) {
+        // Fall back to in-memory on IONOS failure
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          count: sessionLogs.length,
+          maxSize: SESSION_LOG_MAX,
+          logs: sessionLogs,
+          persistedError: e.message
+        }));
+      }
+    }
   } else if (req.url === '/broadcast' && req.method === 'POST') {
     // Admin broadcast endpoint
     const adminKey = req.headers['x-admin-key'];
@@ -1021,94 +1164,6 @@ const server = http.createServer((req, res) => {
           sentTo: sentCount,
           message: 'Broadcast sent'
         }));
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
-      }
-    });
-  } else if (req.url === '/discord-webhook' && req.method === 'POST') {
-    // Discord webhook proxy - forwards messages to Discord safely
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk.toString();
-      if (body.length > 10000) {
-        req.destroy();
-      }
-    });
-
-    req.on('end', async () => {
-      try {
-        const data = JSON.parse(body);
-        const { webhookUrl, message, username } = data;
-
-        // Validate webhook URL is actually Discord
-        if (!webhookUrl ||
-            (!webhookUrl.startsWith('https://discord.com/api/webhooks/') &&
-             !webhookUrl.startsWith('https://discordapp.com/api/webhooks/'))) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'Invalid Discord webhook URL' }));
-          return;
-        }
-
-        if (!message || typeof message !== 'string') {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'Message is required' }));
-          return;
-        }
-
-        // Sanitize message for Discord
-        const sanitizedMessage = message
-          // Already stripped ANSI on client, but double-check
-          .replace(/\x1b\[[0-9;]*m/g, '')
-          // Escape @everyone and @here
-          .replace(/@(everyone|here)/gi, '@\u200b$1')
-          // Escape user/role mentions
-          .replace(/<@[!&]?\d+>/g, '[mention]')
-          // Truncate to Discord limit
-          .substring(0, 1997) + (message.length > 1997 ? '...' : '');
-
-        // Forward to Discord
-        const https = require('https');
-        const discordPayload = JSON.stringify({
-          content: sanitizedMessage,
-          username: username || 'WMT Client'
-        });
-
-        const urlObj = new URL(webhookUrl);
-        const options = {
-          hostname: urlObj.hostname,
-          port: 443,
-          path: urlObj.pathname + urlObj.search,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(discordPayload)
-          }
-        };
-
-        const discordReq = https.request(options, (discordRes) => {
-          if (discordRes.statusCode === 204 || discordRes.statusCode === 200) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
-          } else {
-            let responseBody = '';
-            discordRes.on('data', chunk => responseBody += chunk);
-            discordRes.on('end', () => {
-              console.error('Discord webhook error:', discordRes.statusCode, responseBody);
-              res.writeHead(500, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ success: false, error: `Discord returned ${discordRes.statusCode}` }));
-            });
-          }
-        });
-
-        discordReq.on('error', (e) => {
-          console.error('Discord webhook request error:', e.message);
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'Failed to reach Discord' }));
-        });
-
-        discordReq.write(discordPayload);
-        discordReq.end();
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
@@ -1889,21 +1944,18 @@ function processLine(session, line) {
     }
   });
 
-  // Send Discord webhooks (with user variable substitution)
+  // Send Discord webhooks (with user variable substitution, routed through IONOS proxy)
   if (processed.discordWebhooks) {
     processed.discordWebhooks.forEach(webhook => {
-      sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+      let finalMessage = substituteUserVariables(webhook.message, session.variables || {});
+      sendToDiscordWebhook(webhook.webhookUrl, finalMessage, session.discordUsername);
     });
   }
 
   // Send ChatMon messages (with user variable substitution)
   if (processed.chatmonMessages) {
     processed.chatmonMessages.forEach(chat => {
-      // Substitute user variables ($varname)
-      let finalMessage = chat.message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
-        const vars = session.variables || {};
-        return vars[varName] !== undefined ? String(vars[varName]) : match;
-      });
+      let finalMessage = substituteUserVariables(chat.message, session.variables || {});
       sendToClient(session, {
         type: 'trigger_chatmon',
         message: finalMessage,
@@ -2408,20 +2460,18 @@ wss.on('connection', (ws, req) => {
               }
             });
 
-            // Send Discord webhooks (with user variable substitution)
+            // Send Discord webhooks (with user variable substitution, routed through IONOS proxy)
             if (processed.discordWebhooks) {
               processed.discordWebhooks.forEach(webhook => {
-                sendDiscordWebhook(webhook.webhookUrl, webhook.message, session.variables || {});
+                let finalMessage = substituteUserVariables(webhook.message, session.variables || {});
+                sendToDiscordWebhook(webhook.webhookUrl, finalMessage, session.discordUsername);
               });
             }
 
             // Send ChatMon messages (with user variable substitution)
             if (processed.chatmonMessages) {
               processed.chatmonMessages.forEach(chat => {
-                let finalMessage = chat.message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
-                  const vars = session.variables || {};
-                  return vars[varName] !== undefined ? String(vars[varName]) : match;
-                });
+                let finalMessage = substituteUserVariables(chat.message, session.variables || {});
                 sendToClient(session, {
                   type: 'trigger_chatmon',
                   message: finalMessage,
@@ -3059,60 +3109,18 @@ function processTriggers(line, triggers, loopTracker = null) {
 }
 
 /**
- * Send a message to a Discord webhook
- * @param {string} webhookUrl - The Discord webhook URL
- * @param {string} message - The message to send
- * @param {Object} variables - User variables for $var substitution
+ * Substitute $varname references in a string with user variable values
  */
-function sendDiscordWebhook(webhookUrl, message, variables = {}) {
-  // Validate webhook URL - only allow Discord webhook URLs
-  const discordPattern = /^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]+$/;
-  if (!discordPattern.test(webhookUrl)) {
-    console.error('Invalid Discord webhook URL:', webhookUrl);
-    return;
-  }
-
-  // Substitute user variables ($varname)
-  let finalMessage = message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
+function substituteUserVariables(message, variables) {
+  return message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
     return variables[varName] !== undefined ? String(variables[varName]) : match;
   });
-
-  // Prepare the payload
-  const payload = JSON.stringify({ content: finalMessage });
-
-  const url = new URL(webhookUrl);
-  const options = {
-    hostname: url.hostname,
-    port: 443,
-    path: url.pathname,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload)
-    }
-  };
-
-  const req = https.request(options, (res) => {
-    // Must consume response data to free up the connection
-    res.resume();
-    if (res.statusCode === 204 || res.statusCode === 200) {
-      console.log(`Discord webhook sent successfully to ...${webhookUrl.slice(-10)}`);
-    } else {
-      console.error(`Discord webhook error: ${res.statusCode} for ...${webhookUrl.slice(-10)}`);
-    }
-  });
-
-  req.on('error', (e) => {
-    console.error(`Discord webhook request failed for ...${webhookUrl.slice(-10)}:`, e.message);
-  });
-
-  req.write(payload);
-  req.end();
 }
 
-// SIGTERM handler - persist wizard sessions before shutdown
+// SIGTERM handler - flush logs and persist wizard sessions before shutdown
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, persisting wizard sessions...');
+  console.log('SIGTERM received, flushing logs and persisting wizard sessions...');
+  await flushLogsToIONOS();
   await persistWizardSessions();
 
   // Give a moment for persistence to complete
@@ -3124,7 +3132,8 @@ process.on('SIGTERM', async () => {
 
 // Also handle SIGINT (Ctrl+C) for local development
 process.on('SIGINT', async () => {
-  console.log('SIGINT received, persisting wizard sessions...');
+  console.log('SIGINT received, flushing logs and persisting wizard sessions...');
+  await flushLogsToIONOS();
   await persistWizardSessions();
 
   setTimeout(() => {
@@ -3135,6 +3144,9 @@ process.on('SIGINT', async () => {
 
 server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
+
+  // Periodically flush session logs to IONOS for persistence
+  setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
 
   // Restore persistent sessions after startup
   // Small delay to ensure server is fully ready
