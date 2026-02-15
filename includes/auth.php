@@ -351,6 +351,10 @@ function initSession(): void {
     if (session_status() === PHP_SESSION_NONE) {
         session_name(SESSION_NAME);
 
+        // Match server-side session lifetime to cookie lifetime
+        // Default gc_maxlifetime is 24 minutes — far too short for a MUD client
+        ini_set('session.gc_maxlifetime', SESSION_LIFETIME);
+
         // Delete any old cookies with /api/ path (legacy bug fix)
         // Old code set cookies with path=/api/ which take precedence over path=/
         if (isset($_COOKIE[SESSION_NAME])) {

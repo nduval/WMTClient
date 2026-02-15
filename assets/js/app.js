@@ -553,7 +553,7 @@ class WMTClient {
         // For new characters: sends name for registration
         // For existing characters: sends name to log in
         const charName = window.WMT_CONFIG.newMudChar || window.WMT_CONFIG.characterName;
-        const serverName = mudHost === '3s.org' ? '3S' : '3K';
+        const serverName = mudHost.includes('3scapes') ? '3Scapes' : '3K';
         if (charName) {
             setTimeout(() => {
                 const nameLower = charName.toLowerCase();
@@ -607,6 +607,8 @@ class WMTClient {
             // MUD disconnected while we were away - always show this, it's important
             this.appendOutput('Session resumed - MUD was disconnected.', 'system');
             // MUD connection closed while we were away, treat like fresh connect
+            // Clear pendingReconnect so the duplicate name-send path in onMessage doesn't fire
+            this.pendingReconnect = false;
             this.onConnect();
         }
     }
@@ -1691,7 +1693,7 @@ class WMTClient {
     async saveChannelPrefs() {
         try {
             this.preferences.channelPrefs = this.channelPrefs;
-            await fetch('api/preferences.php?action=save', {
+            const res = await fetch('api/preferences.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1700,10 +1702,15 @@ class WMTClient {
                     }
                 })
             });
+            if (!res.ok) {
+                this.appendOutput(`Failed to save channel preferences (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                return;
+            }
             // Also send to server for server-side notifications (works when browser closed)
             this.sendDiscordPrefsToServer();
         } catch (e) {
             console.error('Failed to save channel preferences:', e);
+            this.appendOutput('Failed to save channel preferences — network error.', 'error');
         }
     }
 
@@ -3620,11 +3627,15 @@ class WMTClient {
 
     async saveTriggers() {
         try {
-            await fetch('api/triggers.php?action=save', {
+            const res = await fetch('api/triggers.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ triggers: this.triggers })
             });
+            if (!res.ok) {
+                this.appendOutput(`Failed to save triggers (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                return;
+            }
             this.sendFilteredTriggersAndAliases();
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -3632,6 +3643,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save triggers:', e);
+            this.appendOutput('Failed to save triggers — network error.', 'error');
         }
     }
 
@@ -4151,11 +4163,15 @@ class WMTClient {
 
     async saveAliases() {
         try {
-            await fetch('api/aliases.php?action=save', {
+            const res = await fetch('api/aliases.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ aliases: this.aliases })
             });
+            if (!res.ok) {
+                this.appendOutput(`Failed to save aliases (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                return;
+            }
             this.sendFilteredTriggersAndAliases();
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -4163,16 +4179,21 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save aliases:', e);
+            this.appendOutput('Failed to save aliases — network error.', 'error');
         }
     }
 
     async saveTickers() {
         try {
-            await fetch('api/tickers.php?action=save', {
+            const res = await fetch('api/tickers.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tickers: this.tickers })
             });
+            if (!res.ok) {
+                this.appendOutput(`Failed to save tickers (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                return;
+            }
             this.sendFilteredTriggersAndAliases();
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -4180,6 +4201,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save tickers:', e);
+            this.appendOutput('Failed to save tickers — network error.', 'error');
         }
     }
 
@@ -4534,11 +4556,14 @@ class WMTClient {
     // Does NOT read from DOM - just saves what's in this.preferences
     async saveCurrentPreferences() {
         try {
-            await fetch('api/preferences.php?action=save', {
+            const res = await fetch('api/preferences.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preferences: this.preferences })
             });
+            if (!res.ok) {
+                this.appendOutput(`Failed to save preferences (${res.status}) — your session may have expired. Please log in again.`, 'error');
+            }
         } catch (e) {
             console.error('Failed to save preferences:', e);
         }
@@ -4573,11 +4598,20 @@ class WMTClient {
         };
 
         try {
-            await fetch('api/preferences.php?action=save', {
+            const res = await fetch('api/preferences.php?action=save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preferences: this.preferences })
             });
+
+            if (!res.ok) {
+                this.appendOutput(`Failed to save preferences (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                if (saveBtn) {
+                    saveBtn.textContent = 'Error!';
+                    setTimeout(() => { saveBtn.textContent = originalText; }, 1500);
+                }
+                return;
+            }
 
             this.applyPreferences();
 
@@ -4792,11 +4826,15 @@ class WMTClient {
 
             if (data.preferences) {
                 this.preferences = data.preferences;
-                await fetch('api/preferences.php?action=save', {
+                const res = await fetch('api/preferences.php?action=save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ preferences: this.preferences })
                 });
+                if (!res.ok) {
+                    this.appendOutput(`Failed to save imported preferences (${res.status}) — your session may have expired.`, 'error');
+                    return;
+                }
                 this.applyPreferences();
             }
 
