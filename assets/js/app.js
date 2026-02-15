@@ -7500,6 +7500,27 @@ class WMTClient {
             return name;
         });
 
+        // Handle ${variable} brace-delimited syntax (disambiguation)
+        // Must come before $var[key] handling so ${hpmax}[literal] isn't misread as $hpmax[key]
+        str = str.replace(/\$\{(\w+)\}/g, (match, name) => {
+            for (let i = this.localScopes.length - 1; i >= 0; i--) {
+                if (name in this.localScopes[i]) {
+                    const val = this.localScopes[i][name];
+                    if (typeof val === 'object') return JSON.stringify(val);
+                    return String(val);
+                }
+            }
+            if (this.variables[name] !== undefined) {
+                const val = this.variables[name];
+                if (typeof val === 'object') return JSON.stringify(val);
+                return String(val);
+            }
+            if (this.mipVars[name] !== undefined) {
+                return String(this.mipVars[name]);
+            }
+            return match;
+        });
+
         // Handle $variable[key] and $variable[key][subkey] patterns
         // This regex matches $varname followed by one or more [key] brackets
         str = str.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
