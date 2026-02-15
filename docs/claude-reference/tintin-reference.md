@@ -98,6 +98,17 @@ Format: `%+min..max[type]` or `%+min[type]`
 - `%1` / `&1` = first capture group, etc.
 - ANSI codes are stripped from captured values before substitution
 
+### Brace-Delimited Variables (v2.6.8+)
+
+Use `${varname}` to disambiguate when `$varname` is followed by `[` which would otherwise be parsed as a nested key access.
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `$var` | Simple variable | `$hpmax` → `1832` |
+| `${var}` | Disambiguated variable | `${hpmax}[text]` → `1832[text]` |
+
+Without braces, `$hpmax[<088>$hpchange<269>]` would be misread as nested key `$hpmax["<088>..."]`. With braces, `${hpmax}` resolves first, leaving `[...]` as literal text.
+
 ### Implementation Notes
 
 1. **All wildcards are GREEDY** - they capture as much as possible

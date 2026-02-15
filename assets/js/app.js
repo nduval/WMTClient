@@ -2125,7 +2125,11 @@ class WMTClient {
 
         const ansiSpans = {
             '1': '<span style="font-weight:bold">',
+            '2': '<span style="opacity:0.7">',           // dim
+            '3': '<span style="font-style:italic">',     // italic
             '4': '<span style="text-decoration:underline">',
+            '5': '<span style="animation:blink 1s step-end infinite">', // blink
+            '7': '<span style="filter:invert(1)">',      // reverse
             '30': '<span style="color:#555555">',  // dark gray (visible on black)
             '31': '<span style="color:#cc4444">',  // dim red
             '32': '<span style="color:#44cc44">',  // dim green
@@ -2134,6 +2138,14 @@ class WMTClient {
             '35': '<span style="color:#cc44cc">',  // dim magenta
             '36': '<span style="color:#44cccc">',  // dim cyan
             '37': '<span style="color:#cccccc">',  // dim white/gray
+            '40': '<span style="background-color:#000000">', // bg black
+            '41': '<span style="background-color:#cc4444">', // bg red
+            '42': '<span style="background-color:#44cc44">', // bg green
+            '43': '<span style="background-color:#cccc44">', // bg yellow
+            '44': '<span style="background-color:#4444cc">', // bg blue
+            '45': '<span style="background-color:#cc44cc">', // bg magenta
+            '46': '<span style="background-color:#44cccc">', // bg cyan
+            '47': '<span style="background-color:#cccccc">', // bg white
             '90': '<span style="color:#888888">',  // bright black (gray)
             '91': '<span style="color:#ff5555">',  // bright red
             '92': '<span style="color:#55ff55">',  // bright green
@@ -2151,11 +2163,39 @@ class WMTClient {
             const codeList = codes.split(';');
             let result = '';
 
-            for (const code of codeList) {
+            for (let i = 0; i < codeList.length; i++) {
+                const code = codeList[i];
+
                 if (code === '0' || code === '') {
                     // Reset: close ALL open spans
                     result += '</span>'.repeat(openSpans);
                     openSpans = 0;
+                } else if (code === '38' && codeList[i + 1] === '5' && i + 2 < codeList.length) {
+                    // 256-color foreground: 38;5;N
+                    result += `<span style="color:${this.xterm256ToRgb(parseInt(codeList[i + 2]))}">`;
+                    openSpans++;
+                    i += 2;
+                } else if (code === '48' && codeList[i + 1] === '5' && i + 2 < codeList.length) {
+                    // 256-color background: 48;5;N
+                    result += `<span style="background-color:${this.xterm256ToRgb(parseInt(codeList[i + 2]))}">`;
+                    openSpans++;
+                    i += 2;
+                } else if (code === '38' && codeList[i + 1] === '2' && i + 4 < codeList.length) {
+                    // Truecolor foreground: 38;2;R;G;B
+                    result += `<span style="color:rgb(${codeList[i + 2]},${codeList[i + 3]},${codeList[i + 4]})">`;
+                    openSpans++;
+                    i += 4;
+                } else if (code === '48' && codeList[i + 1] === '2' && i + 4 < codeList.length) {
+                    // Truecolor background: 48;2;R;G;B
+                    result += `<span style="background-color:rgb(${codeList[i + 2]},${codeList[i + 3]},${codeList[i + 4]})">`;
+                    openSpans++;
+                    i += 4;
+                } else if (code === '39') {
+                    // Default foreground - close spans and let parent color through
+                    result += '</span>'.repeat(openSpans);
+                    openSpans = 0;
+                } else if (code === '49') {
+                    // Default background - no action needed in most cases
                 } else if (ansiSpans[code]) {
                     result += ansiSpans[code];
                     openSpans++;
@@ -2164,6 +2204,23 @@ class WMTClient {
 
             return result;
         });
+    }
+
+    // Convert xterm 256-color index to CSS rgb() string
+    xterm256ToRgb(idx) {
+        const standard = ['#000000','#aa0000','#00aa00','#aa5500','#0000aa','#aa00aa','#00aaaa','#aaaaaa'];
+        const bright = ['#555555','#ff5555','#55ff55','#ffff55','#5555ff','#ff55ff','#55ffff','#ffffff'];
+        if (idx < 8) return standard[idx];
+        if (idx < 16) return bright[idx - 8];
+        if (idx < 232) {
+            // 6x6x6 color cube (indices 16-231)
+            const ci = idx - 16;
+            const levels = [0, 95, 135, 175, 215, 255];
+            return `rgb(${levels[Math.floor(ci / 36)]},${levels[Math.floor((ci % 36) / 6)]},${levels[ci % 6]})`;
+        }
+        // Grayscale (indices 232-255)
+        const g = 8 + (idx - 232) * 10;
+        return `rgb(${g},${g},${g})`;
     }
 
     playSound(sound) {
@@ -4891,13 +4948,18 @@ class WMTClient {
         };
 
         // #N command - repeat N times
+        // Supports: #7 e, #30 {buy dagger;dismantle dagger}
         const repeatMatch = trimmed.match(/^#(\d+)\s+(.+)$/);
         if (repeatMatch) {
             const count = parseInt(repeatMatch[1]);
-            const cmd = repeatMatch[2];
+            let cmd = repeatMatch[2];
+            // Strip outer braces: #30 {buy dagger;dismantle dagger} → buy dagger;dismantle dagger
+            if (cmd.startsWith('{') && cmd.endsWith('}')) {
+                cmd = cmd.slice(1, -1);
+            }
             this.appendOutput(`Repeating ${count} times: ${cmd}`, 'system');
             for (let i = 0; i < count; i++) {
-                this.connection.sendCommand(cmd);
+                this.executeCommandString(cmd);
             }
             return;
         }
@@ -7697,12 +7759,13 @@ class WMTClient {
     parseTinTinColors(str) {
         if (!str) return str;
 
-        // VT100 color mapping: 0=black, 1=red, 2=green, 3=yellow, 4=blue, 5=magenta, 6=cyan, 7=white, 8=default, 9=default
-        // Note: 9 in TinTin++ means "light" for fg but practically means "default" for bg
-        const fgColors = { '0': 30, '1': 31, '2': 32, '3': 33, '4': 34, '5': 35, '6': 36, '7': 37, '8': 39, '9': 39 };
-        const bgColors = { '0': 40, '1': 41, '2': 42, '3': 43, '4': 44, '5': 45, '6': 46, '7': 47, '8': 49, '9': 49 };
-        // Attributes: 0=reset, 1=bold, 2=dim, 4=underline, 5=blink, 7=reverse, 8=invisible
-        const attrs = { '0': 0, '1': 1, '2': 2, '4': 4, '5': 5, '7': 7, '8': 8 };
+        // VT100 color mapping: 0=black, 1=red, 2=green, 3=yellow, 4=blue, 5=magenta, 6=cyan, 7=white, 9=default
+        // 8=skip (don't change) - handled by not emitting a code
+        const fgColors = { '0': 30, '1': 31, '2': 32, '3': 33, '4': 34, '5': 35, '6': 36, '7': 37, '9': 39 };
+        const bgColors = { '0': 40, '1': 41, '2': 42, '3': 43, '4': 44, '5': 45, '6': 46, '7': 47, '9': 49 };
+        // Attributes: 0=reset, 1=bold, 2=dim, 3=italic, 4=underline, 5=blink, 7=reverse
+        // 8=skip (don't change) - handled by not emitting a code
+        const attrs = { '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '7': 7 };
 
         return str.replace(/<([a-fA-F0-9gG]{3,8})>/g, (match, code) => {
             // Handle 3-digit VT100 codes like <179> (attr, fg, bg)
@@ -7712,9 +7775,10 @@ class WMTClient {
                 const bg = code[2];
                 const parts = [];
 
-                if (attrs[attr] !== undefined) parts.push(attrs[attr]);
-                if (fgColors[fg] !== undefined) parts.push(fgColors[fg]);
-                if (bgColors[bg] !== undefined) parts.push(bgColors[bg]);
+                // 8 = skip (keep previous), don't emit anything for that parameter
+                if (attr !== '8' && attrs[attr] !== undefined) parts.push(attrs[attr]);
+                if (fg !== '8' && fgColors[fg] !== undefined) parts.push(fgColors[fg]);
+                if (bg !== '8' && bgColors[bg] !== undefined) parts.push(bgColors[bg]);
 
                 if (parts.length > 0) {
                     return '\x1b[' + parts.join(';') + 'm';

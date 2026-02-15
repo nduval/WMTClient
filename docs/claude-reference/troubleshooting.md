@@ -166,6 +166,27 @@ if (isset($_COOKIE[SESSION_NAME])) {
 2. `session_regenerate_id()` can expose latent cookie bugs
 3. Cookie path specificity: `/api/` takes precedence over `/` for `/api/*` requests
 
+## Variable Issues
+
+### `${var}` brace-delimited variable syntax (v2.6.8+)
+
+**Problem:** `$hpmax[<088>$hpchange<269>]` is misinterpreted — the parser reads `[<088>...]` as a nested key access on `$hpmax` instead of literal display characters.
+
+**Root Cause:** The `$var[key]` nested variable regex runs before simple `$var` substitution, so any `$varname` followed by `[` gets consumed as a nested key lookup.
+
+**Fix:** Support TinTin++ `${var}` brace-delimited syntax for disambiguation. `${hpmax}` resolves the variable before the nested key parser sees it, leaving the `[...]` as literal text.
+
+Processed before `$var[key]` in `substituteVariables()`:
+```javascript
+str = str.replace(/\$\{(\w+)\}/g, (match, name) => { ... });
+```
+
+**Example:**
+```
+#show {HP: ${hpmax}[<088>$hpchange<269>]}
+```
+Produces: `HP: 1832[-160]` — `${hpmax}` resolves to `1832`, brackets are literal, `$hpchange` resolves separately.
+
 ## Script/Command Issues
 
 ### #delay commands skipping lines when run from alias (v2.6.1+)
