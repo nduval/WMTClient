@@ -265,7 +265,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
                 <div class="input-container">
                     <div class="input-wrapper">
-                        <input type="text" id="command-input" placeholder="Enter command..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus>
+                        <textarea id="command-input" rows="1" placeholder="Enter command..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus></textarea>
                         <button id="send-btn">Send</button>
                     </div>
                 </div>

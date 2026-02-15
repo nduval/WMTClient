@@ -2771,10 +2771,15 @@ function parseCommands(input) {
   for (let i = 0; i < input.length; i++) {
     const char = input[i];
     if (escaped) {
+      // TinTin++ escape: \; means literal semicolon (backslash consumed)
+      // \\ means literal backslash. Other \X keeps both characters.
+      if (char !== ';' && char !== '\\') {
+        current += '\\';  // Not a recognized escape, keep the backslash
+      }
       current += char;
       escaped = false;
     } else if (char === '\\') {
-      current += char;
+      // Don't add backslash yet - wait to see if next char is ; or \
       escaped = true;
     } else if (char === '{') {
       current += char;
@@ -2790,6 +2795,8 @@ function parseCommands(input) {
       current += char;
     }
   }
+  // Trailing backslash with no next char - keep it
+  if (escaped) current += '\\';
   if (current.trim()) commands.push(current.trim());
   return commands;
 }

@@ -952,6 +952,7 @@ body {
 .input-wrapper {
     display: flex;
     gap: 10px;
+    align-items: flex-end;
 }
 
 #command-input {
@@ -963,6 +964,12 @@ body {
     color: var(--text-color);
     font-family: 'Consolas', monospace;
     font-size: 1em;
+    resize: none;
+    overflow-y: hidden;
+    min-height: 42px;
+    max-height: 150px;
+    line-height: 1.4;
+    box-sizing: border-box;
 }
 
 #command-input:focus {

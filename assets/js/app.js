@@ -2335,7 +2335,14 @@ class WMTClient {
             input.addEventListener('keydown', (e) => this.handleInputKeydown(e));
             // Reset history search when user types/modifies input
             // This ensures up arrow starts fresh after any text change
-            input.addEventListener('input', () => this.resetHistorySearch());
+            input.addEventListener('input', () => {
+                this.resetHistorySearch();
+                this.autoResizeInput();
+            });
+            // Auto-resize after paste (deferred so value is updated)
+            input.addEventListener('paste', () => {
+                setTimeout(() => this.autoResizeInput(), 0);
+            });
         }
 
         if (sendBtn) {
@@ -2559,18 +2566,28 @@ class WMTClient {
 
         switch (e.key) {
             case 'Enter':
+                if (e.shiftKey) {
+                    // Shift+Enter inserts newline (default textarea behavior)
+                    setTimeout(() => this.autoResizeInput(), 0);
+                    return;
+                }
                 e.preventDefault();
                 this.sendCommand();
                 break;
 
             case 'ArrowUp':
-                e.preventDefault();
-                this.navigateHistory(1);  // Go to older commands (higher index)
+                // Only navigate history when content is single-line
+                if (!input.value.includes('\n')) {
+                    e.preventDefault();
+                    this.navigateHistory(1);  // Go to older commands (higher index)
+                }
                 break;
 
             case 'ArrowDown':
-                e.preventDefault();
-                this.navigateHistory(-1);  // Go to newer commands (lower index)
+                if (!input.value.includes('\n')) {
+                    e.preventDefault();
+                    this.navigateHistory(-1);  // Go to newer commands (lower index)
+                }
                 break;
 
             case 'Tab':
@@ -2580,45 +2597,52 @@ class WMTClient {
         }
     }
 
-    sendCommand() {
+    async sendCommand() {
         const input = document.getElementById('command-input');
         if (!input) return;
 
-        const command = input.value;
+        const rawInput = input.value;
 
         // Track last user input for idle disconnect (deadman switch)
         this.lastUserInput = Date.now();
 
-        // Add to history (only non-empty commands)
-        if (command.trim()) {
-            this.commandHistory.unshift(command);
-            if (this.commandHistory.length > this.maxHistorySize) {
-                this.commandHistory.pop();
+        // Parse multi-line input into individual commands
+        const commands = this.parseMultiLineInput(rawInput);
+
+        // Process each command sequentially (await async commands like #class)
+        for (const command of commands) {
+            // Add to history (only non-empty commands)
+            if (command.trim()) {
+                this.commandHistory.unshift(command);
+                if (this.commandHistory.length > this.maxHistorySize) {
+                    this.commandHistory.pop();
+                }
+            }
+
+            // Echo command if enabled (show empty as just ">")
+            if (this.preferences.echoCommands !== false) {
+                this.appendOutput('> ' + command, 'command');
+            }
+
+            // Check for client-side # commands
+            if (command.startsWith('#')) {
+                await this.executeCommandString(command);
+            } else {
+                // Substitute variables before sending (allows alias names with $vars like celstep$num)
+                let expandedCommand = this.substituteVariables(command);
+
+                // Check for speedwalk expansion (e.g., "3n2e" -> "n;n;n;e;e")
+                const speedwalkExpanded = this.expandSpeedwalk(expandedCommand);
+                if (speedwalkExpanded) {
+                    expandedCommand = speedwalkExpanded;
+                }
+
+                // Send to server (empty commands are allowed - e.g., "press enter to continue")
+                this.connection.sendCommand(expandedCommand);
             }
         }
+
         this.resetHistorySearch();
-
-        // Echo command if enabled (show empty as just ">")
-        if (this.preferences.echoCommands !== false) {
-            this.appendOutput('> ' + command, 'command');
-        }
-
-        // Check for client-side # commands
-        if (command.startsWith('#')) {
-            this.executeCommandString(command);
-        } else {
-            // Substitute variables before sending (allows alias names with $vars like celstep$num)
-            let expandedCommand = this.substituteVariables(command);
-
-            // Check for speedwalk expansion (e.g., "3n2e" -> "n;n;n;e;e")
-            const speedwalkExpanded = this.expandSpeedwalk(expandedCommand);
-            if (speedwalkExpanded) {
-                expandedCommand = speedwalkExpanded;
-            }
-
-            // Send to server (empty commands are allowed - e.g., "press enter to continue")
-            this.connection.sendCommand(expandedCommand);
-        }
 
         // Scroll to bottom and resume auto-scroll when sending a command
         this.userScrolledUp = false;
@@ -2645,6 +2669,7 @@ class WMTClient {
             // Select all text so next typing replaces it
             input.select();
         }
+        this.autoResizeInput();
     }
 
     navigateHistory(direction) {
@@ -2687,6 +2712,7 @@ class WMTClient {
 
         // Move cursor to end
         input.setSelectionRange(input.value.length, input.value.length);
+        this.autoResizeInput();
     }
 
     // Reset history search state (called when input changes or command is sent)
@@ -2695,6 +2721,64 @@ class WMTClient {
         this.historySearchIndex = -1;
         this.historySearchPrefix = '';
         this.historySearchMatches = [];
+    }
+
+    // Auto-resize textarea to fit content, capped at max-height
+    autoResizeInput() {
+        const input = document.getElementById('command-input');
+        if (!input) return;
+        input.style.height = 'auto';
+        const maxHeight = 150;
+        if (input.scrollHeight > maxHeight) {
+            input.style.height = maxHeight + 'px';
+            input.style.overflowY = 'auto';
+        } else {
+            input.style.height = input.scrollHeight + 'px';
+            input.style.overflowY = 'hidden';
+        }
+    }
+
+    // Parse multi-line pasted input into individual commands,
+    // grouping lines that belong to the same brace-delimited block
+    parseMultiLineInput(content) {
+        // No newlines → return as single command (preserves empty string for "press enter")
+        if (!content.includes('\n')) {
+            return [content];
+        }
+
+        const lines = content.split('\n');
+        const commands = [];
+        let buffer = '';
+        let braceDepth = 0;
+
+        for (const line of lines) {
+            // Count braces in this line (outside of string literals would be ideal,
+            // but TinTin++ syntax uses braces as delimiters, not strings)
+            for (const ch of line) {
+                if (ch === '{') braceDepth++;
+                else if (ch === '}') braceDepth = Math.max(0, braceDepth - 1);
+            }
+
+            if (buffer) {
+                buffer += '\n' + line;
+            } else {
+                buffer = line;
+            }
+
+            // Emit command when braces are balanced
+            if (braceDepth === 0) {
+                commands.push(buffer);
+                buffer = '';
+            }
+        }
+
+        // Flush any remaining buffer (unbalanced braces)
+        if (buffer) {
+            commands.push(buffer);
+        }
+
+        // Filter out empty-only lines from multi-line paste (but a single empty line is fine)
+        return commands.filter(cmd => cmd.trim() !== '' || commands.length === 1);
     }
 
     reconnect() {
@@ -4906,7 +4990,7 @@ class WMTClient {
     // Client-side # Command Processing (TinTin++ style)
     // ==========================================
 
-    processClientCommand(input) {
+    async processClientCommand(input) {
         const trimmed = input.trim();
 
         // Parse {arg} style arguments
@@ -4959,7 +5043,7 @@ class WMTClient {
             }
             this.appendOutput(`Repeating ${count} times: ${cmd}`, 'system');
             for (let i = 0; i < count; i++) {
-                this.executeCommandString(cmd);
+                await this.executeCommandString(cmd);
             }
             return;
         }
@@ -5024,20 +5108,20 @@ class WMTClient {
             // Class commands
             case 'class':
             case 'cls':
-                this.cmdClass(args);
+                await this.cmdClass(args);
                 break;
 
             // Script file commands
             case 'read':
-                this.cmdRead(args);
+                await this.cmdRead(args);
                 break;
             case 'write':
-                this.cmdWrite(args);
+                await this.cmdWrite(args);
                 break;
             case 'scripts':
             case 'script':
             case 'files':
-                this.cmdScripts(args);
+                await this.cmdScripts(args);
                 break;
 
             // Gag command (shortcut for gag trigger)
@@ -7523,6 +7607,46 @@ class WMTClient {
         return result;
     }
 
+    // Process TinTin++ escape sequences in a string
+    // \n → newline, \t → tab, \e → ESC, \a → bell, \r → CR, \\ → \, \; → ;, \x?? → hex
+    processTinTinEscapes(str) {
+        if (!str || !str.includes('\\')) return str;
+        let result = '';
+        for (let i = 0; i < str.length; i++) {
+            if (str[i] === '\\' && i + 1 < str.length) {
+                const next = str[i + 1];
+                switch (next) {
+                    case 'n': result += '\n'; i++; break;
+                    case 't': result += '\t'; i++; break;
+                    case 'r': result += '\r'; i++; break;
+                    case 'e': result += '\x1B'; i++; break;
+                    case 'a': result += '\x07'; i++; break;
+                    case 'b': result += '\x08'; i++; break;
+                    case '\\': result += '\\'; i++; break;
+                    case ';': result += ';'; i++; break;
+                    case 'x':
+                        if (i + 3 < str.length) {
+                            const hex = str.substring(i + 2, i + 4);
+                            const code = parseInt(hex, 16);
+                            if (!isNaN(code)) {
+                                result += String.fromCharCode(code);
+                                i += 3;
+                                break;
+                            }
+                        }
+                        result += str[i];
+                        break;
+                    default:
+                        result += str[i];
+                        break;
+                }
+            } else {
+                result += str[i];
+            }
+        }
+        return result;
+    }
+
     // Substitute $variables and @functions in a string
     // Supports: $var, $var[key], $var[key][subkey], $var[+1], $var[-1], &var[], *var[], @func{args}
     substituteVariables(str) {
@@ -7856,20 +7980,30 @@ class WMTClient {
     }
 
     // Execute a command string (may contain multiple commands separated by ;)
-    executeCommandString(cmdStr) {
+    async executeCommandString(cmdStr) {
         if (!cmdStr) return;
 
         // Substitute variables first
         cmdStr = this.substituteVariables(cmdStr);
 
-        // Split by semicolons, respecting braces
+        // Split by semicolons, respecting braces and \; escapes
         const commands = [];
         let current = '';
         let depth = 0;
+        let escaped = false;
 
         for (let i = 0; i < cmdStr.length; i++) {
             const char = cmdStr[i];
-            if (char === '{') {
+            if (escaped) {
+                // TinTin++ escape: \; means literal semicolon, \\ means literal backslash
+                if (char !== ';' && char !== '\\') {
+                    current += '\\';  // Not a recognized escape, keep the backslash
+                }
+                current += char;
+                escaped = false;
+            } else if (char === '\\' && depth === 0) {
+                escaped = true;
+            } else if (char === '{') {
                 depth++;
                 current += char;
             } else if (char === '}') {
@@ -7882,16 +8016,17 @@ class WMTClient {
                 current += char;
             }
         }
+        if (escaped) current += '\\';  // Trailing backslash
         if (current.trim()) commands.push(current.trim());
 
-        // Execute each command
-        commands.forEach(cmd => {
+        // Execute each command sequentially (await async commands like #class)
+        for (const cmd of commands) {
             if (cmd.startsWith('#')) {
-                this.processClientCommand(cmd);
+                await this.processClientCommand(cmd);
             } else {
-                this.connection.sendCommand(cmd);
+                this.connection.sendCommand(this.processTinTinEscapes(cmd));
             }
-        });
+        }
     }
 
     // #showme/#show {message} [row] - Display message and process through triggers
@@ -7917,19 +8052,24 @@ class WMTClient {
         // Join all message arguments (supports both braced and unbraced input)
         let message = messageArgs.join(' ') || rest;
         message = this.substituteVariables(message);
+        message = this.processTinTinEscapes(message);
         message = this.parseTinTinColors(message);
 
-        if (row !== null && (this.splitConfig.top > 0 || this.splitConfig.bottom > 0)) {
-            // Display in split area (local only, no trigger processing)
-            this.updateSplitRow(row, message);
-        } else {
-            // Send to server for trigger processing, then display result
-            // This allows testing triggers with #showme
-            if (this.connection && this.connection.isConnected()) {
-                this.connection.send('test_line', { line: message });
+        // Split on newlines from \n escapes - each line is a separate output
+        const lines = message.split('\n');
+        for (const line of lines) {
+            if (row !== null && (this.splitConfig.top > 0 || this.splitConfig.bottom > 0)) {
+                // Display in split area (local only, no trigger processing)
+                this.updateSplitRow(row, line);
             } else {
-                // Fallback to local display if not connected
-                this.appendOutput(message, 'system');
+                // Send to server for trigger processing, then display result
+                // This allows testing triggers with #showme
+                if (this.connection && this.connection.isConnected()) {
+                    this.connection.send('test_line', { line: line });
+                } else {
+                    // Fallback to local display if not connected
+                    this.appendOutput(line, 'system');
+                }
             }
         }
     }
@@ -7942,8 +8082,13 @@ class WMTClient {
         }
         let message = args.join(' ') || rest;
         message = this.substituteVariables(message);
+        message = this.processTinTinEscapes(message);
         message = this.parseTinTinColors(message);
-        this.appendOutput(message, 'system');
+        // Split on newlines from \n escapes - each line is a separate output
+        const lines = message.split('\n');
+        for (const line of lines) {
+            this.appendOutput(line, 'system');
+        }
     }
 
     // #bell - Play alert sound
@@ -8033,9 +8178,8 @@ class WMTClient {
 
         // Join all arguments (supports both #send {text} and #send text without braces)
         let text = args.join(' ');
-        // Handle TinTin++ escape sequences: \; becomes ;
-        text = text.replace(/\\;/g, ';');
         text = this.substituteVariables(text);
+        text = this.processTinTinEscapes(text);
         // Use raw=true to bypass semicolon splitting (ANSI codes contain semicolons)
         this.connection.sendCommand(text, true);
     }
