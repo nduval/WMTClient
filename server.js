@@ -2420,6 +2420,10 @@ wss.on('connection', (ws, req) => {
           updateSessionTickers(session, data.tickers || []);
           break;
 
+        case 'set_variables':
+          session.variables = data.variables || {};
+          break;
+
         case 'set_mip':
           session.mipEnabled = data.enabled || false;
           session.mipId = data.mipId || null;
@@ -3222,11 +3226,64 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}) {
 
 /**
  * Substitute $varname references in a string with user variable values
+ * Supports: ${var}, $var[key][subkey], $var
  */
 function substituteUserVariables(message, variables) {
-  return message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
-    return variables[varName] !== undefined ? String(variables[varName]) : match;
+  if (!message || !variables) return message;
+
+  // Handle $$ escape → literal $
+  const DOLLAR_PLACEHOLDER = '\x00DOLLAR\x00';
+  message = message.replace(/\$\$/g, DOLLAR_PLACEHOLDER);
+
+  // Handle ${var} and ${var[key][subkey]} brace-delimited
+  message = message.replace(/\$\{(\w+)((?:\[[^\]]*\])*)\}/g, (match, name, brackets) => {
+    let val = variables[name];
+    if (val === undefined) return '';
+    if (brackets) {
+      const keys = [];
+      const keyRegex = /\[([^\]]*)\]/g;
+      let keyMatch;
+      while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+        keys.push(keyMatch[1]);
+      }
+      for (const key of keys) {
+        if (val === undefined || val === null || typeof val !== 'object') return '';
+        val = val[key];
+      }
+    }
+    if (val === undefined) return '';
+    if (typeof val === 'object') return JSON.stringify(val);
+    return String(val);
   });
+
+  // Handle $var[key][subkey]...
+  message = message.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
+    let val = variables[name];
+    if (val === undefined) return match;
+    const keys = [];
+    const keyRegex = /\[([^\]]*)\]/g;
+    let keyMatch;
+    while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+      keys.push(keyMatch[1]);
+    }
+    for (const key of keys) {
+      if (val === undefined || val === null || typeof val !== 'object') return '';
+      val = val[key];
+    }
+    if (val === undefined) return '';
+    if (typeof val === 'object') return JSON.stringify(val);
+    return String(val);
+  });
+
+  // Handle simple $var
+  message = message.replace(/\$(\w+)(?!\[)/g, (match, name) => {
+    return variables[name] !== undefined ? String(variables[name]) : match;
+  });
+
+  // Restore $$ escapes → literal $
+  message = message.replace(/\x00DOLLAR\x00/g, '$');
+
+  return message;
 }
 
 // SIGTERM handler - flush logs and persist wizard sessions before shutdown
