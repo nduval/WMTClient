@@ -493,6 +493,44 @@ async function removePersistentSession(token) {
 }
 
 /**
+ * Clear all persistent sessions from PHP backend.
+ * Called after restore completes to prevent stale sessions from lingering
+ * across future restarts (guards against persist/restore race conditions).
+ */
+async function clearAllPersistentSessions() {
+  if (!ADMIN_KEY) return;
+
+  try {
+    const url = new URL(`${PHP_SESSIONS_URL}?action=clear`);
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': 2,
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve());
+      });
+
+      req.on('error', reject);
+      req.write('{}');
+      req.end();
+    });
+  } catch (e) {
+    console.error('Failed to clear persistent sessions:', e.message);
+  }
+}
+
+/**
  * Auto-login to MUD for a restored session
  * Returns true on success, false on failure
  */
@@ -693,6 +731,9 @@ async function restorePersistentSessions() {
 
   if (persistentSessions.length === 0) {
     logSessionEvent('RESTORE_NONE', { note: 'no sessions to restore' });
+    // Still clear the file — handles race where old server's persist
+    // landed after the new server's fetch returned empty
+    await clearAllPersistentSessions();
     return;
   }
 
@@ -707,6 +748,23 @@ async function restorePersistentSessions() {
       char: ps.characterName,
       server: ps.server
     });
+
+    // Skip if this user+character already has an active session
+    // (they reconnected on their own between persist and restore)
+    const userCharKey = `${ps.userId}:${ps.characterId}`;
+    const existingToken = userCharacterSessions.get(userCharKey);
+    if (existingToken && sessions.has(existingToken)) {
+      const existing = sessions.get(existingToken);
+      if (existing.mudSocket && !existing.mudSocket.destroyed) {
+        logSessionEvent('RESTORE_SKIP_ACTIVE', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName,
+          existingToken: existingToken.substring(0, 8),
+          note: 'user+char already has active MUD connection'
+        });
+        continue;
+      }
+    }
 
     // Fetch password
     const password = await fetchCharacterPassword(ps.userId, ps.characterId);
@@ -764,6 +822,11 @@ async function restorePersistentSessions() {
     // Small delay between restores to avoid overwhelming the MUD
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
+
+  // Clear ALL persistent sessions after restore completes.
+  // This prevents stale sessions from being picked up by future restarts
+  // (e.g., if persist/restore raced during the previous deploy and a record lingered).
+  await clearAllPersistentSessions();
 
   logSessionEvent('RESTORE_COMPLETE', { note: 'session restoration finished' });
 }
@@ -3168,4 +3231,11 @@ server.listen(PORT, async () => {
   setTimeout(async () => {
     await restorePersistentSessions();
   }, 2000);
+
+  // Safety net: clear persistent sessions again after 30 seconds.
+  // Guards against race where old server's SIGTERM persist lands after
+  // the new server already checked and found nothing.
+  setTimeout(async () => {
+    await clearAllPersistentSessions();
+  }, 30000);
 });
