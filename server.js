@@ -2881,7 +2881,10 @@ function parseCommands(input) {
 }
 
 function processAliases(command, aliases) {
-  for (const alias of aliases) {
+  // Sort by priority (lower fires first, default 5) — TinTin++ convention
+  const sorted = [...aliases].sort((a, b) => (a.priority || 5) - (b.priority || 5));
+
+  for (const alias of sorted) {
     if (!alias.enabled) continue;
 
     const matchType = alias.matchType || 'exact';
@@ -3030,7 +3033,14 @@ function processTriggers(line, triggers, loopTracker = null) {
   const LOOP_WINDOW_MS = 2000;  // 2 second window
   const LOOP_THRESHOLD = 50;    // Max fires in window before considered a loop
 
-  for (const trigger of triggers) {
+  // Sort triggers by priority (lower = fires first, default 5)
+  // TinTin++ processes actions in priority order, first command match wins
+  const sorted = [...triggers].sort((a, b) => (a.priority || 5) - (b.priority || 5));
+
+  // Track whether a command action has already fired (TinTin++: first match only)
+  let commandFired = false;
+
+  for (const trigger of sorted) {
     if (!trigger.enabled) continue;
 
     // Check for trigger loop if we have a tracker
@@ -3136,6 +3146,8 @@ function processTriggers(line, triggers, loopTracker = null) {
             }
             break;
           case 'command':
+            // TinTin++: only the first matching command action fires
+            if (commandFired) break;
             let cmd = action.command || '';
             if (matches.length) {
               // Always use TinTin var substitution for captured groups
@@ -3144,6 +3156,7 @@ function processTriggers(line, triggers, loopTracker = null) {
             // Use parseCommands to respect brace depth when splitting
             const cmds = parseCommands(cmd);
             result.commands.push(...cmds);
+            commandFired = true;
             break;
           case 'sound':
             result.sound = action.sound || 'beep';
