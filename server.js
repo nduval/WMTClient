@@ -1513,7 +1513,13 @@ function closeSession(session, reason) {
   clearAllTickers(session);
 
   if (session.mudSocket && !session.mudSocket.destroyed) {
-    session.mudSocket.destroy();
+    // Graceful TCP close: end() sends FIN (like TinTin++'s shutdown(SHUT_RDWR))
+    // then destroy() as safety net after 1 second
+    const sock = session.mudSocket;
+    try { sock.end(); } catch (e) {}
+    setTimeout(() => {
+      if (!sock.destroyed) sock.destroy();
+    }, 1000);
   }
   if (session.timeoutHandle) {
     clearTimeout(session.timeoutHandle);
