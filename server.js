@@ -620,7 +620,9 @@ function autoLoginToMud(session, password) {
           if (dataBuffer.includes('#K%') ||
               dataBuffer.includes('Last login:') ||
               dataBuffer.includes('Welcome back') ||
-              dataBuffer.includes('You last quit from')) {
+              dataBuffer.includes('You last quit from') ||
+              dataBuffer.includes('welcomes you back from linkdeath') ||
+              dataBuffer.includes('reconnects')) {
             logSessionEvent('AUTOLOGIN_SUCCESS', {
               token: tokenShort,
               char: charName,
@@ -677,12 +679,13 @@ function autoLoginToMud(session, password) {
               dataBuffer.includes('Bad password') ||
               dataBuffer.includes('Invalid password') ||
               dataBuffer.includes('No such player') ||
-              dataBuffer.includes('already logged in')) {
+              dataBuffer.includes('already logged in') ||
+              dataBuffer.includes('attempting to login')) {
             // Extract the specific error for logging
             let reason = 'unknown';
             if (dataBuffer.includes('Unknown user') || dataBuffer.includes('No such player')) reason = 'unknown_user';
             else if (dataBuffer.includes('Bad password') || dataBuffer.includes('Invalid password')) reason = 'bad_password';
-            else if (dataBuffer.includes('already logged in')) reason = 'already_logged_in';
+            else if (dataBuffer.includes('already logged in') || dataBuffer.includes('attempting to login')) reason = 'already_logged_in';
 
             logSessionEvent('AUTOLOGIN_REJECTED', {
               token: tokenShort,
@@ -2191,16 +2194,16 @@ wss.on('connection', (ws, req) => {
           }
 
           // Check for existing session with same user+character but different token
-          // This handles the case where user logs in from a different device/browser
+          // Instead of killing the old MUD connection, re-key the session to keep it alive
           if (userId && characterId) {
             const userCharKey = `${userId}:${characterId}`;
             const existingToken = userCharacterSessions.get(userCharKey);
 
             if (existingToken && existingToken !== token && sessions.has(existingToken)) {
               const oldSession = sessions.get(existingToken);
-              const oldMudConnected = oldSession.mudSocket && !oldSession.mudSocket.destroyed;
+              const oldMudConnected = oldSession.mudSocket && !oldSession.mudSocket.destroyed && oldSession.mudSocket.writable;
               const disconnectDuration = oldSession.disconnectedAt ? Math.round((Date.now() - oldSession.disconnectedAt) / 1000) : 0;
-              logSessionEvent('SESSION_REPLACE', {
+              logSessionEvent('SESSION_REKEY', {
                 user: userId,
                 char: characterName || characterId,
                 oldToken: existingToken.substring(0, 8),
@@ -2211,7 +2214,7 @@ wss.on('connection', (ws, req) => {
                 wizard: isWizard
               });
 
-              // Notify old client and close its MUD connection
+              // Notify old browser (if connected) that session was taken
               if (oldSession.ws && oldSession.ws.readyState === WebSocket.OPEN) {
                 try {
                   oldSession.ws.send(JSON.stringify({
@@ -2222,8 +2225,70 @@ wss.on('connection', (ws, req) => {
                 } catch (e) {}
               }
 
-              // Close the old MUD connection
-              closeSession(oldSession, 'replaced by new device');
+              // Re-key: move session from old token to new token, keeping MUD alive
+              sessions.delete(existingToken);
+              oldSession.token = token;
+              oldSession.ws = ws;
+              oldSession.disconnectedAt = null;
+              oldSession.explicitDisconnect = false;
+              oldSession.isWizard = isWizard;
+              if (oldSession.timeoutHandle) {
+                clearTimeout(oldSession.timeoutHandle);
+                oldSession.timeoutHandle = null;
+              }
+              sessions.set(token, oldSession);
+              userCharacterSessions.set(userCharKey, token);
+              session = oldSession;
+
+              logSessionEvent('SESSION_RESUME', {
+                token: token.substring(0, 8),
+                user: session.userId,
+                char: session.characterName || session.characterId,
+                mudConnected: oldMudConnected,
+                disconnectedFor: disconnectDuration,
+                wizard: session.isWizard,
+                bufferSize: session.buffer.length,
+                chatBuffer: session.chatBuffer.length,
+                note: 'rekeyed from different token'
+              });
+
+              // If Discord prefs are empty, fetch from PHP backend
+              if (Object.keys(session.discordChannelPrefs).length === 0) {
+                fetchDiscordPrefsFromPHP(session.userId, session.characterId, session);
+              }
+
+              ws.send(JSON.stringify({
+                type: 'session_resumed',
+                mudConnected: oldMudConnected
+              }));
+
+              // Clear buffer
+              session.buffer = [];
+              session.bufferOverflow = false;
+
+              // Send current MIP stats if available
+              if (session.mipStats.hp.max > 0) {
+                ws.send(JSON.stringify({
+                  type: 'mip_stats',
+                  stats: session.mipStats
+                }));
+              }
+
+              // Replay ChatMon buffer
+              if (session.chatBuffer.length > 0) {
+                console.log(`Replaying ${session.chatBuffer.length} ChatMon messages (rekey)`);
+                for (const msg of session.chatBuffer) {
+                  try {
+                    ws.send(JSON.stringify(msg));
+                  } catch (e) {
+                    console.error('Error replaying chat buffer:', e.message);
+                    break;
+                  }
+                }
+              }
+
+              authenticated = true;
+              return;  // Skip normal session creation/resume
             }
 
             // Register this token for this user+character
@@ -3286,30 +3351,37 @@ function substituteUserVariables(message, variables) {
   return message;
 }
 
-// SIGTERM handler - flush logs and persist wizard sessions before shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, flushing logs and persisting wizard sessions...');
+// Graceful shutdown: persist sessions, then close all MUD connections cleanly
+async function gracefulShutdown(signal) {
+  console.log(`${signal} received, persisting wizard sessions and closing connections...`);
   await flushLogsToIONOS();
   await persistWizardSessions();
 
-  // Give a moment for persistence to complete
+  // Cleanly close all MUD connections so the MUD knows they're gone
+  // This prevents "Someone is attempting to login" on restore
+  let closedCount = 0;
+  for (const [token, session] of sessions) {
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      try {
+        session.mudSocket.end();  // Send TCP FIN (clean close)
+        closedCount++;
+      } catch (e) {}
+    }
+  }
+  console.log(`Closed ${closedCount} MUD connections`);
+
+  // Give TCP FINs time to propagate before exiting
   setTimeout(() => {
     console.log('Shutting down...');
     process.exit(0);
-  }, 1000);
-});
+  }, 2000);
+}
+
+// SIGTERM handler - Render sends this before killing the process
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Also handle SIGINT (Ctrl+C) for local development
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, flushing logs and persisting wizard sessions...');
-  await flushLogsToIONOS();
-  await persistWizardSessions();
-
-  setTimeout(() => {
-    console.log('Shutting down...');
-    process.exit(0);
-  }, 1000);
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
@@ -3318,10 +3390,11 @@ server.listen(PORT, async () => {
   setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
 
   // Restore persistent sessions after startup
-  // Small delay to ensure server is fully ready
+  // 5 second delay: ensures server is ready AND gives old MUD connections
+  // time to fully close (old instance sends TCP FIN during SIGTERM)
   setTimeout(async () => {
     await restorePersistentSessions();
-  }, 2000);
+  }, 5000);
 
   // Safety net: clear persistent sessions again after 30 seconds.
   // Guards against race where old server's SIGTERM persist lands after
