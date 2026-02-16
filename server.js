@@ -1353,8 +1353,10 @@ function startTicker(session, ticker) {
   session.tickerIntervals[ticker.id] = setInterval(() => {
     // Only execute if MUD is connected
     if (session.mudSocket && !session.mudSocket.destroyed) {
+      // TinTin++: substitute variables at fire time (not creation time)
+      let cmd = substituteUserVariables(ticker.command, session.variables || {});
       // Expand aliases before sending
-      const expanded = expandCommandWithAliases(ticker.command, session.aliases || []);
+      const expanded = expandCommandWithAliases(cmd, session.aliases || []);
       expanded.forEach(cmd => {
         // Handle #N repeat pattern
         const repeatMatch = cmd.match(/^#(\d+)\s+(.+)$/);
@@ -1849,7 +1851,7 @@ function processLine(session, line) {
       const mipStart = line.lastIndexOf('#K%');
       const beforeMip = line.substring(0, mipStart);
       if (beforeMip.trim()) {
-        const processed = processTriggers(beforeMip, session.triggers);
+        const processed = processTriggers(beforeMip, session.triggers, null, session.variables || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -1880,7 +1882,7 @@ function processLine(session, line) {
       displayText = displayText.replace(/^\]\s*/, '');
 
       if (displayText) {
-        const processed = processTriggers(displayText, session.triggers);
+        const processed = processTriggers(displayText, session.triggers, null, session.variables || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -1909,7 +1911,7 @@ function processLine(session, line) {
       const displayText = beforeMip + afterMip;
 
       if (displayText.trim()) {
-        const processed = processTriggers(displayText, session.triggers);
+        const processed = processTriggers(displayText, session.triggers, null, session.variables || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -1969,7 +1971,7 @@ function processLine(session, line) {
   }
 
   // Process triggers with loop detection
-  const processed = processTriggers(line, session.triggers, session.loopTracker);
+  const processed = processTriggers(line, session.triggers, session.loopTracker, session.variables || {});
 
   // Handle loop detection - notify client and disable the trigger
   if (processed.loopDetected) {
@@ -2500,7 +2502,7 @@ wss.on('connection', (ws, req) => {
           // Process text through triggers as if it came from MUD
           // Used by #showme to test trigger patterns
           if (data.line) {
-            const processed = processTriggers(data.line, session.triggers);
+            const processed = processTriggers(data.line, session.triggers, null, session.variables || {});
 
             // Send to client (even if gagged, for testing)
             sendToClient(session, {
@@ -3019,7 +3021,7 @@ function isTinTinPattern(pattern) {
   return false;
 }
 
-function processTriggers(line, triggers, loopTracker = null) {
+function processTriggers(line, triggers, loopTracker = null, variables = {}) {
   const result = {
     line: line,
     gag: false,
@@ -3162,11 +3164,14 @@ function processTriggers(line, triggers, loopTracker = null) {
             result.sound = action.sound || 'beep';
             break;
           case 'substitute':
-            // Replace matched text with replacement string
+            // TinTin++ two-pass substitution:
+            // Pass 1 (SUB_ARG): replace %1-%99 with captured groups
+            // Pass 2 (SUB_VAR): substitute $variables
             let replacement = action.replacement || '';
             if (matches.length) {
               replacement = replaceTinTinVars(replacement, matches);
             }
+            replacement = substituteUserVariables(replacement, variables);
             // Find and replace the matched portion (case-sensitive)
             if (useTinTin) {
               const regexPattern = tinTinToRegex(pattern);
