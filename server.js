@@ -1582,12 +1582,23 @@ function parseMipMessage(session, msgType, msgData) {
     case 'BAB': // Tells
       {
         const parts = msgData.split('~');
+
+        // Filter out numeric-only BAB data (e.g. ~0~0) — MIP tell counter, not a real tell
+        if (parts[0] === '' && parts.length >= 3 && /^\d+$/.test(parts[1]) && parts.slice(2).every(p => /^\d*$/.test(p))) {
+          break;
+        }
+
         let formatted;
         let channel = 'tell';
         let rawText = '';
+        let isSoulEcho = false;
         if (parts[0] === '' && parts.length >= 3) {
           const sender = parts[1];
           const message = parts.slice(2).join('~');
+          // [you]: lines are soul/emote echoes — show in chatmon but skip Discord
+          if (sender.toLowerCase() === 'you') {
+            isSoulEcho = true;
+          }
           formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
           rawText = `[${sender}]: ${stripAnsi(message)}`;
         } else if (parts[0] === 'x' && parts.length >= 3) {
@@ -1599,27 +1610,32 @@ function parseMipMessage(session, msgType, msgData) {
           formatted = convertMipColors(msgData);
           rawText = stripAnsi(msgData);
         }
-        sendToClient(session, {
-          type: 'mip_chat',
-          chatType: 'tell',
-          channel: channel,
-          raw: msgData,
-          rawText: rawText,
-          message: formatted
-        });
 
-        // Server-side Discord notification (works even when browser is closed)
-        if (rawText) {
-          const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
-          if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
-            logSessionEvent('DISCORD_SEND', {
-              token: session.token.substring(0, 8),
-              user: session.userId,
-              char: session.characterName,
-              channel: 'tell',
-              messagePreview: rawText.substring(0, 50)
-            });
-            sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
+        // Skip sending soul echoes ([you]:) to chatmon entirely —
+        // the [To recipient]: line already covers it
+        if (!isSoulEcho) {
+          sendToClient(session, {
+            type: 'mip_chat',
+            chatType: 'tell',
+            channel: channel,
+            raw: msgData,
+            rawText: rawText,
+            message: formatted
+          });
+
+          // Server-side Discord notification (works even when browser is closed)
+          if (rawText) {
+            const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
+            if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+              logSessionEvent('DISCORD_SEND', {
+                token: session.token.substring(0, 8),
+                user: session.userId,
+                char: session.characterName,
+                channel: 'tell',
+                messagePreview: rawText.substring(0, 50)
+              });
+              sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
+            }
           }
         }
       }
