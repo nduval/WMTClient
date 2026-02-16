@@ -2868,12 +2868,20 @@ function processAliases(command, aliases) {
         replacement = replacement.replace(/\$\d+/g, '');
       } else {
         const args = matches.slice(1).join(' ');
-        replacement = replacement.replace(/\$\*/g, args);
-        const argParts = args.split(/\s+/).filter(p => p);
-        for (let i = 0; i < argParts.length; i++) {
-          replacement = replacement.replace(new RegExp('\\$' + (i + 1), 'g'), argParts[i]);
+        // If replacement has no $* or $N placeholders and there are args,
+        // append them automatically (TinTin++ behavior: #alias {info} {priest}
+        // with "info general" sends "priest general")
+        const hasPlaceholders = /\$[\d*]/.test(replacement);
+        if (!hasPlaceholders && args) {
+          replacement = replacement + ' ' + args;
+        } else {
+          replacement = replacement.replace(/\$\*/g, args);
+          const argParts = args.split(/\s+/).filter(p => p);
+          for (let i = 0; i < argParts.length; i++) {
+            replacement = replacement.replace(new RegExp('\\$' + (i + 1), 'g'), argParts[i]);
+          }
+          replacement = replacement.replace(/\$\d+/g, '');
         }
-        replacement = replacement.replace(/\$\d+/g, '');
       }
 
       return replacement.trim();
