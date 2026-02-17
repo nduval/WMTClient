@@ -2790,12 +2790,17 @@ function tinTinToRegex(pattern) {
           }
         }
 
-        // All wildcards use GREEDY matching (no ? after quantifier)
+        // TinTin++: wildcards are non-greedy when more pattern follows,
+        // greedy only at end of pattern (matches tintin_regexp in regex.c)
+        const advanceBy = nonCapturing ? 3 : 2;
+        const atEnd = (i + advanceBy >= pattern.length);
+        const lazy = atEnd ? '' : '?';
+
         if (next === '*') {
-          result += groupStart + '.*)';
+          result += groupStart + '.*' + lazy + ')';
           i += 2;
         } else if (next === '+') {
-          result += groupStart + '.+)';
+          result += groupStart + '.+' + lazy + ')';
           i += 2;
         } else if (next === '?') {
           result += groupStart + '.?)';
@@ -2804,44 +2809,44 @@ function tinTinToRegex(pattern) {
           result += groupStart + '.)';
           i += 2;
         } else if (next === 'd') {
-          result += groupStart + '[0-9]*)';
+          result += groupStart + '[0-9]*' + lazy + ')';
           i += 2;
         } else if (next === 'D') {
-          result += groupStart + '[^0-9]*)';
+          result += groupStart + '[^0-9]*' + lazy + ')';
           i += 2;
         } else if (next === 'w') {
-          result += groupStart + '[A-Za-z0-9_]*)';
+          result += groupStart + '[A-Za-z0-9_]*' + lazy + ')';
           i += 2;
         } else if (next === 'W') {
-          result += groupStart + '[^A-Za-z0-9_]*)';
+          result += groupStart + '[^A-Za-z0-9_]*' + lazy + ')';
           i += 2;
         } else if (next === 's') {
-          result += groupStart + '\\s*)';
+          result += groupStart + '\\s*' + lazy + ')';
           i += 2;
         } else if (next === 'S') {
-          result += groupStart + '\\S*)';
+          result += groupStart + '\\S*' + lazy + ')';
           i += 2;
         } else if (next === 'a') {
-          result += groupStart + '[\\s\\S]*)';
+          result += groupStart + '[\\s\\S]*' + lazy + ')';
           i += 2;
         } else if (next === 'A') {
-          result += groupStart + '[\\r\\n]*)';
+          result += groupStart + '[\\r\\n]*' + lazy + ')';
           i += 2;
         } else if (next === 'c') {
           // ANSI color codes - always non-capturing
           result += '(?:\\x1b\\[[0-9;]*m)*';
           i += 2;
         } else if (next === 'p') {
-          result += groupStart + '[\\x20-\\x7E]*)';
+          result += groupStart + '[\\x20-\\x7E]*' + lazy + ')';
           i += 2;
         } else if (next === 'P') {
-          result += groupStart + '[^\\x20-\\x7E]*)';
+          result += groupStart + '[^\\x20-\\x7E]*' + lazy + ')';
           i += 2;
         } else if (next === 'u') {
-          result += groupStart + '.*)';
+          result += groupStart + '.*' + lazy + ')';
           i += 2;
         } else if (next === 'U') {
-          result += groupStart + '[\\x00-\\x7F]*)';
+          result += groupStart + '[\\x00-\\x7F]*' + lazy + ')';
           i += 2;
         } else if (next === 'i' || next === 'I') {
           // Case sensitivity modifiers - consumed but not converted
@@ -2853,8 +2858,8 @@ function tinTinToRegex(pattern) {
           while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
             j++;
           }
-          // Use greedy match
-          result += '(.*)';
+          const numAtEnd = (j >= pattern.length);
+          result += '(.*' + (numAtEnd ? '' : '?') + ')';
           i = j;
         } else {
           // Unknown % sequence - treat as literal
