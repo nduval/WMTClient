@@ -160,10 +160,28 @@ Reference: https://tintin.mudhalla.net/manual/if.php
 #if {"$class" == "{mage|wizard|sorcerer}"} {#show You cast spells!}
 ```
 
-**Chained Conditions:**
+**Positional Else (3-arg form):**
+```
+#if {"$enemy" == "none"} {#var combat off} {#var combat on}
+```
+The third brace group is an implicit else — runs when the condition is false.
+
+**#elseif / #else Chains:**
+```
+#if {$hp < 100} {#show Critical!} #elseif {$hp < 500} {#show Low} #else {#show OK}
+```
+
+**Nested #if:**
 ```
 #if {$hp < 100} {#show Critical!} {#if {$hp < 500} {#show Low} {#show OK}}
 ```
+
+**Implementation Notes:**
+- `parseIfChain()` in app.js parses all forms (positional else, #elseif, #else)
+- Implicit else detected when `{` appears in `between` state without `#else` keyword
+- Else conditions use `'1'` internally (not `'true'` — mathexp can't tokenize bare words)
+- `evaluateCondition()` calls `substituteVariables()` then `mathexp()` on the condition
+- mathexp returns `{val, str, type}` — truthy check: strings by length, numbers by non-zero
 
 ### #foreach Command (v2.6.3+)
 

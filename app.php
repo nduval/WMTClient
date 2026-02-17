@@ -630,6 +630,11 @@ setcookie($tokenCookieName, $wsToken, [
                         <label>Command to Execute</label>
                         <input type="text" id="mip-cond-command" placeholder="e.g., drink healing potion">
                     </div>
+                    <div class="form-group" style="margin-top:5px">
+                        <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9em">
+                            <input type="checkbox" id="mip-cond-combat-only"> In combat only
+                        </label>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -657,6 +662,23 @@ setcookie($tokenCookieName, $wsToken, [
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="wmtClient.closeChannelSettingsModal()">Close</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveChannelSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Editor Modal -->
+    <div class="modal-overlay" id="script-editor-modal">
+        <div class="modal" style="width:90%;max-width:700px">
+            <div class="modal-header">
+                <h3 id="script-editor-title">Edit Script</h3>
+                <button class="panel-close" onclick="wmtClient.closeScriptEditor()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="script-editor-content" style="width:100%;height:400px;font-family:monospace;font-size:13px;tab-size:4;white-space:pre;resize:vertical;padding:10px;box-sizing:border-box"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="wmtClient.closeScriptEditor()">Cancel</button>
+                <button class="btn btn-primary" onclick="wmtClient.saveScriptFromEditor()">Save</button>
             </div>
         </div>
     </div>

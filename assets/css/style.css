@@ -1752,7 +1752,7 @@ body {
 
 /* Script Files List */
 .script-files-list {
-    max-height: 200px;
+    max-height: 300px;
     overflow-y: auto;
     border: 1px solid var(--border-color);
     border-radius: 6px;
@@ -1785,6 +1785,63 @@ body {
     padding: 4px 8px;
     font-size: 0.8em;
     min-width: 28px;
+}
+
+.script-folder-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    color: #8cf;
+}
+
+.script-folder-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.script-folder-item .folder-icon {
+    font-size: 0.85em;
+}
+
+.script-folder-item .folder-name {
+    flex: 1;
+    font-family: monospace;
+}
+
+.script-folder-item .btn {
+    padding: 2px 6px;
+    font-size: 0.75em;
+    min-width: 22px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.script-folder-item:hover .btn {
+    opacity: 1;
+}
+
+.script-folder-contents {
+    padding-left: 16px;
+}
+
+.script-folder-contents.collapsed {
+    display: none;
+}
+
+.script-files-list .folder-actions-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.script-files-list .folder-actions-bar .btn {
+    font-size: 0.8em;
+    padding: 4px 10px;
 }
 
 .btn-danger {

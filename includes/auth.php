@@ -351,6 +351,16 @@ function initSession(): void {
     if (session_status() === PHP_SESSION_NONE) {
         session_name(SESSION_NAME);
 
+        // Use a custom session save path inside our data directory.
+        // On shared hosting (IONOS), system cron cleans /tmp sessions using the
+        // global gc_maxlifetime (typically 24 min), ignoring per-app overrides.
+        // Our own directory is immune to that cleanup.
+        $sessionDir = DATA_PATH . '/sessions';
+        if (!is_dir($sessionDir)) {
+            @mkdir($sessionDir, 0700, true);
+        }
+        session_save_path($sessionDir);
+
         // Match server-side session lifetime to cookie lifetime
         // Default gc_maxlifetime is 24 minutes — far too short for a MUD client
         ini_set('session.gc_maxlifetime', SESSION_LIFETIME);

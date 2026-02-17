@@ -2,7 +2,7 @@
 /**
  * WMT Client - Persistent Sessions API
  *
- * Server-to-server endpoint for storing/retrieving wizard sessions
+ * Server-to-server endpoint for storing/retrieving active MUD sessions
  * that should survive Render server restarts.
  *
  * All actions require admin key authentication.
@@ -54,6 +54,8 @@ switch ($action) {
                 'characterName' => $session['characterName'] ?? '',
                 'server' => $session['server'] ?? '3k',
                 'token' => $session['token'],
+                'isWizard' => $session['isWizard'] ?? false,
+                'persistedAt' => $session['persistedAt'] ?? (time() * 1000),
                 'savedAt' => date('c')
             ];
         }
@@ -76,8 +78,8 @@ switch ($action) {
 
         $sessions = loadJsonFile($sessionsFile);
 
-        // Filter out sessions older than 24 hours
-        $cutoff = strtotime('-24 hours');
+        // Filter out sessions older than 5 minutes (stale sessions from previous deploys)
+        $cutoff = strtotime('-5 minutes');
         $validSessions = array_filter($sessions, function($s) use ($cutoff) {
             $savedAt = strtotime($s['savedAt'] ?? '1970-01-01');
             return $savedAt >= $cutoff;

@@ -7,7 +7,7 @@ Common issues and their solutions for the WMT client.
 ### MIP data showing as raw text
 1. Verify the MIP filter is the FIRST check in the data handler (after empty line check)
 2. Use regex `/%\d{5}\d{3}[A-Z]{3}/` - no anchors, catches pattern anywhere in line
-3. Check Render version to ensure latest code is deployed
+3. Check Lightsail version to ensure latest code is deployed (`https://ws.wemudtogether.com/health`)
 
 ### HP/SP bars not updating
 1. Check that client name starts with "Portal" in the 3klient registration

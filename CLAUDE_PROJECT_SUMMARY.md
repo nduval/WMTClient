@@ -13,7 +13,7 @@
 - **User requested PHP-based web app** with multi-user login
 - **MUD requires persistent TCP connection** - browsers can't do raw TCP, so we need a WebSocket proxy
 - **IONOS shared hosting** doesn't allow background processes or non-standard ports (8080 blocked)
-- **Solution:** Split architecture - web UI on IONOS, WebSocket proxy on Render.com (free)
+- **Solution:** Split architecture - web UI on IONOS, WebSocket proxy on AWS Lightsail
 
 ### Components
 
@@ -24,11 +24,11 @@
    - JSON file storage for user data (triggers, aliases, preferences)
    - Session-based auth with proper cookie path handling for subdirectory
 
-2. **WebSocket Proxy (Render.com - wmt-proxy.onrender.com)**
-   - Node.js WebSocket server
+2. **WebSocket Proxy (AWS Lightsail - ws.wemudtogether.com)**
+   - Node.js WebSocket server (server.js) + persistent TCP relay (bridge.js)
    - Proxies browser WebSocket to MUD TCP connection (3k.org:3000)
    - Handles triggers and aliases server-side
-   - GitHub repo: https://github.com/nduval/WMTClient
+   - Zero-downtime deploys: bridge.js holds MUD connections across server.js restarts
 
 ---
 
@@ -39,7 +39,7 @@
 ├── index.php              # Login/register page
 ├── app.php                # Main MUD client interface
 ├── config/
-│   └── config.php         # App config (WS_CLIENT_URL points to Render)
+│   └── config.php         # App config (WS_CLIENT_URL points to Lightsail)
 ├── includes/
 │   ├── auth.php           # Authentication (initSession with proper cookie path)
 │   ├── functions.php      # Helpers (requireAuth also has session fix)
@@ -58,9 +58,10 @@
 └── data/users/            # User data stored as JSON
 ```
 
-### Render.com WebSocket Proxy
+### Lightsail WebSocket Proxy (`/opt/wmt/` on 3.14.128.194)
 ```
-├── server.js              # Node.js WebSocket-to-TCP proxy
+├── server.js              # Node.js WebSocket proxy + business logic
+├── bridge.js              # Persistent TCP relay (holds MUD connections)
 └── package.json           # Dependencies (ws library)
 ```
 
@@ -88,9 +89,9 @@
 ### 3. Port 8080 Blocked on IONOS
 **Problem:** WebSocket server couldn't run on IONOS because port 8080 is blocked.
 
-**Solution:** Deployed WebSocket proxy to Render.com (free tier), updated `config.php`:
+**Solution:** Deployed WebSocket proxy to AWS Lightsail, updated `config.php`:
 ```php
-define('WS_CLIENT_URL', 'wss://wmt-proxy.onrender.com');
+define('WS_CLIENT_URL', 'wss://ws.wemudtogether.com');
 ```
 
 ---
@@ -120,20 +121,20 @@ define('WS_CLIENT_URL', 'wss://wmt-proxy.onrender.com');
 
 ### Using deploy.py (Recommended)
 
-The `deploy.py` script handles both Render and IONOS deployments:
+The `deploy.py` script handles both Lightsail and IONOS deployments:
 
 ```bash
-# Deploy to both Render and IONOS
+# Deploy to both Lightsail and IONOS
 python deploy.py all
 
-# Deploy only to Render (WebSocket proxy)
-python deploy.py render
+# Deploy only to Lightsail (WebSocket proxy)
+python deploy.py lightsail
 
 # Deploy only to IONOS (PHP client)
 python deploy.py ionos
 
-# Deploy with custom commit message
-python deploy.py render -m "Fix trigger handling"
+# Deploy bridge.js (rare — breaks MUD connections)
+python deploy.py bridge
 
 # List what files would be deployed
 python deploy.py --list
@@ -142,15 +143,6 @@ python deploy.py --list
 **Requirements:** `pip install paramiko` for IONOS deployment
 
 ### Manual Deployment
-
-**Render (WebSocket proxy):**
-```bash
-cd D:\GitHub\client
-git add server.js package.json
-git commit -m "Your message"
-git push origin main
-```
-Render auto-deploys from main branch.
 
 **IONOS (PHP client):**
 Uses SFTP with credentials from `sftp.txt`. The deploy.py script handles this automatically.
@@ -162,7 +154,7 @@ Uses SFTP with credentials from `sftp.txt`. The deploy.py script handles this au
 ### Working
 - User registration and login
 - Session persistence across pages
-- WebSocket connection to Render proxy
+- WebSocket connection to Lightsail proxy
 - MUD connection to 3k.org:3000
 - Basic MUD output display
 - Reconnect button
@@ -179,7 +171,7 @@ Uses SFTP with credentials from `sftp.txt`. The deploy.py script handles this au
 - None currently known
 
 ### Hosting Notes
-- **Render is on PAID tier** - no cold starts, always responsive
+- **Lightsail** - always-on $5/month instance, zero-downtime deploys via bridge architecture
 
 ---
 
@@ -196,9 +188,9 @@ stdin, stdout, stderr = client.exec_command('ls -la ~/client/')
 print(stdout.read().decode())
 ```
 
-### Test Render Health
+### Test Lightsail Health
 ```
-curl https://wmt-proxy.onrender.com/health
+curl https://ws.wemudtogether.com/health
 ```
 
 ---
@@ -248,19 +240,17 @@ curl https://wmt-proxy.onrender.com/health
 - **Fixed:** Garbled characters (diamond boxes with question marks) on MUD output
 - **Root cause:** MUD uses telnet protocol which sends IAC (Interpret As Command) control sequences for negotiation - these binary bytes were being displayed as text
 - **Solution:** Added `stripTelnetSequences()` function to filter out telnet commands (WILL/WONT/DO/DONT, subnegotiations, etc.) before converting to text
-- **Deployed:** Pushed to GitHub, Render auto-deployed
+- **Deployed:** Pushed to GitHub
 
 ### 2026-01-10 - Deployment Workflow
 - Created `deploy.py` script for automated deployments
-- Set up git repo with GitHub token authentication
-- Can now deploy to Render (git push) and IONOS (SFTP) with single command
-- Usage: `python deploy.py all` or `python deploy.py render` or `python deploy.py ionos`
+- Can now deploy to Lightsail (SSH) and IONOS (SFTP) with single command
+- Usage: `python deploy.py all` or `python deploy.py lightsail` or `python deploy.py ionos`
 
 ### 2026-01-10 - Reconnect Bug Fix
 - **Fixed:** Reconnect button hanging issue
 - **Root cause:** When reconnecting, server.js created new MUD socket but didn't attach event handlers (data, close, error)
 - **Solution:** Refactored `connectToMud()` function that handles both initial connection and reconnects with all handlers properly attached
-- **Deployed:** Pushed to GitHub, Render auto-deployed
 
 ### 2026-01-10 - Initial Build Session
 - Created complete WMT Client application from scratch
@@ -268,6 +258,6 @@ curl https://wmt-proxy.onrender.com/health
 - Built JavaScript frontend with WebSocket connection handling
 - Solved session cookie path issue for IONOS subdirectory hosting
 - Discovered IONOS blocks port 8080 - created Node.js WebSocket proxy
-- Deployed WebSocket proxy to Render.com (paid tier - always on)
+- Deployed WebSocket proxy to AWS Lightsail
 - Successfully connected to 3k.org MUD through the proxy
 - **Current state:** Login works, MUD connection works, basic UI functional

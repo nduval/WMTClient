@@ -97,11 +97,24 @@ class MudConnection {
                 const data = JSON.parse(event.data);
 
                 // Handle auth responses
+                if (data.type === 'session_init') {
+                    // Bridge mode: server needs triggers before deciding session type.
+                    // Authenticate and send triggers, but don't fire onConnect/onSessionResumed yet.
+                    // The real session_new or session_resumed will follow after bridge responds.
+                    this.authenticated = true;
+                    this.onStatusChange('connected');
+                    this.startKeepAlive();
+                    // Trigger sending of triggers/aliases by calling onSessionResumed path
+                    // with a flag that prevents side effects
+                    if (this.onSessionInit) this.onSessionInit();
+                    return;
+                }
+
                 if (data.type === 'session_new') {
                     this.authenticated = true;
                     this.sessionResumed = false;
                     this.onStatusChange('connected');
-                    this.onConnect();
+                    this.onConnect(data.bridgeMode || false);
                     this.startKeepAlive();
                     return;
                 }
@@ -175,6 +188,10 @@ class MudConnection {
 
     setTickers(tickers) {
         return this.send('set_tickers', { tickers });
+    }
+
+    setVariables(variables) {
+        return this.send('set_variables', { variables });
     }
 
     setMip(enabled, mipId, debug = false) {

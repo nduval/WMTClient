@@ -92,15 +92,12 @@ If IONOS kills the WebSocket process, you can host the WebSocket server on a fre
    define('WS_CLIENT_URL', 'wss://your-project.glitch.me');
    ```
 
-### Option B: Render.com (Free Tier)
+### Option B: AWS Lightsail
 
-1. Create account at render.com
-2. Deploy the websocket folder as a web service
-3. Update the config with the Render URL
-
-### Option C: Railway.app (Free Tier)
-
-Similar process to Render.
+1. Create a Lightsail instance (Ubuntu, $5/month)
+2. Deploy server.js and bridge.js
+3. Set up nginx + certbot for SSL
+4. Update `config/config.php` with the WebSocket URL
 
 ## Usage
 

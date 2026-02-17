@@ -2,7 +2,7 @@
 
 ## IMPORTANT: Always Deploy
 
-**After making ANY code changes, run `python deploy.py all` immediately.** Do not wait for the user to ask. This deploys to both IONOS (PHP/JS/CSS) and Render (WebSocket proxy). It's safe to run even if only one side changed.
+**After making ANY code changes, run `python deploy.py all` immediately.** Do not wait for the user to ask. This deploys to both IONOS (PHP/JS/CSS) and Lightsail (WebSocket proxy). It's safe to run even if only one side changed.
 
 ---
 
@@ -77,20 +77,21 @@ python .claude/sync.py pull     # Pull remote changes via git
 - **Command**: `python deploy.py ionos`
 - Deploys PHP, JS, CSS via SFTP
 
-### Render (WebSocket Proxy)
-- **Command**: `python deploy.py render`
-- Deploys `server.js` via GitHub push
-- **Build Filter**: Render only rebuilds when `server.js` or `package.json` change (configured in Render dashboard "Included Paths")
+### Lightsail (WebSocket Proxy)
+- **Command**: `python deploy.py lightsail`
+- Deploys `server.js` via SSH to AWS Lightsail
+- **Bridge deploy** (rare): `python deploy.py bridge` — restarts bridge.js (breaks MUD connections)
 
 ### Deploy Both
 - **Command**: `python deploy.py all` (default, always safe to run)
+- Deploys server.js to Lightsail + PHP/JS/CSS to IONOS
 
 ---
 
 ## Architecture Overview
 
 - **Frontend**: PHP on IONOS (index.php, app.php, etc.)
-- **WebSocket Proxy**: Node.js on Render (server.js) - connects browser to MUD
+- **WebSocket Proxy**: Node.js on AWS Lightsail (server.js + bridge.js) - connects browser to MUD
 - **MUD Servers**:
   - 3Kingdoms: 3k.org:3000 (default)
   - 3Scapes: 3scapes.org:3200
@@ -110,7 +111,7 @@ See `docs/claude-reference/architecture.md` for detailed documentation.
 |------|---------|
 | `assets/js/app.js` | Main client JavaScript |
 | `assets/css/style.css` | All styling |
-| `glitch/server.js` | WebSocket proxy (deployed to Render) |
+| `glitch/server.js` | WebSocket proxy (deployed to Lightsail) |
 | `includes/` | PHP helpers (auth, functions, settings) |
 | `api/` | PHP API endpoints |
 | `config/config.php` | App configuration |

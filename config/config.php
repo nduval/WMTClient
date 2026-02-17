@@ -15,10 +15,9 @@ define('MUD_PORT', 3000);
 define('WS_HOST', '0.0.0.0');
 define('WS_PORT', 8080);
 
-// WebSocket URL for client connection (change this based on your hosting setup)
-// For same server: 'ws://client.wemudtogether.com:8080'
-// For external server: 'wss://your-websocket-server.glitch.me' (example)
-define('WS_CLIENT_URL', 'wss://wmt-proxy.onrender.com');
+// WebSocket URL for client connection
+define('WS_CLIENT_URL', 'wss://ws.wemudtogether.com');  // Lightsail
+
 
 // Paths
 define('BASE_PATH', dirname(__DIR__));
@@ -33,11 +32,11 @@ define('SESSION_LIFETIME', 86400 * 7); // 7 days
 define('CSRF_TOKEN_NAME', 'csrf_token');
 define('PASSWORD_MIN_LENGTH', 6);
 
-// Render proxy admin key (for broadcast feature)
+// Admin key for WebSocket proxy (broadcast, session management)
 // Load from separate file to keep it out of git
-$renderAdminKeyFile = __DIR__ . '/render_admin_key.php';
-if (file_exists($renderAdminKeyFile)) {
-    require_once $renderAdminKeyFile;
+$adminKeyFile = __DIR__ . '/render_admin_key.php';
+if (file_exists($adminKeyFile)) {
+    require_once $adminKeyFile;
 } else {
     define('RENDER_ADMIN_KEY', null);
 }

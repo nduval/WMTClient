@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 WMT Client Deployment Script
-Deploys to Render (GitHub) and/or IONOS (SFTP)
+Deploys to Lightsail (SSH) and/or IONOS (SFTP)
 """
 
 import os
@@ -47,11 +47,6 @@ def load_credentials():
     """Load credentials from files"""
     creds = {}
 
-    # GitHub token
-    token_file = BASE_DIR / 'github_token.txt'
-    if token_file.exists():
-        creds['github_token'] = token_file.read_text().strip()
-
     # SFTP credentials
     sftp_file = BASE_DIR / 'sftp.txt'
     if sftp_file.exists():
@@ -69,50 +64,68 @@ def load_credentials():
 
     return creds
 
-def deploy_render(message=None):
-    """Deploy to Render via GitHub push"""
-    print("\n=== Deploying to Render (GitHub) ===")
+def deploy_lightsail(target='server'):
+    """Deploy to Lightsail via SSH"""
+    ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
+    host = '3.14.128.194'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no ubuntu@{host}'
 
-    os.chdir(BASE_DIR)
-
-    # Copy latest server.js from glitch/ to root if it exists
-    glitch_server = BASE_DIR / 'glitch' / 'server.js'
-    root_server = BASE_DIR / 'server.js'
-    if glitch_server.exists():
-        print("Copying glitch/server.js to root...")
-        root_server.write_text(glitch_server.read_text())
-
-    # Stage files first
-    subprocess.run(['git', 'add', 'server.js', 'package.json'], check=True)
-
-    # Check for staged changes
-    result = subprocess.run(['git', 'diff', '--cached', '--quiet', 'server.js', 'package.json'],
-                          capture_output=True)
-
-    if result.returncode == 0:
-        print("No changes to deploy to Render.")
+    if target == 'bridge':
+        print("\n=== Deploying bridge.js to Lightsail (SSH) ===")
+        local_file = BASE_DIR / 'glitch' / 'bridge.js'
+        if not local_file.exists():
+            print("ERROR: glitch/bridge.js not found")
+            return False
+        result = subprocess.run(
+            f'scp -i "{ssh_key}" "{local_file}" ubuntu@{host}:/tmp/bridge.js',
+            shell=True, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"SCP failed: {result.stderr}")
+            return False
+        result = subprocess.run(
+            f'{ssh_cmd} "sudo cp /tmp/bridge.js /opt/wmt/bridge.js && sudo chown wmt:wmt /opt/wmt/bridge.js && sudo systemctl restart wmt-bridge"',
+            shell=True, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"Deploy failed: {result.stderr}")
+            return False
+        print("bridge.js deployed and service restarted.")
         return True
 
-    commit_msg = message or "Update WebSocket proxy"
-    commit_msg += "\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
-
-    result = subprocess.run(['git', 'commit', '-m', commit_msg], capture_output=True, text=True)
+    # Default: deploy server.js
+    print("\n=== Deploying server.js to Lightsail (SSH) ===")
+    local_file = BASE_DIR / 'glitch' / 'server.js'
+    if not local_file.exists():
+        print("ERROR: glitch/server.js not found")
+        return False
+    result = subprocess.run(
+        f'scp -i "{ssh_key}" "{local_file}" ubuntu@{host}:/tmp/server.js',
+        shell=True, capture_output=True, text=True
+    )
     if result.returncode != 0:
-        if 'nothing to commit' in result.stdout or 'nothing to commit' in result.stderr:
-            print("No changes to commit.")
-            return True
-        print(f"Commit failed: {result.stderr}")
+        print(f"SCP failed: {result.stderr}")
+        return False
+    result = subprocess.run(
+        f'{ssh_cmd} "sudo cp /tmp/server.js /opt/wmt/server.js && sudo chown wmt:wmt /opt/wmt/server.js && sudo systemctl restart wmt-server"',
+        shell=True, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"Deploy failed: {result.stderr}")
         return False
 
-    print(f"Committed: {commit_msg.split(chr(10))[0]}")
-
-    # Push
-    result = subprocess.run(['git', 'push', 'origin', 'main'], capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"Push failed: {result.stderr}")
-        return False
-
-    print("Pushed to GitHub. Render will auto-deploy.")
+    # Verify it started
+    import time
+    time.sleep(2)
+    result = subprocess.run(
+        f'{ssh_cmd} "systemctl is-active wmt-server"',
+        shell=True, capture_output=True, text=True
+    )
+    status = result.stdout.strip()
+    if status == 'active':
+        print("server.js deployed and service running.")
+    else:
+        print(f"WARNING: Service status is '{status}' — check journalctl -u wmt-server")
     return True
 
 def deploy_ionos():
@@ -224,9 +237,8 @@ def deploy_ionos():
 
 def main():
     parser = argparse.ArgumentParser(description='Deploy WMT Client')
-    parser.add_argument('target', nargs='?', choices=['render', 'ionos', 'all'],
+    parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'all'],
                        default='all', help='Deployment target (default: all)')
-    parser.add_argument('-m', '--message', help='Commit message for Render deploy')
     parser.add_argument('--list', action='store_true', help='List files that would be deployed')
 
     args = parser.parse_args()
@@ -235,15 +247,19 @@ def main():
         print("Files deployed to IONOS:")
         for f in IONOS_DEPLOY_FILES:
             print(f"  {f}")
-        print("\nFiles deployed to Render:")
-        print("  server.js")
-        print("  package.json")
+        print("\nFiles deployed to Lightsail:")
+        print("  server.js (lightsail target)")
+        print("  bridge.js (bridge target)")
         return
 
     success = True
 
-    if args.target in ['render', 'all']:
-        if not deploy_render(args.message):
+    if args.target in ['lightsail', 'all']:
+        if not deploy_lightsail('server'):
+            success = False
+
+    if args.target == 'bridge':
+        if not deploy_lightsail('bridge'):
             success = False
 
     if args.target in ['ionos', 'all']:

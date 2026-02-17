@@ -265,6 +265,19 @@ switch ($action) {
             }
         }
 
+        // Startup script (validate filename)
+        if (isset($preferences['startupScript'])) {
+            $script = trim($preferences['startupScript']);
+            if ($script === '' || preg_match('/^[a-zA-Z0-9_\-]+\.(tin|txt)$/', $script)) {
+                $validated['startupScript'] = $script;
+            }
+        }
+
+        // Debug flags
+        if (isset($preferences['debugIf'])) {
+            $validated['debugIf'] = (bool)$preferences['debugIf'];
+        }
+
         // Notification sound (whitelist allowed values)
         $allowedSounds = ['classic', 'ping', 'double', 'chime', 'alert', 'gentle'];
         if (isset($preferences['notificationSound']) && in_array($preferences['notificationSound'], $allowedSounds)) {

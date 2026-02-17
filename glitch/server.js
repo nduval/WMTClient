@@ -15,8 +15,9 @@ const url = require('url');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.8.0'; // Persist server logs to IONOS
+const VERSION = '3.0.0'; // Bridge architecture for zero-downtime deploys
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
+const BRIDGE_URL = process.env.BRIDGE_URL || null; // ws://localhost:4000 for bridge mode
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -39,6 +40,164 @@ let lastFlushedIndex = 0;
 let flushInProgress = false;
 const LOG_FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// ==================== Bridge Mode ====================
+// When BRIDGE_URL is set, MUD TCP connections go through bridge.js
+// which holds them across server.js restarts (zero-downtime deploys).
+
+const EventEmitter = require('events');
+let bridgeWs = null;
+let bridgeReconnectTimer = null;
+const bridgeSockets = new Map(); // token -> BridgeSocket
+
+/**
+ * BridgeSocket — net.Socket-compatible wrapper that communicates through bridge.js.
+ * Emits the same events (data, close, error, end) so the rest of server.js
+ * doesn't need to know whether it's talking to a real socket or the bridge.
+ */
+class BridgeSocket extends EventEmitter {
+  constructor(token) {
+    super();
+    this.token = token;
+    this.destroyed = false;
+    this.writable = false;
+    bridgeSockets.set(token, this);
+  }
+
+  connect(port, host, callback) {
+    if (callback) this._connectCallback = callback;
+    this._host = host;
+    this._port = port;
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      // Try to resume an existing bridge connection first.
+      // If the bridge has a live MUD TCP connection for this token
+      // (from before server.js restarted), resume it seamlessly.
+      // If not, bridge responds with error and we fall back to init.
+      this._tryingResume = true;
+      bridgeWs.send(JSON.stringify({ type: 'resume', token: this.token }));
+    } else {
+      // Bridge not connected — emit error
+      process.nextTick(() => this.emit('error', new Error('Bridge not connected')));
+    }
+  }
+
+  write(data) {
+    if (this.destroyed || !this.writable || !bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) return false;
+    bridgeWs.send(JSON.stringify({
+      type: 'data',
+      token: this.token,
+      data: Buffer.from(data).toString('base64')
+    }));
+    return true;
+  }
+
+  end() {
+    if (!this.destroyed && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      try { bridgeWs.send(JSON.stringify({ type: 'destroy', token: this.token })); } catch (e) {}
+    }
+    this.destroyed = true;
+    this.writable = false;
+    bridgeSockets.delete(this.token);
+  }
+
+  destroy() {
+    this.end();
+  }
+
+  // Resume an existing MUD connection through the bridge (after server.js restart)
+  resume() {
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      bridgeWs.send(JSON.stringify({ type: 'resume', token: this.token }));
+    }
+  }
+}
+
+/**
+ * Handle messages from bridge.js — route to the correct BridgeSocket
+ */
+function handleBridgeMessage(msg) {
+  const bs = bridgeSockets.get(msg.token);
+  if (!bs) return;
+
+  switch (msg.type) {
+    case 'connected':
+      bs.resumed = bs._tryingResume; // true if this was a successful resume
+      bs._tryingResume = false;
+      bs.writable = true;
+      bs.destroyed = false;
+      if (bs._connectCallback) {
+        bs._connectCallback();
+        bs._connectCallback = null;
+      }
+      break;
+    case 'data':
+      bs.emit('data', Buffer.from(msg.data, 'base64'));
+      break;
+    case 'close':
+      bs.destroyed = true;
+      bs.writable = false;
+      bs.emit('close');
+      bridgeSockets.delete(msg.token);
+      break;
+    case 'error':
+      if (bs._tryingResume) {
+        // Resume failed — no existing connection in bridge. Fall back to init (new TCP connection).
+        bs._tryingResume = false;
+        bs.resumed = false;
+        console.log(`[bridge] No existing connection for ${msg.token.substring(0, 8)}, creating new`);
+        if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+          bridgeWs.send(JSON.stringify({ type: 'init', token: msg.token, host: bs._host, port: bs._port }));
+        }
+      } else {
+        bs.emit('error', new Error(msg.message));
+      }
+      break;
+    case 'end':
+      bs.emit('end');
+      break;
+    case 'buffered':
+      console.log(`[bridge] Resuming ${msg.token.substring(0, 8)}: ${msg.count} buffered chunks`);
+      break;
+  }
+}
+
+/**
+ * Connect to bridge.js with auto-reconnect
+ */
+function connectToBridge() {
+  if (!BRIDGE_URL) return;
+
+  console.log(`[bridge] Connecting to ${BRIDGE_URL}...`);
+  bridgeWs = new WebSocket(BRIDGE_URL);
+
+  bridgeWs.on('open', () => {
+    console.log('[bridge] Connected to bridge');
+    if (bridgeReconnectTimer) {
+      clearTimeout(bridgeReconnectTimer);
+      bridgeReconnectTimer = null;
+    }
+  });
+
+  bridgeWs.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      handleBridgeMessage(msg);
+    } catch (e) {}
+  });
+
+  bridgeWs.on('close', () => {
+    console.log('[bridge] Disconnected from bridge — reconnecting in 2s');
+    bridgeWs = null;
+    bridgeReconnectTimer = setTimeout(connectToBridge, 2000);
+  });
+
+  bridgeWs.on('error', (err) => {
+    console.log('[bridge] Connection error:', err.message);
+    // close event will fire after this, triggering reconnect
+  });
+}
+
+// ==================== End Bridge Mode ====================
+
 /**
  * Log a session event to both console and the in-memory buffer
  * Events are structured for easy analysis
@@ -59,10 +218,10 @@ function logSessionEvent(type, data) {
       lastFlushedIndex--;
     }
     // Buffer wrapped — flush immediately so we don't lose entries
-    flushLogsToIONOS();
+    if (!BRIDGE_URL) flushLogsToIONOS();
   }
 
-  // Also log to console for Render's log viewer
+  // Also log to console (goes to journalctl on Lightsail)
   const logParts = Object.entries(data).map(([k, v]) => `${k}=${v}`).join(' ');
   console.log(`${type}: ${logParts}`);
 }
@@ -131,7 +290,7 @@ async function flushLogsToIONOS() {
 
 /**
  * Send message to Discord webhook via IONOS proxy (fire and forget)
- * Routes through IONOS to avoid Cloudflare blocking Render's IPs
+ * Routes through IONOS to avoid Cloudflare blocking proxy IPs
  * Used for server-side notifications when browser is disconnected
  */
 function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
@@ -300,42 +459,44 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
 }
 
 /**
- * Persist all active wizard sessions to PHP backend
+ * Persist all active sessions to PHP backend
  * Called on SIGTERM before server shutdown
  */
-async function persistWizardSessions() {
+async function persistAllSessions() {
   if (!ADMIN_KEY) {
     logSessionEvent('PERSIST_SKIP', { reason: 'no admin key' });
     return;
   }
 
-  const wizardSessions = [];
+  const activeSessions = [];
 
   for (const [token, session] of sessions) {
-    // Only persist wizard sessions with active MUD connections
-    if (session.isWizard && session.mudSocket && !session.mudSocket.destroyed) {
-      wizardSessions.push({
+    // Persist ALL sessions with active MUD connections
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      activeSessions.push({
         userId: session.userId,
         characterId: session.characterId,
         characterName: session.characterName,
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
-        token: token
+        token: token,
+        isWizard: session.isWizard || false,
+        persistedAt: Date.now()
       });
     }
   }
 
-  if (wizardSessions.length === 0) {
-    logSessionEvent('PERSIST_SKIP', { reason: 'no wizard sessions' });
+  if (activeSessions.length === 0) {
+    logSessionEvent('PERSIST_SKIP', { reason: 'no active sessions' });
     return;
   }
 
   logSessionEvent('PERSIST_START', {
-    count: wizardSessions.length,
-    chars: wizardSessions.map(s => s.characterName).join(',')
+    count: activeSessions.length,
+    chars: activeSessions.map(s => s.characterName).join(',')
   });
 
   try {
-    const payload = JSON.stringify({ sessions: wizardSessions });
+    const payload = JSON.stringify({ sessions: activeSessions });
     const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
 
     await new Promise((resolve, reject) => {
@@ -355,7 +516,7 @@ async function persistWizardSessions() {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           if (res.statusCode === 200) {
-            logSessionEvent('PERSIST_SUCCESS', { count: wizardSessions.length });
+            logSessionEvent('PERSIST_SUCCESS', { count: activeSessions.length });
             resolve(JSON.parse(data));
           } else {
             reject(new Error(`HTTP ${res.statusCode}: ${data}`));
@@ -493,6 +654,44 @@ async function removePersistentSession(token) {
 }
 
 /**
+ * Clear all persistent sessions from PHP backend.
+ * Called after restore completes to prevent stale sessions from lingering
+ * across future restarts (guards against persist/restore race conditions).
+ */
+async function clearAllPersistentSessions() {
+  if (!ADMIN_KEY) return;
+
+  try {
+    const url = new URL(`${PHP_SESSIONS_URL}?action=clear`);
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': 2,
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve());
+      });
+
+      req.on('error', reject);
+      req.write('{}');
+      req.end();
+    });
+  } catch (e) {
+    console.error('Failed to clear persistent sessions:', e.message);
+  }
+}
+
+/**
  * Auto-login to MUD for a restored session
  * Returns true on success, false on failure
  */
@@ -509,7 +708,7 @@ function autoLoginToMud(session, password) {
       host: session.targetHost
     });
 
-    session.mudSocket = new net.Socket();
+    session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.token) : new net.Socket();
     let loginState = 'CONNECTING';
     let dataBuffer = '';
     let loginTimeout = null;
@@ -519,7 +718,8 @@ function autoLoginToMud(session, password) {
       logSessionEvent('AUTOLOGIN_TIMEOUT', {
         token: tokenShort,
         char: charName,
-        state: loginState
+        state: loginState,
+        lastData: dataBuffer.substring(0, 200) // Log what MUD sent for debugging
       });
       if (session.mudSocket && !session.mudSocket.destroyed) {
         session.mudSocket.destroy();
@@ -582,7 +782,9 @@ function autoLoginToMud(session, password) {
           if (dataBuffer.includes('#K%') ||
               dataBuffer.includes('Last login:') ||
               dataBuffer.includes('Welcome back') ||
-              dataBuffer.includes('You last quit from')) {
+              dataBuffer.includes('You last quit from') ||
+              dataBuffer.includes('welcomes you back from linkdeath') ||
+              dataBuffer.includes('reconnects')) {
             logSessionEvent('AUTOLOGIN_SUCCESS', {
               token: tokenShort,
               char: charName,
@@ -638,13 +840,15 @@ function autoLoginToMud(session, password) {
           if (dataBuffer.includes('Unknown user') ||
               dataBuffer.includes('Bad password') ||
               dataBuffer.includes('Invalid password') ||
+              dataBuffer.includes('Incorrect password') ||
               dataBuffer.includes('No such player') ||
-              dataBuffer.includes('already logged in')) {
+              dataBuffer.includes('already logged in') ||
+              dataBuffer.includes('attempting to login')) {
             // Extract the specific error for logging
             let reason = 'unknown';
             if (dataBuffer.includes('Unknown user') || dataBuffer.includes('No such player')) reason = 'unknown_user';
-            else if (dataBuffer.includes('Bad password') || dataBuffer.includes('Invalid password')) reason = 'bad_password';
-            else if (dataBuffer.includes('already logged in')) reason = 'already_logged_in';
+            else if (dataBuffer.includes('Bad password') || dataBuffer.includes('Invalid password') || dataBuffer.includes('Incorrect password')) reason = 'bad_password';
+            else if (dataBuffer.includes('already logged in') || dataBuffer.includes('attempting to login')) reason = 'already_logged_in';
 
             logSessionEvent('AUTOLOGIN_REJECTED', {
               token: tokenShort,
@@ -693,6 +897,9 @@ async function restorePersistentSessions() {
 
   if (persistentSessions.length === 0) {
     logSessionEvent('RESTORE_NONE', { note: 'no sessions to restore' });
+    // Still clear the file — handles race where old server's persist
+    // landed after the new server's fetch returned empty
+    await clearAllPersistentSessions();
     return;
   }
 
@@ -708,15 +915,31 @@ async function restorePersistentSessions() {
       server: ps.server
     });
 
-    // Fetch password
-    const password = await fetchCharacterPassword(ps.userId, ps.characterId);
-    if (!password) {
-      logSessionEvent('RESTORE_NO_PASSWORD', {
+    // Skip stale sessions from previous deploys (> 2 minutes old)
+    if (ps.persistedAt && (Date.now() - ps.persistedAt > 120000)) {
+      logSessionEvent('RESTORE_SKIP_STALE', {
         token: ps.token.substring(0, 8),
-        char: ps.characterName
+        char: ps.characterName,
+        age: Math.round((Date.now() - ps.persistedAt) / 1000)
       });
-      await removePersistentSession(ps.token);
       continue;
+    }
+
+    // Skip if this user+character already has an active session
+    // (they reconnected on their own between persist and restore)
+    const userCharKey = `${ps.userId}:${ps.characterId}`;
+    const existingToken = userCharacterSessions.get(userCharKey);
+    if (existingToken && sessions.has(existingToken)) {
+      const existing = sessions.get(existingToken);
+      if (existing.mudSocket && !existing.mudSocket.destroyed) {
+        logSessionEvent('RESTORE_SKIP_ACTIVE', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName,
+          existingToken: existingToken.substring(0, 8),
+          note: 'user+char already has active MUD connection'
+        });
+        continue;
+      }
     }
 
     // Create session object
@@ -724,21 +947,112 @@ async function restorePersistentSessions() {
     session.userId = ps.userId;
     session.characterId = ps.characterId;
     session.characterName = ps.characterName;
-    session.isWizard = true; // Only wizard sessions are persisted
+    session.isWizard = ps.isWizard || false;
     session.targetHost = ps.server === '3s' ? '3scapes.org' : '3k.org';
     session.targetPort = ps.server === '3s' ? 3200 : 3000;
     session.disconnectedAt = Date.now(); // No browser connected yet
 
-    // Try to auto-login
-    const success = await autoLoginToMud(session, password);
+    let success = false;
+
+    if (BRIDGE_URL) {
+      // Bridge mode: resume existing TCP connection (no re-login needed!)
+      // The bridge held the MUD connection while we restarted.
+      session.mudSocket = new BridgeSocket(ps.token);
+
+      // Set up normal data handler
+      session.lineBuffer = '';
+      session.currentAnsiState = '';
+      session.mudSocket.on('data', (data) => {
+        const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
+        const text = cleanData.toString('utf8');
+
+        if (session.lineBufferTimeout) {
+          clearTimeout(session.lineBufferTimeout);
+          session.lineBufferTimeout = null;
+        }
+
+        const fullText = session.lineBuffer + text;
+        const parts = fullText.split('\n');
+
+        if (hasGA) {
+          session.lineBuffer = '';
+          parts.forEach(line => processLine(session, line));
+          return;
+        }
+
+        if (!text.endsWith('\n') && parts.length > 0) {
+          session.lineBuffer = parts.pop();
+          if (session.lineBuffer) {
+            session.lineBufferTimeout = setTimeout(() => {
+              if (session.lineBuffer) {
+                processLine(session, session.lineBuffer);
+                session.lineBuffer = '';
+              }
+            }, 500);
+          }
+        } else {
+          session.lineBuffer = '';
+        }
+
+        parts.forEach(line => processLine(session, line));
+      });
+
+      session.mudSocket.on('close', () => {
+        console.log('MUD connection closed (bridge)');
+        if (!session.serverRestarting) {
+          sendToClient(session, { type: 'system', message: 'Connection to MUD closed.' });
+        }
+        session.mudSocket = null;
+        if (session.explicitDisconnect) closeSession(session, 'explicit disconnect');
+      });
+
+      session.mudSocket.on('error', (err) => {
+        console.error('MUD socket error (bridge):', err.message);
+        if (!session.serverRestarting) {
+          sendToClient(session, { type: 'error', message: 'MUD connection error: ' + err.message });
+        }
+      });
+
+      session.mudSocket.on('end', () => {
+        console.log('MUD connection ended (bridge)');
+        if (!session.serverRestarting) {
+          sendToClient(session, { type: 'system', message: 'MUD has closed the connection (idle timeout or linkdead).' });
+        }
+        if (session.mudSocket) {
+          session.mudSocket.destroy();
+          session.mudSocket = null;
+        }
+      });
+
+      // Tell bridge to resume — it will replay buffered data
+      session.mudSocket.resume();
+      success = true;
+
+      logSessionEvent('RESTORE_BRIDGE_RESUME', {
+        token: ps.token.substring(0, 8),
+        char: ps.characterName
+      });
+    } else {
+      // Direct mode: need to re-login to MUD
+      const password = await fetchCharacterPassword(ps.userId, ps.characterId);
+      if (!password) {
+        logSessionEvent('RESTORE_NO_PASSWORD', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName
+        });
+        await removePersistentSession(ps.token);
+        continue;
+      }
+      success = await autoLoginToMud(session, password);
+    }
 
     if (success) {
       // Register the session
       sessions.set(ps.token, session);
 
       // Register in user+character tracking
-      const userCharKey = `${ps.userId}:${ps.characterId}`;
-      userCharacterSessions.set(userCharKey, ps.token);
+      const userCharKey2 = `${ps.userId}:${ps.characterId}`;
+      userCharacterSessions.set(userCharKey2, ps.token);
 
       // Fetch Discord prefs
       fetchDiscordPrefsFromPHP(ps.userId, ps.characterId, session);
@@ -747,7 +1061,8 @@ async function restorePersistentSessions() {
         token: ps.token.substring(0, 8),
         user: ps.userId,
         char: ps.characterName,
-        server: ps.server
+        server: ps.server,
+        mode: BRIDGE_URL ? 'bridge' : 'direct'
       });
     } else {
       logSessionEvent('RESTORE_FAILED', {
@@ -762,8 +1077,15 @@ async function restorePersistentSessions() {
     await removePersistentSession(ps.token);
 
     // Small delay between restores to avoid overwhelming the MUD
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!BRIDGE_URL) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
+
+  // Clear ALL persistent sessions after restore completes.
+  // This prevents stale sessions from being picked up by future restarts
+  // (e.g., if persist/restore raced during the previous deploy and a record lingered).
+  await clearAllPersistentSessions();
 
   logSessionEvent('RESTORE_COMPLETE', { note: 'session restoration finished' });
 }
@@ -1178,8 +1500,9 @@ const server = http.createServer(async (req, res) => {
 // Create WebSocket server
 const wss = new WebSocket.Server({ server });
 
-console.log('WMT WebSocket Proxy starting...');
+console.log(`WMT WebSocket Proxy v${VERSION} starting...`);
 console.log(`MUD Server: ${MUD_HOST}:${MUD_PORT}`);
+if (BRIDGE_URL) console.log(`Bridge: ${BRIDGE_URL}`);
 
 /**
  * Create a new session object with all required state
@@ -1290,8 +1613,10 @@ function startTicker(session, ticker) {
   session.tickerIntervals[ticker.id] = setInterval(() => {
     // Only execute if MUD is connected
     if (session.mudSocket && !session.mudSocket.destroyed) {
+      // TinTin++: substitute variables at fire time (not creation time)
+      let cmd = substituteUserVariables(ticker.command, session.variables || {});
       // Expand aliases before sending
-      const expanded = expandCommandWithAliases(ticker.command, session.aliases || []);
+      const expanded = expandCommandWithAliases(cmd, session.aliases || []);
       expanded.forEach(cmd => {
         // Handle #N repeat pattern
         const repeatMatch = cmd.match(/^#(\d+)\s+(.+)$/);
@@ -1431,6 +1756,10 @@ function replayBuffer(session) {
  * Close a session completely
  */
 function closeSession(session, reason) {
+  // Guard against double-close (e.g., explicit disconnect + socket close event)
+  if (session.closed) return;
+  session.closed = true;
+
   const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
   logSessionEvent('SESSION_CLOSE', {
     token: session.token.substring(0, 8),
@@ -1445,7 +1774,13 @@ function closeSession(session, reason) {
   clearAllTickers(session);
 
   if (session.mudSocket && !session.mudSocket.destroyed) {
-    session.mudSocket.destroy();
+    // Graceful TCP close: end() sends FIN (like TinTin++'s shutdown(SHUT_RDWR))
+    // then destroy() as safety net after 1 second
+    const sock = session.mudSocket;
+    try { sock.end(); } catch (e) {}
+    setTimeout(() => {
+      if (!sock.destroyed) sock.destroy();
+    }, 1000);
   }
   if (session.timeoutHandle) {
     clearTimeout(session.timeoutHandle);
@@ -1519,12 +1854,23 @@ function parseMipMessage(session, msgType, msgData) {
     case 'BAB': // Tells
       {
         const parts = msgData.split('~');
+
+        // Filter out numeric-only BAB data (e.g. ~0~0) — MIP tell counter, not a real tell
+        if (parts[0] === '' && parts.length >= 3 && /^\d+$/.test(parts[1]) && parts.slice(2).every(p => /^\d*$/.test(p))) {
+          break;
+        }
+
         let formatted;
         let channel = 'tell';
         let rawText = '';
+        let isSoulEcho = false;
         if (parts[0] === '' && parts.length >= 3) {
           const sender = parts[1];
           const message = parts.slice(2).join('~');
+          // [you]: lines are soul/emote echoes — show in chatmon but skip Discord
+          if (sender.toLowerCase() === 'you') {
+            isSoulEcho = true;
+          }
           formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
           rawText = `[${sender}]: ${stripAnsi(message)}`;
         } else if (parts[0] === 'x' && parts.length >= 3) {
@@ -1536,27 +1882,32 @@ function parseMipMessage(session, msgType, msgData) {
           formatted = convertMipColors(msgData);
           rawText = stripAnsi(msgData);
         }
-        sendToClient(session, {
-          type: 'mip_chat',
-          chatType: 'tell',
-          channel: channel,
-          raw: msgData,
-          rawText: rawText,
-          message: formatted
-        });
 
-        // Server-side Discord notification (works even when browser is closed)
-        if (rawText) {
-          const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
-          if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
-            logSessionEvent('DISCORD_SEND', {
-              token: session.token.substring(0, 8),
-              user: session.userId,
-              char: session.characterName,
-              channel: 'tell',
-              messagePreview: rawText.substring(0, 50)
-            });
-            sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
+        // Skip sending soul echoes ([you]:) to chatmon entirely —
+        // the [To recipient]: line already covers it
+        if (!isSoulEcho) {
+          sendToClient(session, {
+            type: 'mip_chat',
+            chatType: 'tell',
+            channel: channel,
+            raw: msgData,
+            rawText: rawText,
+            message: formatted
+          });
+
+          // Server-side Discord notification (works even when browser is closed)
+          if (rawText) {
+            const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
+            if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+              logSessionEvent('DISCORD_SEND', {
+                token: session.token.substring(0, 8),
+                user: session.userId,
+                char: session.characterName,
+                channel: 'tell',
+                messagePreview: rawText.substring(0, 50)
+              });
+              sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
+            }
           }
         }
       }
@@ -1565,7 +1916,11 @@ function parseMipMessage(session, msgType, msgData) {
     case 'CAA': // Chat channels
       {
         const parts = msgData.split('~');
-        if (parts[0] === 'ptell' && msgData.includes('Divvy of') && msgData.includes('coins called by')) {
+        if (parts[0] === 'ptell' && (
+          (msgData.includes('Divvy of') && msgData.includes('coins called by')) ||
+          msgData.includes('divvy called by') ||
+          msgData.includes('gold divvied, total')
+        )) {
           break;
         }
 
@@ -1770,7 +2125,7 @@ function processLine(session, line) {
       const mipStart = line.lastIndexOf('#K%');
       const beforeMip = line.substring(0, mipStart);
       if (beforeMip.trim()) {
-        const processed = processTriggers(beforeMip, session.triggers);
+        const processed = processTriggers(beforeMip, session.triggers, null, session.variables || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -1801,7 +2156,7 @@ function processLine(session, line) {
       displayText = displayText.replace(/^\]\s*/, '');
 
       if (displayText) {
-        const processed = processTriggers(displayText, session.triggers);
+        const processed = processTriggers(displayText, session.triggers, null, session.variables || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -1830,7 +2185,7 @@ function processLine(session, line) {
       const displayText = beforeMip + afterMip;
 
       if (displayText.trim()) {
-        const processed = processTriggers(displayText, session.triggers);
+        const processed = processTriggers(displayText, session.triggers, null, session.variables || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -1890,7 +2245,7 @@ function processLine(session, line) {
   }
 
   // Process triggers with loop detection
-  const processed = processTriggers(line, session.triggers, session.loopTracker);
+  const processed = processTriggers(line, session.triggers, session.loopTracker, session.variables || {});
 
   // Handle loop detection - notify client and disable the trigger
   if (processed.loopDetected) {
@@ -1990,19 +2345,42 @@ function connectToMud(session) {
   session.mipId = null;
   session.currentAnsiState = '';
 
-  sendToClient(session, {
-    type: 'system',
-    message: `Connecting to ${session.targetHost}:${session.targetPort}...`
-  });
+  session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.token) : new net.Socket();
 
-  session.mudSocket = new net.Socket();
-
-  session.mudSocket.connect(session.targetPort, session.targetHost, () => {
-    console.log(`Connected to MUD: ${session.targetHost}:${session.targetPort}`);
+  if (!BRIDGE_URL) {
     sendToClient(session, {
       type: 'system',
-      message: `Connected to ${session.targetHost}:${session.targetPort}!`
+      message: `Connecting to ${session.targetHost}:${session.targetPort}...`
     });
+  }
+
+  session.mudSocket.connect(session.targetPort, session.targetHost, () => {
+    const wasResumed = BRIDGE_URL && session.mudSocket.resumed;
+    console.log(`${wasResumed ? 'Resumed' : 'Connected to'} MUD: ${session.targetHost}:${session.targetPort}${BRIDGE_URL ? ' (via bridge)' : ''}`);
+
+    if (!wasResumed) {
+      // New connection — notify client
+      sendToClient(session, {
+        type: 'system',
+        message: `Connected to ${session.targetHost}:${session.targetPort}!`
+      });
+      // Bridge mode: the initial session_new had bridgeMode (silent onConnect).
+      // Now send a plain session_new so the client runs the full login flow.
+      if (BRIDGE_URL) {
+        sendToClient(session, { type: 'session_new' });
+      }
+    } else {
+      // Bridge resume succeeded — existing MUD connection restored.
+      // Old clients already ran onConnect (ignored bridgeMode flag), so suppress
+      // the auto-login char name they'll send.
+      if (session.characterName) {
+        session._suppressAutoLogin = session.characterName.toLowerCase();
+        session._suppressAutoLoginUntil = Date.now() + 5000;
+      }
+      // New clients were silent (bridgeMode). Send session_resumed so they
+      // show "Session resumed" message, enable MIP, run startup script.
+      sendToClient(session, { type: 'session_resumed', mudConnected: true });
+    }
   });
 
   session.mudSocket.on('data', (data) => {
@@ -2045,10 +2423,13 @@ function connectToMud(session) {
 
   session.mudSocket.on('close', () => {
     console.log('MUD connection closed');
-    sendToClient(session, {
-      type: 'system',
-      message: 'Connection to MUD closed.'
-    });
+    // Don't send misleading messages during server restart — browser already got notified
+    if (!session.serverRestarting) {
+      sendToClient(session, {
+        type: 'system',
+        message: 'Connection to MUD closed.'
+      });
+    }
     // Don't delete session - user might want to reconnect
     // Just clean up the socket reference so reconnect works cleanly
     session.mudSocket = null;
@@ -2060,19 +2441,24 @@ function connectToMud(session) {
 
   session.mudSocket.on('error', (err) => {
     console.error('MUD socket error:', err.message);
-    sendToClient(session, {
-      type: 'error',
-      message: 'MUD connection error: ' + err.message
-    });
+    if (!session.serverRestarting) {
+      sendToClient(session, {
+        type: 'error',
+        message: 'MUD connection error: ' + err.message
+      });
+    }
   });
 
   // Handle remote close (MUD closes connection, e.g., idle timeout)
   session.mudSocket.on('end', () => {
     console.log('MUD connection ended (remote close)');
-    sendToClient(session, {
-      type: 'system',
-      message: 'MUD has closed the connection (idle timeout or linkdead).'
-    });
+    // During server restart, browser already got the "Server restarting" message
+    if (!session.serverRestarting) {
+      sendToClient(session, {
+        type: 'system',
+        message: 'MUD has closed the connection (idle timeout or linkdead).'
+      });
+    }
     if (session.mudSocket) {
       session.mudSocket.destroy();
       session.mudSocket = null;
@@ -2110,16 +2496,16 @@ wss.on('connection', (ws, req) => {
           }
 
           // Check for existing session with same user+character but different token
-          // This handles the case where user logs in from a different device/browser
+          // Instead of killing the old MUD connection, re-key the session to keep it alive
           if (userId && characterId) {
             const userCharKey = `${userId}:${characterId}`;
             const existingToken = userCharacterSessions.get(userCharKey);
 
             if (existingToken && existingToken !== token && sessions.has(existingToken)) {
               const oldSession = sessions.get(existingToken);
-              const oldMudConnected = oldSession.mudSocket && !oldSession.mudSocket.destroyed;
+              const oldMudConnected = oldSession.mudSocket && !oldSession.mudSocket.destroyed && oldSession.mudSocket.writable;
               const disconnectDuration = oldSession.disconnectedAt ? Math.round((Date.now() - oldSession.disconnectedAt) / 1000) : 0;
-              logSessionEvent('SESSION_REPLACE', {
+              logSessionEvent('SESSION_REKEY', {
                 user: userId,
                 char: characterName || characterId,
                 oldToken: existingToken.substring(0, 8),
@@ -2130,7 +2516,7 @@ wss.on('connection', (ws, req) => {
                 wizard: isWizard
               });
 
-              // Notify old client and close its MUD connection
+              // Notify old browser (if connected) that session was taken
               if (oldSession.ws && oldSession.ws.readyState === WebSocket.OPEN) {
                 try {
                   oldSession.ws.send(JSON.stringify({
@@ -2141,8 +2527,70 @@ wss.on('connection', (ws, req) => {
                 } catch (e) {}
               }
 
-              // Close the old MUD connection
-              closeSession(oldSession, 'replaced by new device');
+              // Re-key: move session from old token to new token, keeping MUD alive
+              sessions.delete(existingToken);
+              oldSession.token = token;
+              oldSession.ws = ws;
+              oldSession.disconnectedAt = null;
+              oldSession.explicitDisconnect = false;
+              oldSession.isWizard = isWizard;
+              if (oldSession.timeoutHandle) {
+                clearTimeout(oldSession.timeoutHandle);
+                oldSession.timeoutHandle = null;
+              }
+              sessions.set(token, oldSession);
+              userCharacterSessions.set(userCharKey, token);
+              session = oldSession;
+
+              logSessionEvent('SESSION_RESUME', {
+                token: token.substring(0, 8),
+                user: session.userId,
+                char: session.characterName || session.characterId,
+                mudConnected: oldMudConnected,
+                disconnectedFor: disconnectDuration,
+                wizard: session.isWizard,
+                bufferSize: session.buffer.length,
+                chatBuffer: session.chatBuffer.length,
+                note: 'rekeyed from different token'
+              });
+
+              // If Discord prefs are empty, fetch from PHP backend
+              if (Object.keys(session.discordChannelPrefs).length === 0) {
+                fetchDiscordPrefsFromPHP(session.userId, session.characterId, session);
+              }
+
+              ws.send(JSON.stringify({
+                type: 'session_resumed',
+                mudConnected: oldMudConnected
+              }));
+
+              // Clear buffer
+              session.buffer = [];
+              session.bufferOverflow = false;
+
+              // Send current MIP stats if available
+              if (session.mipStats.hp.max > 0) {
+                ws.send(JSON.stringify({
+                  type: 'mip_stats',
+                  stats: session.mipStats
+                }));
+              }
+
+              // Replay ChatMon buffer
+              if (session.chatBuffer.length > 0) {
+                console.log(`Replaying ${session.chatBuffer.length} ChatMon messages (rekey)`);
+                for (const msg of session.chatBuffer) {
+                  try {
+                    ws.send(JSON.stringify(msg));
+                  } catch (e) {
+                    console.error('Error replaying chat buffer:', e.message);
+                    break;
+                  }
+                }
+              }
+
+              authenticated = true;
+              return;  // Skip normal session creation/resume
             }
 
             // Register this token for this user+character
@@ -2250,9 +2698,25 @@ wss.on('connection', (ws, req) => {
             // Do this async so we don't block the session creation
             fetchDiscordPrefsFromPHP(userId, characterId, session);
 
-            ws.send(JSON.stringify({
-              type: 'session_new'
-            }));
+            if (BRIDGE_URL) {
+              // Bridge mode: send session_new with bridgeMode flag so the client
+              // sends triggers/aliases silently (no messages, no char name).
+              // We defer connectToMud (via _pendingBridgeResume) until triggers
+              // arrive, then try bridge resume.
+              // After bridge responds: session_resumed (existing connection) or
+              // session_new without bridgeMode (new connection, triggers login).
+              // Old clients ignore bridgeMode flag and run full onConnect — the
+              // server-side _suppressAutoLogin handles the char name for those.
+              session._pendingBridgeResume = true;
+              ws.send(JSON.stringify({
+                type: 'session_new',
+                bridgeMode: true
+              }));
+            } else {
+              ws.send(JSON.stringify({
+                type: 'session_new'
+              }));
+            }
           }
 
           authenticated = true;
@@ -2265,6 +2729,17 @@ wss.on('connection', (ws, req) => {
       // Handle authenticated messages
       switch (data.type) {
         case 'command':
+          // Suppress auto-login character name after bridge resume.
+          // onConnect sends the name after 1.5s, but for resumed sessions
+          // the MUD is already logged in — silently drop it.
+          if (session._suppressAutoLogin && Date.now() < session._suppressAutoLoginUntil) {
+            const cmdLower = (data.command || '').trim().toLowerCase();
+            if (cmdLower === session._suppressAutoLogin) {
+              console.log(`Suppressed auto-login for resumed bridge session: ${session.characterName}`);
+              session._suppressAutoLogin = null;
+              break;
+            }
+          }
           if (session.mudSocket && !session.mudSocket.destroyed) {
             // If raw flag is set, send as-is without semicolon splitting or alias processing
             // (used by #send for ANSI codes containing semicolons)
@@ -2328,6 +2803,12 @@ wss.on('connection', (ws, req) => {
 
         case 'set_triggers':
           session.triggers = data.triggers || [];
+          // Bridge mode: triggers arrived, now safe to resume bridge connection.
+          // MUD data will flow through processLine with triggers ready.
+          if (session._pendingBridgeResume) {
+            session._pendingBridgeResume = false;
+            connectToMud(session);
+          }
           break;
 
         case 'set_aliases':
@@ -2337,6 +2818,10 @@ wss.on('connection', (ws, req) => {
         case 'set_tickers':
           // Update tickers and restart intervals
           updateSessionTickers(session, data.tickers || []);
+          break;
+
+        case 'set_variables':
+          session.variables = data.variables || {};
           break;
 
         case 'set_mip':
@@ -2392,7 +2877,15 @@ wss.on('connection', (ws, req) => {
               session.targetHost = data.host;
               session.targetPort = data.port;
               console.log(`Target server set to ${session.targetHost}:${session.targetPort}`);
-              connectToMud(session);
+              // In bridge mode, defer connectToMud until triggers arrive
+              // to prevent MUD data flowing before gags/triggers are loaded.
+              if (BRIDGE_URL && session._pendingBridgeResume) {
+                // Will be called from set_triggers handler
+              } else if (BRIDGE_URL && session.mudSocket && !session.mudSocket.destroyed) {
+                // Already connected via bridge resume — skip
+              } else {
+                connectToMud(session);
+              }
             } else {
               console.log(`Rejected invalid server: ${data.host}:${data.port}`);
               ws.send(JSON.stringify({
@@ -2421,7 +2914,7 @@ wss.on('connection', (ws, req) => {
           // Process text through triggers as if it came from MUD
           // Used by #showme to test trigger patterns
           if (data.line) {
-            const processed = processTriggers(data.line, session.triggers);
+            const processed = processTriggers(data.line, session.triggers, null, session.variables || {});
 
             // Send to client (even if gagged, for testing)
             sendToClient(session, {
@@ -2634,12 +3127,17 @@ function tinTinToRegex(pattern) {
           }
         }
 
-        // All wildcards use GREEDY matching (no ? after quantifier)
+        // TinTin++: wildcards are non-greedy when more pattern follows,
+        // greedy only at end of pattern (matches tintin_regexp in regex.c)
+        const advanceBy = nonCapturing ? 3 : 2;
+        const atEnd = (i + advanceBy >= pattern.length);
+        const lazy = atEnd ? '' : '?';
+
         if (next === '*') {
-          result += groupStart + '.*)';
+          result += groupStart + '.*' + lazy + ')';
           i += 2;
         } else if (next === '+') {
-          result += groupStart + '.+)';
+          result += groupStart + '.+' + lazy + ')';
           i += 2;
         } else if (next === '?') {
           result += groupStart + '.?)';
@@ -2648,44 +3146,44 @@ function tinTinToRegex(pattern) {
           result += groupStart + '.)';
           i += 2;
         } else if (next === 'd') {
-          result += groupStart + '[0-9]*)';
+          result += groupStart + '[0-9]*' + lazy + ')';
           i += 2;
         } else if (next === 'D') {
-          result += groupStart + '[^0-9]*)';
+          result += groupStart + '[^0-9]*' + lazy + ')';
           i += 2;
         } else if (next === 'w') {
-          result += groupStart + '[A-Za-z0-9_]*)';
+          result += groupStart + '[A-Za-z0-9_]*' + lazy + ')';
           i += 2;
         } else if (next === 'W') {
-          result += groupStart + '[^A-Za-z0-9_]*)';
+          result += groupStart + '[^A-Za-z0-9_]*' + lazy + ')';
           i += 2;
         } else if (next === 's') {
-          result += groupStart + '\\s*)';
+          result += groupStart + '\\s*' + lazy + ')';
           i += 2;
         } else if (next === 'S') {
-          result += groupStart + '\\S*)';
+          result += groupStart + '\\S*' + lazy + ')';
           i += 2;
         } else if (next === 'a') {
-          result += groupStart + '[\\s\\S]*)';
+          result += groupStart + '[\\s\\S]*' + lazy + ')';
           i += 2;
         } else if (next === 'A') {
-          result += groupStart + '[\\r\\n]*)';
+          result += groupStart + '[\\r\\n]*' + lazy + ')';
           i += 2;
         } else if (next === 'c') {
           // ANSI color codes - always non-capturing
           result += '(?:\\x1b\\[[0-9;]*m)*';
           i += 2;
         } else if (next === 'p') {
-          result += groupStart + '[\\x20-\\x7E]*)';
+          result += groupStart + '[\\x20-\\x7E]*' + lazy + ')';
           i += 2;
         } else if (next === 'P') {
-          result += groupStart + '[^\\x20-\\x7E]*)';
+          result += groupStart + '[^\\x20-\\x7E]*' + lazy + ')';
           i += 2;
         } else if (next === 'u') {
-          result += groupStart + '.*)';
+          result += groupStart + '.*' + lazy + ')';
           i += 2;
         } else if (next === 'U') {
-          result += groupStart + '[\\x00-\\x7F]*)';
+          result += groupStart + '[\\x00-\\x7F]*' + lazy + ')';
           i += 2;
         } else if (next === 'i' || next === 'I') {
           // Case sensitivity modifiers - consumed but not converted
@@ -2697,8 +3195,8 @@ function tinTinToRegex(pattern) {
           while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
             j++;
           }
-          // Use greedy match
-          result += '(.*)';
+          const numAtEnd = (j >= pattern.length);
+          result += '(.*' + (numAtEnd ? '' : '?') + ')';
           i = j;
         } else {
           // Unknown % sequence - treat as literal
@@ -2802,7 +3300,10 @@ function parseCommands(input) {
 }
 
 function processAliases(command, aliases) {
-  for (const alias of aliases) {
+  // Sort by priority (lower fires first, default 5) — TinTin++ convention
+  const sorted = [...aliases].sort((a, b) => (a.priority || 5) - (b.priority || 5));
+
+  for (const alias of sorted) {
     if (!alias.enabled) continue;
 
     const matchType = alias.matchType || 'exact';
@@ -2868,12 +3369,20 @@ function processAliases(command, aliases) {
         replacement = replacement.replace(/\$\d+/g, '');
       } else {
         const args = matches.slice(1).join(' ');
-        replacement = replacement.replace(/\$\*/g, args);
-        const argParts = args.split(/\s+/).filter(p => p);
-        for (let i = 0; i < argParts.length; i++) {
-          replacement = replacement.replace(new RegExp('\\$' + (i + 1), 'g'), argParts[i]);
+        // If replacement has no $* or $N placeholders and there are args,
+        // append them automatically (TinTin++ behavior: #alias {info} {priest}
+        // with "info general" sends "priest general")
+        const hasPlaceholders = /\$[\d*]/.test(replacement);
+        if (!hasPlaceholders && args) {
+          replacement = replacement + ' ' + args;
+        } else {
+          replacement = replacement.replace(/\$\*/g, args);
+          const argParts = args.split(/\s+/).filter(p => p);
+          for (let i = 0; i < argParts.length; i++) {
+            replacement = replacement.replace(new RegExp('\\$' + (i + 1), 'g'), argParts[i]);
+          }
+          replacement = replacement.replace(/\$\d+/g, '');
         }
-        replacement = replacement.replace(/\$\d+/g, '');
       }
 
       return replacement.trim();
@@ -2929,7 +3438,7 @@ function isTinTinPattern(pattern) {
   return false;
 }
 
-function processTriggers(line, triggers, loopTracker = null) {
+function processTriggers(line, triggers, loopTracker = null, variables = {}) {
   const result = {
     line: line,
     gag: false,
@@ -2943,7 +3452,14 @@ function processTriggers(line, triggers, loopTracker = null) {
   const LOOP_WINDOW_MS = 2000;  // 2 second window
   const LOOP_THRESHOLD = 50;    // Max fires in window before considered a loop
 
-  for (const trigger of triggers) {
+  // Sort triggers by priority (lower = fires first, default 5)
+  // TinTin++ processes actions in priority order, first command match wins
+  const sorted = [...triggers].sort((a, b) => (a.priority || 5) - (b.priority || 5));
+
+  // Track whether a command action has already fired (TinTin++: first match only)
+  let commandFired = false;
+
+  for (const trigger of sorted) {
     if (!trigger.enabled) continue;
 
     // Check for trigger loop if we have a tracker
@@ -3049,6 +3565,8 @@ function processTriggers(line, triggers, loopTracker = null) {
             }
             break;
           case 'command':
+            // TinTin++: only the first matching command action fires
+            if (commandFired) break;
             let cmd = action.command || '';
             if (matches.length) {
               // Always use TinTin var substitution for captured groups
@@ -3057,16 +3575,20 @@ function processTriggers(line, triggers, loopTracker = null) {
             // Use parseCommands to respect brace depth when splitting
             const cmds = parseCommands(cmd);
             result.commands.push(...cmds);
+            commandFired = true;
             break;
           case 'sound':
             result.sound = action.sound || 'beep';
             break;
           case 'substitute':
-            // Replace matched text with replacement string
+            // TinTin++ two-pass substitution:
+            // Pass 1 (SUB_ARG): replace %1-%99 with captured groups
+            // Pass 2 (SUB_VAR): substitute $variables
             let replacement = action.replacement || '';
             if (matches.length) {
               replacement = replaceTinTinVars(replacement, matches);
             }
+            replacement = substituteUserVariables(replacement, variables);
             // Find and replace the matched portion (case-sensitive)
             if (useTinTin) {
               const regexPattern = tinTinToRegex(pattern);
@@ -3117,47 +3639,166 @@ function processTriggers(line, triggers, loopTracker = null) {
 
 /**
  * Substitute $varname references in a string with user variable values
+ * Supports: ${var}, $var[key][subkey], $var
  */
 function substituteUserVariables(message, variables) {
-  return message.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, varName) => {
-    return variables[varName] !== undefined ? String(variables[varName]) : match;
+  if (!message || !variables) return message;
+
+  // Handle $$ escape → literal $
+  const DOLLAR_PLACEHOLDER = '\x00DOLLAR\x00';
+  message = message.replace(/\$\$/g, DOLLAR_PLACEHOLDER);
+
+  // Handle ${var} and ${var[key][subkey]} brace-delimited
+  message = message.replace(/\$\{(\w+)((?:\[[^\]]*\])*)\}/g, (match, name, brackets) => {
+    let val = variables[name];
+    if (val === undefined) return '';
+    if (brackets) {
+      const keys = [];
+      const keyRegex = /\[([^\]]*)\]/g;
+      let keyMatch;
+      while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+        keys.push(keyMatch[1]);
+      }
+      for (const key of keys) {
+        if (val === undefined || val === null || typeof val !== 'object') return '';
+        val = val[key];
+      }
+    }
+    if (val === undefined) return '';
+    if (typeof val === 'object') return JSON.stringify(val);
+    return String(val);
   });
+
+  // Handle $var[key][subkey]...
+  message = message.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
+    let val = variables[name];
+    if (val === undefined) return match;
+    const keys = [];
+    const keyRegex = /\[([^\]]*)\]/g;
+    let keyMatch;
+    while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+      keys.push(keyMatch[1]);
+    }
+    for (const key of keys) {
+      if (val === undefined || val === null || typeof val !== 'object') return '';
+      val = val[key];
+    }
+    if (val === undefined) return '';
+    if (typeof val === 'object') return JSON.stringify(val);
+    return String(val);
+  });
+
+  // Handle simple $var
+  message = message.replace(/\$(\w+)(?!\[)/g, (match, name) => {
+    return variables[name] !== undefined ? String(variables[name]) : match;
+  });
+
+  // Restore $$ escapes → literal $
+  message = message.replace(/\x00DOLLAR\x00/g, '$');
+
+  return message;
 }
 
-// SIGTERM handler - flush logs and persist wizard sessions before shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, flushing logs and persisting wizard sessions...');
-  await flushLogsToIONOS();
-  await persistWizardSessions();
+// Graceful shutdown: persist sessions, then close all MUD connections cleanly
+async function gracefulShutdown(signal) {
+  console.log(`${signal} received, persisting sessions and closing connections...`);
 
-  // Give a moment for persistence to complete
-  setTimeout(() => {
-    console.log('Shutting down...');
-    process.exit(0);
-  }, 1000);
-});
+  // Notify browsers and mark sessions for restart
+  for (const [token, session] of sessions) {
+    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+      try {
+        if (BRIDGE_URL) {
+          // Bridge mode: seamless restart, just show brief status update
+          session.ws.send(JSON.stringify({
+            type: 'system',
+            subtype: 'status_only',
+            message: 'WMT WebSocket updating...'
+          }));
+        } else {
+          session.ws.send(JSON.stringify({
+            type: 'system',
+            message: 'Server restarting — reconnecting automatically...'
+          }));
+        }
+      } catch (e) {}
+    }
+    session.serverRestarting = true;
+  }
+
+  if (!BRIDGE_URL) await flushLogsToIONOS();
+  await persistAllSessions();
+
+  // Flush again to capture PERSIST_SUCCESS/PERSIST_ERROR
+  if (!BRIDGE_URL) await flushLogsToIONOS();
+
+  if (BRIDGE_URL) {
+    // Bridge mode: DON'T close MUD connections — bridge holds them!
+    // Just disconnect from bridge cleanly so it starts buffering.
+    console.log('Bridge mode: MUD connections preserved in bridge.js');
+    if (bridgeWs) {
+      try { bridgeWs.close(); } catch (e) {}
+    }
+    setTimeout(() => {
+      console.log('Shutting down...');
+      process.exit(0);
+    }, 1000);
+  } else {
+    // Direct mode: close all MUD connections so the MUD knows they're gone
+    // This makes characters go linkdead, allowing restore to reconnect them
+    let closedCount = 0;
+    for (const [token, session] of sessions) {
+      if (session.mudSocket && !session.mudSocket.destroyed) {
+        try {
+          session.mudSocket.end();  // Send TCP FIN (clean close)
+          closedCount++;
+        } catch (e) {}
+      }
+    }
+    console.log(`Closed ${closedCount} MUD connections`);
+
+    // Give TCP FINs time to propagate before exiting
+    setTimeout(() => {
+      console.log('Shutting down...');
+      process.exit(0);
+    }, 2000);
+  }
+}
+
+// SIGTERM handler - systemd sends this before killing the process
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Also handle SIGINT (Ctrl+C) for local development
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, flushing logs and persisting wizard sessions...');
-  await flushLogsToIONOS();
-  await persistWizardSessions();
-
-  setTimeout(() => {
-    console.log('Shutting down...');
-    process.exit(0);
-  }, 1000);
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}${BRIDGE_URL ? ' (bridge mode: ' + BRIDGE_URL + ')' : ' (direct mode)'}`);
+
+  // Connect to bridge if configured
+  if (BRIDGE_URL) {
+    connectToBridge();
+  }
 
   // Periodically flush session logs to IONOS for persistence
-  setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
+  // Bridge mode (Lightsail) uses journalctl — no need to flush to IONOS
+  if (!BRIDGE_URL) {
+    setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
+  }
 
   // Restore persistent sessions after startup
-  // Small delay to ensure server is fully ready
-  setTimeout(async () => {
-    await restorePersistentSessions();
-  }, 2000);
+  if (BRIDGE_URL) {
+    // Bridge mode: wait for bridge connection, then restore (bridge has the TCP connections)
+    setTimeout(async () => {
+      await restorePersistentSessions();
+    }, 3000);
+  } else {
+    // Direct mode: wait for old MUD connections to close, then re-login
+    setTimeout(async () => {
+      await restorePersistentSessions();
+    }, 5000);
+
+    // Second restore attempt at 30s for startup race condition
+    setTimeout(async () => {
+      await restorePersistentSessions();
+    }, 30000);
+  }
 });

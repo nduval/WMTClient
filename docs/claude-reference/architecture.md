@@ -127,9 +127,9 @@ Admins can send messages to all currently connected users.
 
 ### Setup Required
 
-1. **On Render** - Set environment variable:
+1. **On Lightsail** - Set in systemd service file (`/etc/systemd/system/wmt-server.service`):
    ```
-   ADMIN_KEY=your-secure-random-key-here
+   Environment=ADMIN_KEY=your-secure-random-key-here
    ```
 
 2. **On IONOS** - Create `config/render_admin_key.php`:
@@ -141,7 +141,7 @@ Admins can send messages to all currently connected users.
 ### How It Works
 
 1. Admin enters message in admin.php Broadcast section
-2. JavaScript POSTs to `https://wmt-proxy.onrender.com/broadcast` with:
+2. JavaScript POSTs to `https://ws.wemudtogether.com/broadcast` with:
    - `X-Admin-Key` header
    - JSON body: `{ "message": "your message" }`
 3. Server validates key, sends `broadcast` message to each connected WebSocket

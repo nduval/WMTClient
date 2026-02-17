@@ -106,7 +106,7 @@ When "Enable MIP" is toggled off:
 MUD Server (3k.org:3000)
     ↓ TCP packets (arbitrary boundaries, NOT line-aligned)
     ↓ Telnet protocol (control sequences like GA embedded in stream)
-WebSocket Proxy (Render - server.js)
+WebSocket Proxy (Lightsail - server.js)
     ↓ Must reassemble complete lines
     ↓ Must detect prompts via GA signal
     ↓ Must filter MIP protocol data
@@ -280,10 +280,9 @@ When matching trigger patterns, ANSI codes must be stripped first. Otherwise pat
 
 ---
 
-## Verifying Render Deployments
+## Verifying Lightsail Deployments
 
 The WebSocket proxy includes a version indicator:
-- Visit `https://wmt-proxy.onrender.com/` - shows version in page title
-- Visit `https://wmt-proxy.onrender.com/health` - returns JSON with version field
-
-If changes aren't taking effect, check that the version number updated. Render free tier can take 1-2 minutes to deploy after a push.
+- Visit `https://ws.wemudtogether.com/` - shows version in page title
+- Visit `https://ws.wemudtogether.com/health` - returns JSON with version field
+- Logs: `ssh ubuntu@3.14.128.194 -i ~/.ssh/wmt-client-socket.pem "sudo journalctl -u wmt-server -n 50"`

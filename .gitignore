@@ -3,6 +3,7 @@ sftp.txt
 ssh_user.txt
 priv_key.txt
 github_token.txt
+*.pem
 config/sendgrid.php
 config/render_admin_key.php
 
@@ -39,3 +40,6 @@ __pycache__/
 /*.png
 /*.jpg
 /sample_files/
+
+# TinTin++ reference materials (local research, not deployed)
+/tintin-reference/

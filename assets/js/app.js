@@ -127,6 +127,10 @@ class WMTClient {
 
         // Current class being filled when reading scripts
         this.currentScriptClass = null;
+        // Stack of previously open classes (for TinTin++ push/pop behavior)
+        this.classStack = [];
+        // In-memory class snapshots for #class save/load
+        this.classSnapshots = {};
 
         this.init();
     }
@@ -206,16 +210,25 @@ class WMTClient {
 
         const prefs = this.preferences;
 
+        const splitTop = document.getElementById('split-top');
+        const splitBottom = document.getElementById('split-bottom');
+
         if (prefs.fontFamily) {
             output.style.setProperty('--mud-font', prefs.fontFamily);
             if (mipBar) mipBar.style.setProperty('--mud-font', prefs.fontFamily);
+            splitTop?.style.setProperty('--mud-font', prefs.fontFamily);
+            splitBottom?.style.setProperty('--mud-font', prefs.fontFamily);
         }
         if (prefs.fontSize) {
             output.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
             if (mipBar) mipBar.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
+            splitTop?.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
+            splitBottom?.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
         }
         if (prefs.textColor) {
             output.style.setProperty('--mud-text-color', prefs.textColor);
+            splitTop?.style.setProperty('--mud-text-color', prefs.textColor);
+            splitBottom?.style.setProperty('--mud-text-color', prefs.textColor);
         }
         if (prefs.backgroundColor) {
             output.style.setProperty('--mud-bg-color', prefs.backgroundColor);
@@ -490,6 +503,7 @@ class WMTClient {
         this.connection.setAliases(this.getFilteredAliases());
         this.connection.setTickers(this.getFilteredTickers());
         this.sendDiscordPrefsToServer();
+        this.syncVariablesToServer();
     }
 
     // Send Discord preferences to server for server-side notifications (works when browser closed)
@@ -514,21 +528,28 @@ class WMTClient {
             characterId: characterId,
             characterName: characterName,
             isWizard: isWizard,
-            onConnect: () => this.onConnect(),
+            onConnect: (bridgeMode) => this.onConnect(bridgeMode),
             onDisconnect: () => this.onDisconnect(),
             onMessage: (data) => this.onMessage(data),
             onError: (error) => this.onError(error),
             onStatusChange: (status) => this.updateConnectionStatus(status),
-            onSessionResumed: (mudConnected) => this.onSessionResumed(mudConnected)
+            onSessionResumed: (mudConnected) => this.onSessionResumed(mudConnected),
+            onSessionInit: () => this.onSessionInit()
         });
 
         this.connection.connect();
     }
 
-    onConnect() {
-        this.appendOutput('Connected to WebSocket server.', 'system');
+    onConnect(bridgeMode = false) {
+        // bridgeMode: server restart with bridge — stay silent, just send triggers.
+        // The real session type (session_resumed or session_new) will follow
+        // after the bridge responds.
+        if (!bridgeMode) {
+            this.appendOutput('Connected to WebSocket server.', 'system');
+        }
         this.passwordSent = false; // Reset for new connection
         this.mipStarted = false; // Reset MIP flag
+        this.pendingReconnect = false; // Clear so duplicate name-send in onMessage doesn't fire
 
         // Start periodic health checks to detect zombie connections
         this.startPeriodicHealthCheck();
@@ -536,8 +557,15 @@ class WMTClient {
         // Start idle disconnect checker (deadman switch)
         this.startIdleChecker();
 
-        // Fire SESSION_CONNECTED event
-        this.fireEvent('SESSION_CONNECTED');
+        // Fire SESSION_CONNECTED event (skip in bridgeMode — fires after session type resolves)
+        if (!bridgeMode) {
+            this.fireEvent('SESSION_CONNECTED');
+        }
+
+        // Run startup script if configured (skip in bridgeMode — will run after session type resolves)
+        if (!bridgeMode && this.preferences.startupScript) {
+            this.cmdRead([this.preferences.startupScript]);
+        }
 
         // Tell the proxy which server to connect to
         const mudHost = window.WMT_CONFIG.mudHost || '3k.org';
@@ -549,28 +577,36 @@ class WMTClient {
 
         // MIP is now enabled after successful login (see onMessage password handling)
 
-        // Send character name to MUD after connection
-        // For new characters: sends name for registration
-        // For existing characters: sends name to log in
-        const charName = window.WMT_CONFIG.newMudChar || window.WMT_CONFIG.characterName;
-        const serverName = mudHost.includes('3scapes') ? '3Scapes' : '3K';
-        if (charName) {
-            setTimeout(() => {
-                const nameLower = charName.toLowerCase();
-                if (window.WMT_CONFIG.newMudChar) {
-                    this.appendOutput(`Sending character name to ${serverName} for registration...`, 'system');
-                } else {
-                    this.appendOutput(`Sending character name to ${serverName}...`, 'system');
-                }
-                this.connection.sendCommand(nameLower);
-                // Clear the newMudChar flag so it doesn't resend on reconnect
-                window.WMT_CONFIG.newMudChar = '';
-                // Remove the query parameter from URL without reload
-                if (window.location.search.includes('newchar')) {
-                    window.history.replaceState({}, document.title, 'app.php');
-                }
-            }, 1500);
+        // Send character name to MUD after connection (skip in bridgeMode —
+        // if bridge resume succeeds, MUD is already logged in;
+        // if it fails, server will send a non-bridgeMode session_new for login)
+        if (!bridgeMode) {
+            const charName = window.WMT_CONFIG.newMudChar || window.WMT_CONFIG.characterName;
+            const serverName = mudHost.includes('3scapes') ? '3Scapes' : '3K';
+            if (charName) {
+                setTimeout(() => {
+                    const nameLower = charName.toLowerCase();
+                    if (window.WMT_CONFIG.newMudChar) {
+                        this.appendOutput(`Sending character name to ${serverName} for registration...`, 'system');
+                    } else {
+                        this.appendOutput(`Sending character name to ${serverName}...`, 'system');
+                    }
+                    this.connection.sendCommand(nameLower);
+                    // Clear the newMudChar flag so it doesn't resend on reconnect
+                    window.WMT_CONFIG.newMudChar = '';
+                    // Remove the query parameter from URL without reload
+                    if (window.location.search.includes('newchar')) {
+                        window.history.replaceState({}, document.title, 'app.php');
+                    }
+                }, 1500);
+            }
         }
+    }
+
+    onSessionInit() {
+        // Bridge mode: server needs triggers before it can resume/init the bridge connection.
+        // Send triggers and aliases now. The real session_new or session_resumed will follow.
+        this.sendFilteredTriggersAndAliases();
     }
 
     onSessionResumed(mudConnected) {
@@ -600,8 +636,13 @@ class WMTClient {
             this.sendFilteredTriggersAndAliases();
             // Re-enable MIP if it was enabled - proxy lost settings on WebSocket reconnect
             if (this.preferences.mipEnabled !== false) {
-                // mipId may be lost after page refresh, so re-enable MIP fully
+                if (briefReconnect) this._silentMipEnable = true;
                 this.enableMip();
+            }
+            // Re-run startup script on page refresh (not brief WiFi reconnects)
+            // Client-side state like #split, #var, #event is lost on reload
+            if (!briefReconnect && this.preferences.startupScript) {
+                this.cmdRead([this.preferences.startupScript]);
             }
         } else {
             // MUD disconnected while we were away - always show this, it's important
@@ -682,6 +723,11 @@ class WMTClient {
                 break;
 
             case 'system':
+                if (data.subtype === 'status_only') {
+                    // Brief status update (e.g., server restart in bridge mode) — don't clutter output
+                    this.updateConnectionStatus('reconnecting');
+                    break;
+                }
                 this.appendOutput(data.message, 'system');
                 // Detect MUD connection closed
                 if (data.message && data.message.includes('Connection to MUD closed')) {
@@ -738,9 +784,12 @@ class WMTClient {
                 break;
 
             case 'client_command':
-                // Execute client-side # command from trigger
+                // Execute client-side # command from trigger (silent - no confirmation output)
                 if (data.command && data.command.startsWith('#')) {
-                    this.processClientCommand(data.command);
+                    this._silent = true;
+                    this.processClientCommand(data.command).finally(() => {
+                        this._silent = false;
+                    });
                 }
                 break;
 
@@ -1001,6 +1050,9 @@ class WMTClient {
         for (const cond of this.mipConditions) {
             if (!cond.enabled) continue;
 
+            // Skip combat-only conditions when not in combat (round > 0 = active combat)
+            if (cond.combatOnly && !this.mipVars.round) continue;
+
             // Check cooldown
             if (cond.lastTriggered && (now - cond.lastTriggered) < this.mipConditionCooldown) {
                 continue;
@@ -1024,9 +1076,10 @@ class WMTClient {
 
             if (triggered) {
                 cond.lastTriggered = now;
-                // Execute command
+                // Execute command (silent - no confirmation output)
                 if (cond.command.startsWith('#')) {
-                    this.processClientCommand(cond.command);
+                    this._silent = true;
+                    this.processClientCommand(cond.command).finally(() => { this._silent = false; });
                 } else {
                     this.connection.sendCommand(cond.command);
                 }
@@ -1138,6 +1191,7 @@ class WMTClient {
         // Reset form UI
         document.getElementById('mip-cond-command').value = '';
         document.getElementById('mip-cond-value').value = '50';
+        document.getElementById('mip-cond-combat-only').checked = false;
         document.getElementById('mip-form-title').textContent = 'Add Condition';
         document.getElementById('mip-save-btn').textContent = 'Add';
         document.getElementById('mip-cancel-btn').textContent = 'Close';
@@ -1307,6 +1361,7 @@ class WMTClient {
         list.innerHTML = conditions.map(c => {
             // Build expression with sub-conditions
             let expr = `${c.variable} ${c.operator} ${c.value}`;
+            const combatBadge = c.combatOnly ? ' <span class="combat-badge" title="In combat only">&#9876;</span>' : '';
             let subsHtml = '';
             if (c.subConditions && c.subConditions.length > 0) {
                 subsHtml = '<div class="mip-condition-subs">' +
@@ -1315,7 +1370,7 @@ class WMTClient {
             }
             return `
                 <div class="mip-condition-item ${c.enabled ? '' : 'disabled'}" data-id="${c.id}">
-                    <div class="mip-condition-expr">${expr}${subsHtml}</div>
+                    <div class="mip-condition-expr">${expr}${combatBadge}${subsHtml}</div>
                     <div class="mip-condition-cmd" title="${this.escapeHtml(c.command)}">${this.escapeHtml(c.command)}</div>
                     <div class="mip-condition-actions">
                         <button onclick="wmtClient.editMipCondition('${c.id}')">Edit</button>
@@ -1338,6 +1393,7 @@ class WMTClient {
         document.getElementById('mip-cond-operator').value = cond.operator;
         document.getElementById('mip-cond-value').value = cond.value;
         document.getElementById('mip-cond-command').value = cond.command;
+        document.getElementById('mip-cond-combat-only').checked = !!cond.combatOnly;
 
         // Load sub-conditions
         this.pendingSubConditions = cond.subConditions ? [...cond.subConditions] : [];
@@ -1358,6 +1414,7 @@ class WMTClient {
             this.editingConditionId = null;
             document.getElementById('mip-cond-command').value = '';
             document.getElementById('mip-cond-value').value = '50';
+            document.getElementById('mip-cond-combat-only').checked = false;
             this.pendingSubConditions = [];
             this.renderSubConditions();
 
@@ -1382,6 +1439,8 @@ class WMTClient {
             return;
         }
 
+        const combatOnly = document.getElementById('mip-cond-combat-only').checked;
+
         if (this.editingConditionId) {
             // Update existing condition
             const cond = this.mipConditions.find(c => c.id === this.editingConditionId);
@@ -1390,6 +1449,7 @@ class WMTClient {
                 cond.operator = operator;
                 cond.value = parseFloat(value);
                 cond.command = command;
+                cond.combatOnly = combatOnly;
                 cond.subConditions = this.pendingSubConditions.length > 0 ? [...this.pendingSubConditions] : [];
                 this.appendOutput(`Updated condition: ${variable} ${operator} ${value} -> ${command}`, 'system');
             }
@@ -1402,6 +1462,7 @@ class WMTClient {
                 operator,
                 value: parseFloat(value),
                 command,
+                combatOnly,
                 enabled: true,
                 lastTriggered: null,
                 subConditions: this.pendingSubConditions.length > 0 ? [...this.pendingSubConditions] : []
@@ -1421,6 +1482,7 @@ class WMTClient {
         // Clear inputs and reset UI
         document.getElementById('mip-cond-command').value = '';
         document.getElementById('mip-cond-value').value = '50';
+        document.getElementById('mip-cond-combat-only').checked = false;
         this.pendingSubConditions = [];
         this.renderSubConditions();
 
@@ -2066,6 +2128,9 @@ class WMTClient {
     }
 
     appendOutput(text, type = 'mud', options = {}) {
+        // During #read, suppress system confirmation messages (TinTin++ behavior)
+        if (this.readingSilent && type === 'system') return;
+
         const output = document.getElementById('mud-output');
         if (!output) return;
 
@@ -2803,6 +2868,47 @@ class WMTClient {
         this.updateMipBarVisibility();
     }
 
+    // #end {message} - Disconnect from MUD and close the client
+    // TinTin++ behavior: closes all sessions (TCP shutdown, no "quit" sent to MUD).
+    // Character goes linkdead. Optional message displayed before closing.
+    cmdEnd(args) {
+        const message = args.length > 0 ? args.join(' ') : null;
+
+        // Display message if provided (unless silent marker \\)
+        if (message && message !== '\\') {
+            this.appendOutput(message, 'system');
+        }
+
+        if (message !== '\\') {
+            this.appendOutput('Goodbye from WMT Client.', 'system');
+        }
+
+        // Disconnect from MUD (goes linkdead - no "quit" sent, matching TinTin++)
+        this.connection.disconnect();
+        this.mipEnabled = false;
+        this.mipStarted = false;
+        this.updateMipBarVisibility();
+    }
+
+    // #zap {message} - Kill the current MUD connection (go linkdead)
+    // TinTin++ behavior: closes one session but stays in the client.
+    // Character goes linkdead. Can reconnect with the connect button.
+    cmdZap(args) {
+        const message = args.length > 0 ? args.join(' ') : null;
+
+        if (message) {
+            this.appendOutput(message, 'system');
+        }
+
+        this.appendOutput('Connection zapped.', 'system');
+
+        // Disconnect from MUD (goes linkdead)
+        this.connection.disconnect();
+        this.mipEnabled = false;
+        this.mipStarted = false;
+        this.updateMipBarVisibility();
+    }
+
     // MIP (MUD Interface Protocol) functions
     toggleMip(enabled) {
         if (enabled) {
@@ -2834,7 +2940,10 @@ class WMTClient {
             this.connection.sendCommand('3klient HAA off');
         }, 500);
 
-        this.appendOutput(`MIP enabled (ID: ${this.mipId}, Client: PortalWMT${this.mipVersion})`, 'system');
+        if (!this._silentMipEnable) {
+            this.appendOutput(`MIP enabled (ID: ${this.mipId}, Client: PortalWMT${this.mipVersion})`, 'system');
+        }
+        this._silentMipEnable = false;
     }
 
     disableMip() {
@@ -3136,7 +3245,7 @@ class WMTClient {
             const classTickers = this.tickers.filter(t => t.class === cls.id);
             const itemCount = classTrigs.length + classAliases.length + classTickers.length;
             const isEnabled = cls.enabled !== false;
-            const isExpanded = cls._expanded !== false; // Default to expanded
+            const isExpanded = cls._expanded === true; // Default to collapsed
 
             html += `
                 <div class="class-section ${isEnabled ? '' : 'disabled'} ${isExpanded ? 'expanded' : ''}" data-class-id="${cls.id}">
@@ -4522,6 +4631,13 @@ class WMTClient {
                             <span class="settings-toggle-slider"></span>
                         </label>
                     </div>
+                    <div class="settings-toggle">
+                        <span class="settings-toggle-label">Debug #if (trace condition evaluation)</span>
+                        <label class="settings-toggle-switch">
+                            <input type="checkbox" id="pref-debug-if" ${this.preferences?.debugIf ? 'checked' : ''}>
+                            <span class="settings-toggle-slider"></span>
+                        </label>
+                    </div>
                     <button class="settings-btn" id="mip-reload-btn" style="margin-top: 10px;">Reload MIP</button>
                 </div>
             </div>
@@ -4560,8 +4676,21 @@ class WMTClient {
 
             <div class="settings-section">
                 <h4>Script Files</h4>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Startup Script (runs on connect)</label>
+                    <select id="pref-startup-script" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px;">
+                        <option value="">None</option>
+                        <!-- Populated dynamically -->
+                    </select>
+                    <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">Auto-runs #read on this file every time you connect. Use it for #var defaults, #event handlers, etc.</p>
+                </div>
                 <div id="script-files-list" class="script-files-list">
                     <em>Loading...</em>
+                </div>
+                <div class="form-row" style="margin-top: 10px;">
+                    <input type="file" id="settings-script-upload" accept=".txt,.tin" style="display:none">
+                    <button class="btn btn-secondary" id="settings-upload-script-btn" style="flex:1">Upload Script</button>
+                    <button class="btn btn-secondary" id="new-script-btn" style="flex:1">New Script</button>
                 </div>
             </div>
 
@@ -4689,6 +4818,20 @@ class WMTClient {
             }
         });
 
+        // Script file upload from settings panel
+        document.getElementById('settings-upload-script-btn')?.addEventListener('click', () => {
+            document.getElementById('settings-script-upload').click();
+        });
+        document.getElementById('settings-script-upload')?.addEventListener('change', async (e) => {
+            await this.handleScriptUpload(e);
+            this.loadScriptFilesList(); // Refresh the list and startup dropdown
+        });
+
+        // New script button
+        document.getElementById('new-script-btn')?.addEventListener('click', () => {
+            this.openScriptEditor(null);
+        });
+
         // Load script files list
         this.loadScriptFilesList();
     }
@@ -4734,8 +4877,10 @@ class WMTClient {
             mipShowRoom: document.getElementById('pref-mip-room')?.checked ?? this.preferences.mipShowRoom ?? true,
             mipShowExits: document.getElementById('pref-mip-exits')?.checked ?? this.preferences.mipShowExits ?? true,
             mipDebug: document.getElementById('pref-mip-debug')?.checked ?? this.preferences.mipDebug ?? false,
+            debugIf: document.getElementById('pref-debug-if')?.checked ?? this.preferences.debugIf ?? false,
             notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
-            notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30
+            notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30,
+            startupScript: document.getElementById('pref-startup-script')?.value || ''
         };
 
         try {
@@ -4854,7 +4999,7 @@ class WMTClient {
         this.appendOutput(`Exported: ${exportedItems.join(', ')}`, 'system');
     }
 
-    // Load list of uploaded script files
+    // Load list of uploaded script files (with folder support)
     async loadScriptFilesList() {
         const container = document.getElementById('script-files-list');
         if (!container) return;
@@ -4864,26 +5009,170 @@ class WMTClient {
             const data = await res.json();
 
             if (!data.success || !data.scripts || data.scripts.length === 0) {
-                container.innerHTML = '<em style="color:#888">No script files uploaded</em>';
+                container.innerHTML = '<div class="folder-actions-bar"><button class="btn btn-secondary" onclick="wmtClient.createScriptFolder()">+ Folder</button></div><em style="color:#888">No script files uploaded</em>';
                 return;
             }
 
-            let html = '';
-            data.scripts.forEach(script => {
-                const filename = script.name;
-                const size = this.formatFileSize(script.size);
-                html += `
-                    <div class="script-file-item">
-                        <span class="script-file-name" title="${size}">${this.escapeHtml(filename)}</span>
-                        <button class="btn btn-sm" onclick="wmtClient.downloadScriptFile('${this.escapeHtml(filename)}')" title="Download">↓</button>
-                        <button class="btn btn-sm btn-danger" onclick="wmtClient.deleteScriptFile('${this.escapeHtml(filename)}')" title="Delete">×</button>
-                    </div>
-                `;
-            });
+            // Populate startup script dropdown (files only)
+            const startupSelect = document.getElementById('pref-startup-script');
+            if (startupSelect) {
+                const currentStartup = this.preferences.startupScript || '';
+                startupSelect.innerHTML = '<option value="">None</option>';
+                data.scripts.filter(s => s.type === 'file').forEach(script => {
+                    const selected = script.name === currentStartup ? 'selected' : '';
+                    startupSelect.innerHTML += `<option value="${this.escapeHtml(script.name)}" ${selected}>${this.escapeHtml(script.name)}</option>`;
+                });
+            }
+
+            // Build folder tree structure
+            const tree = { files: [], folders: {} };
+            for (const item of data.scripts) {
+                const parts = item.name.split('/');
+                if (item.type === 'folder') {
+                    // Ensure folder exists in tree
+                    let node = tree;
+                    for (const part of parts) {
+                        if (!node.folders[part]) {
+                            node.folders[part] = { files: [], folders: {} };
+                        }
+                        node = node.folders[part];
+                    }
+                } else {
+                    // Place file in its parent folder
+                    if (parts.length === 1) {
+                        tree.files.push(item);
+                    } else {
+                        let node = tree;
+                        for (let i = 0; i < parts.length - 1; i++) {
+                            if (!node.folders[parts[i]]) {
+                                node.folders[parts[i]] = { files: [], folders: {} };
+                            }
+                            node = node.folders[parts[i]];
+                        }
+                        node.files.push(item);
+                    }
+                }
+            }
+
+            // Render tree recursively
+            const renderNode = (node, path = '') => {
+                let html = '';
+                // Render subfolders first
+                const folderNames = Object.keys(node.folders).sort((a, b) => a.localeCompare(b, undefined, {sensitivity: 'base'}));
+                for (const name of folderNames) {
+                    const folderPath = path ? path + '/' + name : name;
+                    const escapedPath = this.escapeHtml(folderPath);
+                    const isExpanded = !this._collapsedScriptFolders?.has(folderPath);
+                    html += `
+                        <div class="script-folder-item" onclick="wmtClient.toggleScriptFolder('${escapedPath}')">
+                            <span class="folder-icon">${isExpanded ? '▼' : '▶'}</span>
+                            <span class="folder-name">${this.escapeHtml(name)}/</span>
+                            <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); wmtClient.deleteScriptFolder('${escapedPath}')" title="Delete folder">×</button>
+                        </div>
+                        <div class="script-folder-contents ${isExpanded ? '' : 'collapsed'}" data-folder="${escapedPath}">
+                            ${renderNode(node.folders[name], folderPath)}
+                        </div>
+                    `;
+                }
+                // Render files
+                for (const file of node.files) {
+                    const filename = file.name;
+                    const displayName = filename.split('/').pop();
+                    const size = this.formatFileSize(file.size);
+                    const escapedFilename = this.escapeHtml(filename);
+                    html += `
+                        <div class="script-file-item">
+                            <span class="script-file-name" title="${size}" onclick="wmtClient.openScriptEditor('${escapedFilename}')" style="cursor:pointer;text-decoration:underline">${this.escapeHtml(displayName)}</span>
+                            <button class="btn btn-sm" onclick="wmtClient.downloadScriptFile('${escapedFilename}')" title="Download">↓</button>
+                            <button class="btn btn-sm btn-danger" onclick="wmtClient.deleteScriptFile('${escapedFilename}')" title="Delete">×</button>
+                        </div>
+                    `;
+                }
+                return html;
+            };
+
+            let html = '<div class="folder-actions-bar"><button class="btn btn-secondary" onclick="wmtClient.createScriptFolder()">+ Folder</button></div>';
+            html += renderNode(tree);
 
             container.innerHTML = html;
         } catch (e) {
             container.innerHTML = '<em style="color:#f66">Failed to load files</em>';
+        }
+    }
+
+    // Toggle script folder expanded/collapsed
+    toggleScriptFolder(folderPath) {
+        if (!this._collapsedScriptFolders) {
+            this._collapsedScriptFolders = new Set();
+        }
+        const contentsEl = document.querySelector(`.script-folder-contents[data-folder="${folderPath}"]`);
+        if (contentsEl) {
+            const isCollapsed = contentsEl.classList.contains('collapsed');
+            contentsEl.classList.toggle('collapsed');
+            // Update arrow icon
+            const folderItem = contentsEl.previousElementSibling;
+            if (folderItem) {
+                const icon = folderItem.querySelector('.folder-icon');
+                if (icon) icon.textContent = isCollapsed ? '▼' : '▶';
+            }
+            if (isCollapsed) {
+                this._collapsedScriptFolders.delete(folderPath);
+            } else {
+                this._collapsedScriptFolders.add(folderPath);
+            }
+        }
+    }
+
+    // Create a new script folder
+    async createScriptFolder() {
+        const name = prompt('Enter folder name (e.g. bots):');
+        if (!name || !name.trim()) return;
+
+        const folderName = name.trim();
+        if (!/^[a-zA-Z0-9_\-\/]+$/.test(folderName)) {
+            alert('Invalid folder name. Use only letters, numbers, dashes, and underscores.');
+            return;
+        }
+
+        try {
+            const res = await fetch('api/scripts.php?action=mkdir', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder: folderName })
+            });
+            const data = await res.json();
+            if (data.success) {
+                // Ensure new folder is expanded (remove from collapsed set if present)
+                if (this._collapsedScriptFolders) this._collapsedScriptFolders.delete(data.folder);
+                this.loadScriptFilesList();
+                this.appendOutput(`Folder created: ${data.folder}`, 'system');
+            } else {
+                alert(data.error || 'Failed to create folder');
+            }
+        } catch (e) {
+            alert('Failed to create folder');
+        }
+    }
+
+    // Delete a script folder
+    async deleteScriptFolder(folderPath) {
+        if (!confirm(`Delete folder "${folderPath}"? It must be empty.`)) return;
+
+        try {
+            const res = await fetch('api/scripts.php?action=rmdir', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder: folderPath })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.loadScriptFilesList();
+                this.appendOutput(`Folder deleted: ${folderPath}`, 'system');
+            } else {
+                alert(data.error || 'Failed to delete folder');
+            }
+        } catch (e) {
+            alert('Failed to delete folder');
         }
     }
 
@@ -4920,9 +5209,10 @@ class WMTClient {
         }
     }
 
-    // Delete a script file
+    // Delete a script file (supports paths like bots/mybot.tin)
     async deleteScriptFile(filename) {
-        if (!confirm(`Delete script file "${filename}"?`)) return;
+        const displayName = filename.includes('/') ? filename : filename;
+        if (!confirm(`Delete script file "${displayName}"?`)) return;
 
         try {
             const res = await fetch('api/scripts.php?action=delete', {
@@ -4941,6 +5231,84 @@ class WMTClient {
         } catch (e) {
             alert('Failed to delete file');
         }
+    }
+
+    // Open the script editor modal
+    async openScriptEditor(filename) {
+        const titleEl = document.getElementById('script-editor-title');
+        const contentEl = document.getElementById('script-editor-content');
+        if (!titleEl || !contentEl) return;
+
+        if (filename) {
+            // Edit existing file
+            titleEl.textContent = filename;
+            contentEl.value = 'Loading...';
+            this.editingScriptFilename = filename;
+
+            try {
+                const res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+                const data = await res.json();
+                if (data.success) {
+                    contentEl.value = data.content;
+                } else {
+                    contentEl.value = '';
+                    alert('Failed to load: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                contentEl.value = '';
+                alert('Failed to load file');
+            }
+        } else {
+            // New file
+            titleEl.textContent = 'New Script';
+            contentEl.value = '';
+            this.editingScriptFilename = null;
+        }
+
+        document.getElementById('script-editor-modal').classList.add('open');
+    }
+
+    // Save from the script editor modal
+    async saveScriptFromEditor() {
+        const contentEl = document.getElementById('script-editor-content');
+        if (!contentEl) return;
+
+        let filename = this.editingScriptFilename;
+        if (!filename) {
+            filename = prompt('Enter filename (e.g. myscript.tin or bots/mybot.tin):');
+            if (!filename) return;
+            // Ensure valid extension
+            if (!filename.endsWith('.tin') && !filename.endsWith('.txt')) {
+                filename += '.tin';
+            }
+        }
+
+        const content = contentEl.value;
+
+        try {
+            const res = await fetch('api/scripts.php?action=save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, content })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                this.appendOutput(`Saved: ${filename}`, 'system');
+                this.closeScriptEditor();
+                this.loadScriptFilesList();
+            } else {
+                alert('Failed to save: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('Failed to save file');
+        }
+    }
+
+    // Close the script editor modal
+    closeScriptEditor() {
+        document.getElementById('script-editor-modal')?.classList.remove('open');
+        this.editingScriptFilename = null;
     }
 
     async importSettings(file) {
@@ -5033,7 +5401,7 @@ class WMTClient {
 
         // #N command - repeat N times
         // Supports: #7 e, #30 {buy dagger;dismantle dagger}
-        const repeatMatch = trimmed.match(/^#(\d+)\s+(.+)$/);
+        const repeatMatch = trimmed.match(/^#(\d+)\s+(.+)$/s);
         if (repeatMatch) {
             const count = parseInt(repeatMatch[1]);
             let cmd = repeatMatch[2];
@@ -5048,8 +5416,8 @@ class WMTClient {
             return;
         }
 
-        // Extract command name and rest
-        const cmdMatch = trimmed.match(/^#(\w+)\s*(.*)$/);
+        // Extract command name and rest (dotAll so multi-line braced args work)
+        const cmdMatch = trimmed.match(/^#(\w+)\s*(.*)$/s);
         if (!cmdMatch) {
             this.appendOutput('Invalid # command syntax', 'error');
             return;
@@ -5170,12 +5538,12 @@ class WMTClient {
             // Regexp command
             case 'regexp':
             case 'regex':
-                this.cmdRegexp(args);
+                await this.cmdRegexp(args);
                 break;
 
             // Conditional commands
             case 'if':
-                this.cmdIf(args, rest);
+                await this.cmdIf(args, rest);
                 break;
 
             // Display commands
@@ -5269,6 +5637,12 @@ class WMTClient {
                 this.cmdMip(args);
                 break;
 
+            // Scrollback search
+            case 'grep':
+            case 'buffer':
+                this.cmdGrep(args, rest);
+                break;
+
             // Help
             case 'help':
                 this.cmdHelp();
@@ -5308,6 +5682,13 @@ class WMTClient {
                 this.cmdUnevent(args);
                 break;
 
+            case 'end':
+                this.cmdEnd(args);
+                break;
+            case 'zap':
+                this.cmdZap(args);
+                break;
+
             default:
                 this.appendOutput(`Unknown command: #${cmdName}`, 'error');
         }
@@ -5315,46 +5696,70 @@ class WMTClient {
 
     // #alias {pattern} {replacement}
     // Supports: #alias {name} {command} or #alias name command with multiple words
+    // #alias {pattern} {replacement} {priority}
+    // Priority: 1-9 (default 5), lower fires first. TinTin++ convention.
     cmdAlias(args) {
-        if (args.length < 2) {
-            // List aliases
+        if (args.length === 0) {
+            // No args: list all aliases
             if (this.aliases.length === 0) {
-                this.appendOutput('No aliases defined.', 'system');
+                this.appendOutput('#ALIAS: no aliases defined.', 'system');
             } else {
-                this.appendOutput('Aliases:', 'system');
                 this.aliases.forEach(a => {
-                    const status = a.enabled === false ? ' [disabled]' : '';
-                    this.appendOutput(`  ${a.pattern} = ${a.replacement}${status}`, 'system');
+                    const pri = a.priority !== undefined ? a.priority : 5;
+                    this.appendOutput(`#ALIAS {${a.pattern}} {${a.replacement}} {${pri}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        if (args.length === 1) {
+            // One arg: show matching aliases (wildcard search)
+            const matching = this.aliases.filter(a => this.matchWild(a.pattern, args[0]));
+            if (matching.length === 0) {
+                this.appendOutput(`#ALIAS: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
+            } else {
+                matching.forEach(a => {
+                    const pri = a.priority !== undefined ? a.priority : 5;
+                    this.appendOutput(`#ALIAS {${a.pattern}} {${a.replacement}} {${pri}}`, 'system');
                 });
             }
             return;
         }
 
         const pattern = args[0];
-        // Join all remaining args as the replacement (allows "alias test say hello" without braces)
-        const replacement = args.slice(1).join(' ');
+        const replacement = args[1];
+        const priority = args[2] !== undefined ? parseFloat(args[2]) : 5;
+
+        // Auto-detect TinTin++ pattern syntax (% wildcards, ^ anchor, etc.)
+        const isTinTin = /%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern) ||
+                         pattern.startsWith('^') ||
+                         (pattern.endsWith('$') && pattern.length > 1);
+        const matchType = isTinTin ? 'tintin' : 'exact';
 
         // Check if alias already exists
         const existing = this.aliases.findIndex(a => a.pattern.toLowerCase() === pattern.toLowerCase());
         if (existing >= 0) {
             this.aliases[existing].replacement = replacement;
-            this.appendOutput(`Alias updated: ${pattern} = ${replacement}`, 'system');
+            this.aliases[existing].matchType = matchType;
+            this.aliases[existing].priority = priority;
+            this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
         } else {
             this.aliases.push({
                 id: this.generateId(),
                 pattern: pattern,
-                matchType: 'exact',
+                matchType: matchType,
                 replacement: replacement,
+                priority: priority,
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`Alias created: ${pattern} = ${replacement}`, 'system');
+            this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
         }
 
         this.saveAliases();
     }
 
-    // #unalias {pattern}
+    // #unalias {pattern} - Remove alias(es) with wildcard support
     cmdUnalias(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unalias {pattern}', 'error');
@@ -5362,29 +5767,50 @@ class WMTClient {
         }
 
         const pattern = args[0];
-        const index = this.aliases.findIndex(a => a.pattern.toLowerCase() === pattern.toLowerCase());
-        if (index >= 0) {
-            this.aliases.splice(index, 1);
-            this.appendOutput(`Alias removed: ${pattern}`, 'system');
+        let removed = 0;
+        for (let i = this.aliases.length - 1; i >= 0; i--) {
+            if (this.matchWild(this.aliases[i].pattern, pattern)) {
+                this.aliases.splice(i, 1);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} ALIAS${removed > 1 ? 'ES' : ''} REMOVED.`, 'system');
             this.saveAliases();
         } else {
-            this.appendOutput(`Alias not found: ${pattern}`, 'error');
+            this.appendOutput(`#UNALIAS: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
-    // #action {pattern} {command}
+    // #action {pattern} {command} {priority}
+    // Priority: 1-9 (default 5), lower fires first. TinTin++ convention.
     cmdAction(args) {
-        if (args.length < 2) {
-            // List only triggers that have command actions (not gags/highlights/substitutes)
-            const actions = this.triggers.filter(t => t.actions?.some(a => a.type === 'command'));
+        const actions = this.triggers.filter(t => t.actions?.some(a => a.type === 'command'));
+
+        if (args.length === 0) {
+            // No args: list all actions
             if (actions.length === 0) {
-                this.appendOutput('No actions defined.', 'system');
+                this.appendOutput('#ACTION: no actions defined.', 'system');
             } else {
-                this.appendOutput('Actions:', 'system');
                 actions.forEach(t => {
-                    const status = t.enabled === false ? ' [disabled]' : '';
-                    const cmds = t.actions?.filter(a => a.type === 'command').map(a => a.command).join('; ') || '';
-                    this.appendOutput(`  ${t.pattern} = ${cmds}${status}`, 'system');
+                    const cmd = t.actions?.filter(a => a.type === 'command').map(a => a.command).join('; ') || '';
+                    const pri = t.priority !== undefined ? t.priority : 5;
+                    this.appendOutput(`#ACTION {${t.pattern}} {${cmd}} {${pri}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        if (args.length === 1) {
+            // One arg: show matching actions (wildcard search)
+            const matching = actions.filter(t => this.matchWild(t.pattern, args[0]));
+            if (matching.length === 0) {
+                this.appendOutput(`#ACTION: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
+            } else {
+                matching.forEach(t => {
+                    const cmd = t.actions?.filter(a => a.type === 'command').map(a => a.command).join('; ') || '';
+                    const pri = t.priority !== undefined ? t.priority : 5;
+                    this.appendOutput(`#ACTION {${t.pattern}} {${cmd}} {${pri}}`, 'system');
                 });
             }
             return;
@@ -5392,33 +5818,38 @@ class WMTClient {
 
         const pattern = args[0];
         const command = args[1];
+        const priority = args[2] !== undefined ? parseFloat(args[2]) : 5;
 
         // Store pattern and command as-is using TinTin++ matchType
         // The server will handle the TinTin++ pattern matching with %1, %*, etc.
 
-        // Check if trigger already exists with same pattern
-        const existing = this.triggers.findIndex(t => t.pattern === pattern);
-        if (existing >= 0) {
-            this.triggers[existing].actions = [{ type: 'command', command: command }];
-            this.triggers[existing].matchType = 'tintin';
-            this.appendOutput(`Action updated: ${pattern}`, 'system');
-        } else {
-            this.triggers.push({
-                id: this.generateId(),
-                name: pattern.substring(0, 30),
-                pattern: pattern,
-                matchType: 'tintin',
-                actions: [{ type: 'command', command: command }],
-                enabled: true,
-                class: this.currentScriptClass || null
-            });
-            this.appendOutput(`Action created: ${pattern} → ${command}`, 'system');
+        // Remove ALL existing command-type triggers with same pattern
+        // (don't remove gags/highlights/substitutes that share the same pattern)
+        let wasUpdated = false;
+        for (let i = this.triggers.length - 1; i >= 0; i--) {
+            if (this.triggers[i].pattern === pattern &&
+                this.triggers[i].actions?.some(a => a.type === 'command')) {
+                this.triggers.splice(i, 1);
+                wasUpdated = true;
+            }
         }
+
+        this.triggers.push({
+            id: this.generateId(),
+            name: pattern.substring(0, 30),
+            pattern: pattern,
+            matchType: 'tintin',
+            actions: [{ type: 'command', command: command }],
+            priority: priority,
+            enabled: true,
+            class: this.currentScriptClass || null
+        });
+        this.appendOutput(`#OK: #ACTION {${pattern}} {${command}} @ {${priority}}.`, 'system');
 
         this.saveTriggers();
     }
 
-    // #unaction {pattern}
+    // #unaction {pattern} - Remove action(s) with wildcard support
     cmdUnaction(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unaction {pattern}', 'error');
@@ -5426,30 +5857,44 @@ class WMTClient {
         }
 
         const pattern = args[0];
-        // Find trigger by exact pattern match
-        const index = this.triggers.findIndex(t => t.pattern === pattern);
-        if (index >= 0) {
-            this.triggers.splice(index, 1);
-            this.appendOutput(`Action removed: ${pattern}`, 'system');
+        let removed = 0;
+        for (let i = this.triggers.length - 1; i >= 0; i--) {
+            if (this.triggers[i].actions?.some(a => a.type === 'command') &&
+                this.matchWild(this.triggers[i].pattern, pattern)) {
+                this.triggers.splice(i, 1);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} ACTION${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
         } else {
-            this.appendOutput(`Action not found: ${pattern}`, 'error');
+            this.appendOutput(`#UNACTION: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
-    // #ticker {name} {command} {interval}
     // #ticker {name} {command} {interval} - Create/update a ticker (server-side, persistent)
     cmdTicker(args) {
-        if (args.length < 3) {
-            // List tickers
+        if (args.length === 0) {
+            // No args: list all tickers
             if (this.tickers.length === 0) {
-                this.appendOutput('No tickers configured.', 'system');
+                this.appendOutput('#TICKER: no tickers defined.', 'system');
             } else {
-                this.appendOutput('Tickers:', 'system');
                 this.tickers.forEach(t => {
-                    const status = t.enabled ? 'ON' : 'OFF';
-                    const classInfo = t.class ? ` [${t.class}]` : '';
-                    this.appendOutput(`  ${t.name}: ${t.command} (every ${t.interval}s) [${status}]${classInfo}`, 'system');
+                    this.appendOutput(`#TICKER {${t.name}} {${t.command}} {${t.interval}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        if (args.length === 1) {
+            // One arg: show matching tickers (wildcard search)
+            const matching = this.tickers.filter(t => this.matchWild(t.name, args[0]));
+            if (matching.length === 0) {
+                this.appendOutput(`#TICKER: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
+            } else {
+                matching.forEach(t => {
+                    this.appendOutput(`#TICKER {${t.name}} {${t.command}} {${t.interval}}`, 'system');
                 });
             }
             return;
@@ -5457,10 +5902,11 @@ class WMTClient {
 
         const name = args[0];
         const command = args[1];
-        const interval = parseFloat(args[2]);
+        // TinTin++: default interval is 60 seconds when not specified
+        const interval = args[2] !== undefined ? parseFloat(args[2]) : 60;
 
-        if (isNaN(interval) || interval < 1) {
-            this.appendOutput('Interval must be at least 1 second', 'error');
+        if (isNaN(interval) || interval <= 0) {
+            this.appendOutput('#TICKER: interval must be a positive number', 'error');
             return;
         }
 
@@ -5471,7 +5917,7 @@ class WMTClient {
             existing.command = command;
             existing.interval = interval;
             existing.enabled = true;
-            this.appendOutput(`Ticker updated: ${name} (${command} every ${interval}s)`, 'system');
+            this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
         } else {
             // Create new
             const ticker = {
@@ -5480,47 +5926,65 @@ class WMTClient {
                 command: command,
                 interval: interval,
                 enabled: true,
-                class: null
+                class: this.currentScriptClass || null
             };
             this.tickers.push(ticker);
-            this.appendOutput(`Ticker created: ${name} (${command} every ${interval}s)`, 'system');
+            this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
         }
 
         this.saveTickers();
     }
 
-    // #unticker {name} - Disable/delete a ticker
+    // #unticker {name} - Delete ticker(s) with wildcard support
     cmdUnticker(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unticker {name}', 'error');
             return;
         }
 
-        const name = args[0];
-        const ticker = this.tickers.find(t => t.name.toLowerCase() === name.toLowerCase());
-
-        if (ticker) {
-            // Toggle enabled off (or delete if you prefer)
-            ticker.enabled = false;
-            this.appendOutput(`Ticker disabled: ${name}`, 'system');
+        const pattern = args[0];
+        let removed = 0;
+        for (let i = this.tickers.length - 1; i >= 0; i--) {
+            if (this.matchWild(this.tickers[i].name, pattern)) {
+                this.tickers.splice(i, 1);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTickers();
         } else {
-            this.appendOutput(`Ticker not found: ${name}`, 'error');
+            this.appendOutput(`#UNTICKER: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
     // #delay {seconds} {command} OR #delay {name} {command} {seconds}
+    // TinTin++: 2-arg = anonymous oneshot, 3-arg = named oneshot (can be cancelled)
     cmdDelay(args) {
-        if (args.length < 2) {
-            // List delays
+        if (args.length === 0) {
+            // No args: list all delays
             const names = Object.keys(this.delays);
             if (names.length === 0) {
-                this.appendOutput('No delays pending.', 'system');
+                this.appendOutput('#DELAY: no delays defined.', 'system');
             } else {
-                this.appendOutput('Pending delays:', 'system');
                 names.forEach(name => {
                     const d = this.delays[name];
-                    this.appendOutput(`  ${name}: ${d.command}`, 'system');
+                    this.appendOutput(`#DELAY {${name}} {${d.command}} {${d.seconds}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        if (args.length === 1) {
+            // One arg: show matching delays (wildcard search)
+            const pattern = args[0];
+            const names = Object.keys(this.delays).filter(n => this.matchWild(n, pattern));
+            if (names.length === 0) {
+                this.appendOutput(`#DELAY: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
+            } else {
+                names.forEach(name => {
+                    const d = this.delays[name];
+                    this.appendOutput(`#DELAY {${name}} {${d.command}} {${d.seconds}}`, 'system');
                 });
             }
             return;
@@ -5529,19 +5993,19 @@ class WMTClient {
         let name, command, seconds;
 
         if (args.length === 2) {
-            // #delay {seconds} {command}
+            // #delay {seconds} {command} — anonymous
             seconds = parseFloat(args[0]);
             command = args[1];
             name = 'delay_' + (++this.delayCounter);
         } else {
-            // #delay {name} {command} {seconds}
+            // #delay {name} {command} {seconds} — named
             name = args[0];
             command = args[1];
             seconds = parseFloat(args[2]);
         }
 
-        if (isNaN(seconds) || seconds < 0.01) {
-            this.appendOutput('Delay must be at least 0.01 seconds', 'error');
+        if (isNaN(seconds) || seconds <= 0) {
+            this.appendOutput('#DELAY: seconds must be a positive number', 'error');
             return;
         }
 
@@ -5551,8 +6015,10 @@ class WMTClient {
         }
 
         const timerId = setTimeout(() => {
-            // Split command by semicolons/newlines (respecting brace depth) and execute each
-            const commands = this.parseCommands(command);
+            // TinTin++: substitute variables at fire time (not creation time)
+            let expandedCmd = this.substituteVariables(command);
+            const commands = this.parseCommands(expandedCmd);
+            this._silent = true;
             commands.forEach(cmd => {
                 if (cmd.startsWith('#')) {
                     this.processClientCommand(cmd);
@@ -5560,43 +6026,53 @@ class WMTClient {
                     this.connection.sendCommand(cmd);
                 }
             });
+            this._silent = false;
             delete this.delays[name];
         }, seconds * 1000);
 
-        this.delays[name] = { command, timerId };
+        this.delays[name] = { command, seconds, timerId };
         // No confirmation message - silent operation like TinTin++
     }
 
-    // #undelay {name}
+    // #undelay {name} - Remove delay(s) with wildcard support
     cmdUndelay(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #undelay {name}', 'error');
             return;
         }
 
-        const name = args[0];
-        if (this.delays[name]) {
-            clearTimeout(this.delays[name].timerId);
-            delete this.delays[name];
-            this.appendOutput(`Delay cancelled: ${name}`, 'system');
+        const pattern = args[0];
+        let removed = 0;
+        const names = Object.keys(this.delays);
+        for (const name of names) {
+            if (this.matchWild(name, pattern)) {
+                clearTimeout(this.delays[name].timerId);
+                delete this.delays[name];
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} DELAY${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
         } else {
-            this.appendOutput(`Delay not found: ${name}`, 'error');
+            this.appendOutput(`#UNDELAY: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
-    // #class {name} [open|close|kill|read]
+    // #class {name} {option} [arg]
+    // TinTin++ compliant class management
     async cmdClass(args) {
         if (args.length === 0) {
             // List all classes
             if (this.classes.length === 0) {
-                this.appendOutput('No classes defined.', 'system');
+                this.appendOutput('#CLASS: NO CLASSES DEFINED.', 'system');
             } else {
-                this.appendOutput('Classes:', 'system');
                 this.classes.forEach(cls => {
-                    const status = cls.enabled === false ? ' [disabled]' : ' [enabled]';
                     const triggers = this.triggers.filter(t => t.class === cls.id).length;
                     const aliases = this.aliases.filter(a => a.class === cls.id).length;
-                    this.appendOutput(`  ${cls.name}${status} (${triggers} triggers, ${aliases} aliases)`, 'system');
+                    const tickers = this.tickers.filter(t => t.class === cls.id).length;
+                    const total = triggers + aliases + tickers;
+                    const status = cls.enabled === false ? ' [disabled]' : '';
+                    this.appendOutput(`#CLASS {${cls.name}} {${total} items}${status}`, 'system');
                 });
             }
             return;
@@ -5605,107 +6081,308 @@ class WMTClient {
         const className = args[0];
         const action = args[1]?.toLowerCase();
 
+        // Helper: find or create a class, returning its id
+        const getOrCreateClassId = async () => {
+            let cls = this.classes.find(c => c.name.toLowerCase() === className.toLowerCase());
+            if (!cls) {
+                await this.createClass(className);
+                cls = this.classes.find(c => c.name.toLowerCase() === className.toLowerCase());
+            }
+            return cls ? cls.id : null;
+        };
+
         // Find existing class
-        const existingIndex = this.classes.findIndex(c => c.name.toLowerCase() === className.toLowerCase());
-        const existing = existingIndex >= 0 ? this.classes[existingIndex] : null;
+        const existing = this.classes.find(c => c.name.toLowerCase() === className.toLowerCase()) || null;
 
         if (!action) {
             // Just class name - create if doesn't exist, or show info
             if (existing) {
                 const triggers = this.triggers.filter(t => t.class === existing.id).length;
                 const aliases = this.aliases.filter(a => a.class === existing.id).length;
+                const tickers = this.tickers.filter(t => t.class === existing.id).length;
+                const total = triggers + aliases + tickers;
                 const status = existing.enabled === false ? 'disabled' : 'enabled';
-                this.appendOutput(`Class "${className}": ${status}, ${triggers} triggers, ${aliases} aliases`, 'system');
+                this.appendOutput(`#CLASS {${className}} {${total} items} [${status}]`, 'system');
             } else {
-                // Create new class
                 await this.createClass(className);
             }
             return;
         }
 
         switch (action) {
-            case 'open':
-                // TinTin++ style: open class for adding items
-                // Create if doesn't exist, then set as current for script loading
-                if (!existing) {
-                    await this.createClass(className);
-                    // Find the newly created class
-                    const newCls = this.classes.find(c => c.name.toLowerCase() === className.toLowerCase());
-                    if (newCls) {
-                        this.currentScriptClass = newCls.id;
-                    }
-                } else {
-                    this.currentScriptClass = existing.id;
-                    // Also enable the class
-                    if (existing.enabled === false) {
-                        await this.setClassEnabled(existing.id, true);
+            case 'open': {
+                // Push current class onto stack, then open new one
+                if (this.currentScriptClass) {
+                    this.classStack.push(this.currentScriptClass);
+                }
+                const classId = await getOrCreateClassId();
+                if (classId) {
+                    this.currentScriptClass = classId;
+                    // Enable class if disabled
+                    const cls = this.classes.find(c => c.id === classId);
+                    if (cls && cls.enabled === false) {
+                        await this.setClassEnabled(classId, true);
                     }
                 }
-                this.appendOutput(`Class opened: ${className}`, 'system');
+                this.appendOutput(`#CLASS {${className}} OPENED.`, 'system');
                 break;
+            }
 
             case 'close':
-                // TinTin++ style: close class (stop adding items to it)
-                this.currentScriptClass = null;
-                this.appendOutput(`Class closed: ${className}`, 'system');
+                // Pop back to previous class from stack
+                this.currentScriptClass = this.classStack.pop() || null;
+                this.appendOutput(`#CLASS {${className}} CLOSED.`, 'system');
                 break;
+
+            case 'assign': {
+                // One-liner: open class, execute argument, close class
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #class {name} {assign} {commands}', 'error');
+                    return;
+                }
+                const classId = await getOrCreateClassId();
+                if (classId) {
+                    // Push current class onto stack
+                    if (this.currentScriptClass) {
+                        this.classStack.push(this.currentScriptClass);
+                    }
+                    this.currentScriptClass = classId;
+                    // Execute the command(s)
+                    const commands = args.slice(2).join(' ');
+                    await this.executeCommandString(commands);
+                    // Pop back
+                    this.currentScriptClass = this.classStack.pop() || null;
+                }
+                break;
+            }
+
+            case 'clear': {
+                // Delete all items in the class, but keep the class itself
+                if (!existing) {
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
+                    return;
+                }
+                const classId = existing.id;
+                const removedTriggers = this.triggers.filter(t => t.class === classId).length;
+                const removedAliases = this.aliases.filter(a => a.class === classId).length;
+                const removedTickers = this.tickers.filter(t => t.class === classId).length;
+                this.triggers = this.triggers.filter(t => t.class !== classId);
+                this.aliases = this.aliases.filter(a => a.class !== classId);
+                this.tickers = this.tickers.filter(t => t.class !== classId);
+                const total = removedTriggers + removedAliases + removedTickers;
+                await this.saveTriggers();
+                this.sendFilteredTriggersAndAliases();
+                this.appendOutput(`#CLASS {${className}} CLEARED: ${total} ITEM(S) REMOVED.`, 'system');
+                if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                    this.renderScriptsSidebar();
+                }
+                break;
+            }
 
             case 'enable':
             case 'on':
                 if (!existing) {
-                    this.appendOutput(`Class not found: ${className}`, 'error');
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
                     return;
                 }
                 await this.setClassEnabled(existing.id, true);
-                this.appendOutput(`Class enabled: ${className}`, 'system');
+                this.appendOutput(`#CLASS {${className}} ENABLED.`, 'system');
                 break;
 
             case 'disable':
             case 'off':
                 if (!existing) {
-                    this.appendOutput(`Class not found: ${className}`, 'error');
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
                     return;
                 }
                 await this.setClassEnabled(existing.id, false);
-                this.appendOutput(`Class disabled: ${className}`, 'system');
+                this.appendOutput(`#CLASS {${className}} DISABLED.`, 'system');
                 break;
 
-            case 'kill':
-            case 'delete':
-            case 'remove':
+            case 'kill': {
+                // TinTin++ kill: clear all items, close if open, remove class entirely
                 if (!existing) {
-                    this.appendOutput(`Class not found: ${className}`, 'error');
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
                     return;
                 }
-                await this.deleteClass(existing.id, false); // Don't delete items, just unassign
-                this.appendOutput(`Class deleted: ${className}`, 'system');
+                // If this class is currently open, close it
+                if (this.currentScriptClass === existing.id) {
+                    this.currentScriptClass = this.classStack.pop() || null;
+                }
+                // Remove from stack if present
+                this.classStack = this.classStack.filter(id => id !== existing.id);
+                // Delete class and all its items
+                await this.deleteClass(existing.id, true);
+                // Remove any saved snapshot
+                delete this.classSnapshots[className.toLowerCase()];
+                this.appendOutput(`#CLASS {${className}} KILLED.`, 'system');
                 break;
+            }
 
-            case 'read':
             case 'list':
-            case 'show':
+            case 'show': {
                 if (!existing) {
-                    this.appendOutput(`Class not found: ${className}`, 'error');
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
                     return;
                 }
-                this.appendOutput(`Class "${className}" contents:`, 'system');
                 const classTriggers = this.triggers.filter(t => t.class === existing.id);
                 const classAliases = this.aliases.filter(a => a.class === existing.id);
-                if (classTriggers.length === 0 && classAliases.length === 0) {
-                    this.appendOutput('  (empty)', 'system');
+                const classTickers = this.tickers.filter(t => t.class === existing.id);
+                if (classTriggers.length === 0 && classAliases.length === 0 && classTickers.length === 0) {
+                    this.appendOutput(`#CLASS {${className}} IS EMPTY.`, 'system');
                 } else {
                     classTriggers.forEach(t => {
-                        this.appendOutput(`  [trigger] ${t.pattern}`, 'system');
+                        const cmd = t.actions?.find(a => a.type === 'command');
+                        const hasGag = t.actions?.some(a => a.type === 'gag');
+                        const highlight = t.actions?.find(a => a.type === 'highlight');
+                        const sub = t.actions?.find(a => a.type === 'substitute');
+                        if (hasGag) {
+                            this.appendOutput(`  #GAG {${t.pattern}}`, 'system');
+                        } else if (sub) {
+                            this.appendOutput(`  #SUB {${t.pattern}} {${sub.replacement || ''}}`, 'system');
+                        } else if (highlight && !cmd) {
+                            this.appendOutput(`  #HIGHLIGHT {${highlight.color || 'yellow'}} {${t.pattern}}`, 'system');
+                        } else if (cmd) {
+                            this.appendOutput(`  #ACTION {${t.pattern}} {${cmd.command}}`, 'system');
+                        }
                     });
                     classAliases.forEach(a => {
-                        this.appendOutput(`  [alias] ${a.pattern} = ${a.replacement}`, 'system');
+                        this.appendOutput(`  #ALIAS {${a.pattern}} {${a.replacement}}`, 'system');
+                    });
+                    classTickers.forEach(t => {
+                        this.appendOutput(`  #TICKER {${t.name}} {${t.command}} {${t.interval}}`, 'system');
                     });
                 }
                 break;
+            }
+
+            case 'read': {
+                // #class {name} {read} {filename} - Open class, read file, close class
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #class {name} {read} {filename}', 'error');
+                    return;
+                }
+                const classId = await getOrCreateClassId();
+                if (classId) {
+                    // Push current class onto stack
+                    if (this.currentScriptClass) {
+                        this.classStack.push(this.currentScriptClass);
+                    }
+                    this.currentScriptClass = classId;
+                    // Read the file
+                    await this.cmdRead([args[2]]);
+                    // Pop back
+                    this.currentScriptClass = this.classStack.pop() || null;
+                }
+                break;
+            }
+
+            case 'save': {
+                // Save class items to in-memory snapshot
+                if (!existing) {
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
+                    return;
+                }
+                const classId = existing.id;
+                this.classSnapshots[className.toLowerCase()] = {
+                    triggers: JSON.parse(JSON.stringify(this.triggers.filter(t => t.class === classId))),
+                    aliases: JSON.parse(JSON.stringify(this.aliases.filter(a => a.class === classId))),
+                    tickers: JSON.parse(JSON.stringify(this.tickers.filter(t => t.class === classId)))
+                };
+                const total = this.classSnapshots[className.toLowerCase()].triggers.length +
+                    this.classSnapshots[className.toLowerCase()].aliases.length +
+                    this.classSnapshots[className.toLowerCase()].tickers.length;
+                this.appendOutput(`#CLASS {${className}} SAVED: ${total} ITEM(S).`, 'system');
+                break;
+            }
+
+            case 'load': {
+                // Restore class items from in-memory snapshot
+                const snapshot = this.classSnapshots[className.toLowerCase()];
+                if (!snapshot) {
+                    this.appendOutput(`#CLASS {${className}} HAS NO SAVED SNAPSHOT.`, 'error');
+                    return;
+                }
+                const classId = await getOrCreateClassId();
+                if (!classId) return;
+                // Clear existing items for this class
+                this.triggers = this.triggers.filter(t => t.class !== classId);
+                this.aliases = this.aliases.filter(a => a.class !== classId);
+                this.tickers = this.tickers.filter(t => t.class !== classId);
+                // Restore from snapshot, updating class id to current
+                const restoredTriggers = JSON.parse(JSON.stringify(snapshot.triggers));
+                restoredTriggers.forEach(t => { t.class = classId; });
+                const restoredAliases = JSON.parse(JSON.stringify(snapshot.aliases));
+                restoredAliases.forEach(a => { a.class = classId; });
+                const restoredTickers = JSON.parse(JSON.stringify(snapshot.tickers));
+                restoredTickers.forEach(t => { t.class = classId; });
+                this.triggers.push(...restoredTriggers);
+                this.aliases.push(...restoredAliases);
+                this.tickers.push(...restoredTickers);
+                const total = restoredTriggers.length + restoredAliases.length + restoredTickers.length;
+                await this.saveTriggers();
+                this.sendFilteredTriggersAndAliases();
+                this.appendOutput(`#CLASS {${className}} LOADED: ${total} ITEM(S) RESTORED.`, 'system');
+                if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                    this.renderScriptsSidebar();
+                }
+                break;
+            }
+
+            case 'size': {
+                // Store item count in a variable
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #class {name} {size} {variable}', 'error');
+                    return;
+                }
+                if (!existing) {
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
+                    return;
+                }
+                const classId = existing.id;
+                const count = this.triggers.filter(t => t.class === classId).length +
+                    this.aliases.filter(a => a.class === classId).length +
+                    this.tickers.filter(t => t.class === classId).length;
+                this.setVariable(args[2], count);
+                break;
+            }
+
+            case 'write': {
+                // Write class to file in TinTin++ format
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #class {name} {write} {filename}', 'error');
+                    return;
+                }
+                if (!existing) {
+                    this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
+                    return;
+                }
+                let filename = args[2];
+                if (!filename.match(/\.(txt|tin)$/i)) {
+                    filename += '.tin';
+                }
+                const content = this.exportClassToTinTin(existing);
+                try {
+                    const res = await fetch('api/scripts.php?action=save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filename, content })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        this.appendOutput(`#CLASS {${className}} WRITTEN TO {${data.filename}}.`, 'system');
+                    } else {
+                        this.appendOutput(`Failed to write class: ${data.error}`, 'error');
+                    }
+                } catch (e) {
+                    this.appendOutput('Failed to write class', 'error');
+                }
+                break;
+            }
 
             default:
                 this.appendOutput(`Unknown class action: ${action}`, 'error');
-                this.appendOutput('Valid actions: open, close, kill, read', 'system');
+                this.appendOutput('Valid actions: assign, clear, close, enable, disable, kill, list, load, open, read, save, size, write', 'system');
         }
     }
 
@@ -5781,10 +6458,14 @@ class WMTClient {
                     this.aliases.forEach(a => {
                         if (a.class === classId) a.class = null;
                     });
+                    this.tickers.forEach(t => {
+                        if (t.class === classId) t.class = null;
+                    });
                 } else {
                     // Remove items with this class
                     this.triggers = this.triggers.filter(t => t.class !== classId);
                     this.aliases = this.aliases.filter(a => a.class !== classId);
+                    this.tickers = this.tickers.filter(t => t.class !== classId);
                 }
                 // Re-send to server
                 this.sendFilteredTriggersAndAliases();
@@ -5821,6 +6502,117 @@ class WMTClient {
         if (type === 'all' || type === 'delays') {
             this.appendOutput(`Delays: ${Object.keys(this.delays).length}`, 'system');
         }
+    }
+
+    // #grep [page] {pattern} - search scrollback buffer
+    cmdGrep(args, rest) {
+        // Parse arguments: optional page number followed by pattern in braces or bare
+        let page = 1;
+        let pattern = '';
+
+        if (rest && rest.trim()) {
+            const trimmed = rest.trim();
+            // Check for page number as first arg: #grep 2 {pattern} or #grep 2 pattern
+            const pageMatch = trimmed.match(/^(-?\d+)\s+(.+)$/);
+            if (pageMatch) {
+                page = parseInt(pageMatch[1], 10);
+                pattern = pageMatch[2];
+            } else {
+                pattern = trimmed;
+            }
+            // Strip surrounding braces if present
+            if (pattern.startsWith('{') && pattern.endsWith('}')) {
+                pattern = pattern.slice(1, -1);
+            }
+        }
+
+        if (!pattern) {
+            this.appendOutput('Syntax: #grep [page] {pattern}', 'system');
+            this.appendOutput('  Search scrollback buffer for matching lines.', 'system');
+            this.appendOutput('  Supports TinTin++ patterns (%*) and regex.', 'system');
+            this.appendOutput('  Example: #grep {You hit}', 'system');
+            this.appendOutput('  Example: #grep 2 {You hit}  (page 2)', 'system');
+            this.appendOutput('  Example: #grep {%* hits %*}  (TinTin++ wildcard)', 'system');
+            return;
+        }
+
+        // Compile regex — auto-detect TinTin++ pattern vs pure regex
+        let regex;
+        try {
+            const isTinTin = /%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern) ||
+                              pattern.startsWith('^') || pattern.endsWith('$');
+            if (isTinTin) {
+                regex = new RegExp(this.tinTinToRegex(pattern));
+            } else {
+                // Try as regex first; if invalid, treat as literal substring
+                regex = new RegExp(pattern);
+            }
+        } catch (e) {
+            // Fall back to literal substring match
+            const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(escaped);
+        }
+
+        // Collect matching lines from MUD output (search all .line.mud elements)
+        const output = document.getElementById('mud-output');
+        if (!output) return;
+
+        const lines = output.querySelectorAll('div.line.mud');
+        const matches = [];
+
+        // Search from end to start (most recent first)
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const text = lines[i].textContent;
+            if (regex.test(text)) {
+                matches.push(text);
+            }
+        }
+
+        if (matches.length === 0) {
+            this.appendOutput(`#GREP: No matches found for {${pattern}}`, 'system');
+            return;
+        }
+
+        // Pagination: 50 per page
+        const perPage = 50;
+        const totalPages = Math.ceil(matches.length / perPage);
+        const reverse = page < 0;
+        const absPage = Math.min(Math.abs(page) || 1, totalPages);
+
+        // Get the slice for this page
+        let pageMatches;
+        if (reverse) {
+            // Negative page: oldest first (reverse the matches array, then paginate)
+            const reversed = matches.slice().reverse();
+            const start = (absPage - 1) * perPage;
+            pageMatches = reversed.slice(start, start + perPage);
+        } else {
+            const start = (absPage - 1) * perPage;
+            pageMatches = matches.slice(start, start + perPage);
+        }
+
+        const showing = pageMatches.length;
+        const pageLabel = reverse ? `-${absPage}` : `${absPage}`;
+
+        // Build TinTin++-style header/footer
+        const headerText = ` GREP PAGE ${pageLabel} OF ${totalPages}: ${pattern} `;
+        const footerText = ` ${showing} OF ${matches.length} MATCHES `;
+        const borderLen = 68;
+        const headerPad = Math.max(0, borderLen - headerText.length);
+        const footerPad = Math.max(0, borderLen - footerText.length);
+        const headerLeft = Math.floor(headerPad / 2);
+        const headerRight = headerPad - headerLeft;
+        const footerLeft = Math.floor(footerPad / 2);
+        const footerRight = footerPad - footerLeft;
+
+        const header = '#'.repeat(headerLeft) + headerText + '#'.repeat(headerRight);
+        const footer = '#'.repeat(footerLeft) + footerText + '#'.repeat(footerRight);
+
+        this.appendOutput(header, 'system');
+        for (const line of pageMatches) {
+            this.appendOutput(line, 'system');
+        }
+        this.appendOutput(footer, 'system');
     }
 
     // #help - show available commands
@@ -5889,13 +6681,16 @@ class WMTClient {
         this.appendOutput('  #scripts            - List available script files', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Speedwalk & Config:', 'system');
-        this.appendOutput('  #config {opt} {val} - Set config (e.g., SPEEDWALK ON)', 'system');
+        this.appendOutput('  #config {opt} {val} - Set config (SPEEDWALK, DEADMAN)', 'system');
         this.appendOutput('  #pathdir {d} {r} {c} - Define direction mapping', 'system');
         this.appendOutput('  #unpathdir {dir}    - Remove direction mapping', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Prompts:', 'system');
         this.appendOutput('  #prompt {pat} {txt} [row] - Capture to status bar', 'system');
         this.appendOutput('  #unprompt {pattern} - Remove prompt', 'system');
+        this.appendOutput('', 'system');
+        this.appendOutput('Search:', 'system');
+        this.appendOutput('  #grep [page] {pattern} - Search scrollback (regex)', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Other:', 'system');
         this.appendOutput('  #info [type]        - Show counts', 'system');
@@ -6206,8 +7001,6 @@ class WMTClient {
             filename += '.tin';
         }
 
-        this.appendOutput(`Reading script: ${filename}...`, 'system');
-
         try {
             const res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
             const data = await res.json();
@@ -6217,66 +7010,101 @@ class WMTClient {
                 return;
             }
 
-            // Parse and execute the script
+            // Suppress confirmation messages during #read (TinTin++ behavior)
+            this.readingSilent = true;
+
+            // Parse and execute the script, handling multi-line brace blocks
             const lines = data.content.split('\n');
             let lineCount = 0;
             let errorCount = 0;
+            let multiLineBuffer = '';
+            let braceDepth = 0;
 
             for (const line of lines) {
                 const trimmed = line.trim();
-                // Skip empty lines and comments
-                if (!trimmed || trimmed.startsWith('/*') || trimmed.startsWith('//')) {
-                    continue;
+
+                // When not inside a multi-line block, skip empty/comment/non-# lines
+                if (braceDepth === 0 && !multiLineBuffer) {
+                    if (!trimmed || trimmed.startsWith('/*') || trimmed.startsWith('//')) {
+                        continue;
+                    }
+                    if (!trimmed.startsWith('#')) {
+                        continue;
+                    }
                 }
 
-                // Execute the line as a command
-                if (trimmed.startsWith('#')) {
-                    try {
-                        await this.executeTinTinLine(trimmed);
-                        lineCount++;
-                    } catch (e) {
-                        errorCount++;
-                        console.error('Script line error:', trimmed, e);
+                // Count braces to track multi-line blocks
+                for (const ch of trimmed) {
+                    if (ch === '{') braceDepth++;
+                    else if (ch === '}') braceDepth--;
+                }
+
+                // Accumulate into buffer
+                multiLineBuffer = multiLineBuffer ? multiLineBuffer + ' ' + trimmed : trimmed;
+
+                // When braces are balanced, execute the accumulated command
+                if (braceDepth <= 0) {
+                    braceDepth = 0;
+                    const cmd = multiLineBuffer.trim();
+                    if (cmd.startsWith('#')) {
+                        try {
+                            await this.executeTinTinLine(cmd);
+                            lineCount++;
+                        } catch (e) {
+                            errorCount++;
+                            console.error('Script line error:', cmd.substring(0, 100), e);
+                        }
                     }
+                    multiLineBuffer = '';
                 }
             }
 
-            this.appendOutput(`Script loaded: ${lineCount} commands executed${errorCount ? `, ${errorCount} errors` : ''}`, 'system');
+            // Handle any remaining buffer (unclosed braces)
+            if (multiLineBuffer.trim()) {
+                try {
+                    await this.executeTinTinLine(multiLineBuffer.trim());
+                    lineCount++;
+                } catch (e) {
+                    errorCount++;
+                }
+            }
+
+            this.readingSilent = false;
 
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
                 this.renderScriptsSidebar();
             }
         } catch (e) {
+            this.readingSilent = false;
             this.appendOutput('Failed to read script file', 'error');
             console.error(e);
         }
     }
 
-    // Execute a single TinTin++ format line
+    // Execute a single TinTin++ format line (used by #read)
     async executeTinTinLine(line) {
-        // Parse TinTin++ style: #command {arg1} {arg2} {arg3}
         const parsed = this.parseTinTinCommand(line);
         if (!parsed) return;
 
-        const { command, args } = parsed;
+        const { command, args, rest } = parsed;
 
-        // Route to appropriate handler
         switch (command.toLowerCase()) {
-            case 'alias':
-                this.cmdAlias(args);
-                break;
-            case 'unalias':
-                this.cmdUnalias(args);
-                break;
             case 'action':
+            case 'act':
                 this.cmdAction(args);
                 break;
             case 'unaction':
+            case 'unact':
                 this.cmdUnaction(args);
                 break;
-            case 'class':
-                await this.cmdClass(args);
+            case 'alias':
+            case 'ali':
+                this.cmdAlias(args);
+                break;
+            case 'unalias':
+            case 'unali':
+                this.cmdUnalias(args);
                 break;
             case 'gag':
                 this.cmdGag(args);
@@ -6302,7 +7130,7 @@ class WMTClient {
                 break;
             case 'regexp':
             case 'regex':
-                this.cmdRegexp(args);
+                await this.cmdRegexp(args);
                 break;
             case 'var':
             case 'variable':
@@ -6316,11 +7144,14 @@ class WMTClient {
                 this.cmdMath(args);
                 break;
             case 'if':
-                this.cmdIf(args);
+                await this.cmdIf(args, rest);
                 break;
             case 'showme':
             case 'show':
-                this.cmdShowme(args);
+                this.cmdShowme(args, rest);
+                break;
+            case 'echo':
+                this.cmdEcho(args, rest);
                 break;
             case 'ticker':
             case 'tick':
@@ -6331,22 +7162,107 @@ class WMTClient {
                 this.cmdUnticker(args);
                 break;
             case 'delay':
+            case 'del':
                 this.cmdDelay(args);
                 break;
             case 'undelay':
+            case 'undel':
                 this.cmdUndelay(args);
                 break;
             case 'read':
                 await this.cmdRead(args);
                 break;
+            case 'write':
+                await this.cmdWrite(args);
+                break;
             case 'send':
                 this.cmdSend(args);
                 break;
+            case 'class':
+            case 'cls':
+                await this.cmdClass(args);
+                break;
+            case 'prompt':
+                this.cmdPrompt(args);
+                break;
+            case 'unprompt':
+                this.cmdUnprompt(args);
+                break;
+            case 'config':
+                this.cmdConfig(args);
+                break;
+            case 'split':
+                this.cmdSplit(args);
+                break;
+            case 'unsplit':
+                this.cmdUnsplit();
+                break;
+            case 'bell':
+                this.cmdBell();
+                break;
+            case 'loop':
+                this.cmdLoop(args, rest);
+                break;
+            case 'foreach':
+                this.cmdForeach(args, rest);
+                break;
+            case 'list':
+                this.cmdList(args, rest);
+                break;
+            case 'function':
+            case 'func':
+                this.cmdFunction(args);
+                break;
+            case 'unfunction':
+            case 'unfunc':
+                this.cmdUnfunction(args);
+                break;
+            case 'return':
+                this.cmdReturn(args, rest);
+                break;
+            case 'local':
+                this.cmdLocal(args);
+                break;
+            case 'unlocal':
+                this.cmdUnlocal(args);
+                break;
+            case 'switch':
+                this.cmdSwitch(args, rest);
+                break;
+            case 'event':
+                this.cmdEvent(args);
+                break;
+            case 'unevent':
+                this.cmdUnevent(args);
+                break;
+            case 'format':
+                this.cmdFormat(args);
+                break;
+            case 'replace':
+                this.cmdReplace(args);
+                break;
+            case 'pathdir':
+                this.cmdPathdir(args);
+                break;
+            case 'unpathdir':
+                this.cmdUnpathdir(args);
+                break;
+            case 'info':
+                this.cmdInfo(args);
+                break;
+            case 'mip':
+                this.cmdMip(args);
+                break;
             case 'nop':
-                // Comment - do nothing
+                break;
+            case 'end':
+                this.cmdEnd(args);
+                break;
+            case 'zap':
+                this.cmdZap(args);
                 break;
             default:
-                // Unknown command - ignore in scripts
+                this.appendOutput(`Unknown command: #${command}`, 'error');
                 break;
         }
     }
@@ -6404,7 +7320,11 @@ class WMTClient {
             }
         }
 
-        return { command, args };
+        // Also return raw rest for commands that need it (e.g. #if, #loop)
+        const restMatch = line.match(/^\w+\s*(.*)/s);
+        const rawRest = restMatch ? restMatch[1] : '';
+
+        return { command, args, rest: rawRest };
     }
 
     // #write {filename} {classname} - Save class to TinTin++ format script
@@ -6483,12 +7403,16 @@ class WMTClient {
 
         const classTriggers = this.triggers.filter(t => t.class === cls.id);
         const classAliases = this.aliases.filter(a => a.class === cls.id);
+        const classTickers = this.tickers.filter(t => t.class === cls.id);
 
         for (const t of classTriggers) {
             content += this.triggerToTinTin(t);
         }
         for (const a of classAliases) {
             content += this.aliasToTinTin(a);
+        }
+        for (const t of classTickers) {
+            content += `#ticker {${t.name}} {${t.command}} {${t.interval}}\n`;
         }
 
         content += `#class {${cls.name}} {close}\n`;
@@ -6594,7 +7518,7 @@ class WMTClient {
         }
     }
 
-    // #scripts - List available script files
+    // #scripts - List available script files (with folder support)
     async cmdScripts(args) {
         try {
             const res = await fetch('api/scripts.php?action=list');
@@ -6605,14 +7529,38 @@ class WMTClient {
                 return;
             }
 
-            if (data.scripts.length === 0) {
+            const files = data.scripts.filter(s => s.type === 'file');
+            const folders = data.scripts.filter(s => s.type === 'folder');
+
+            if (files.length === 0 && folders.length === 0) {
                 this.appendOutput('No script files found.', 'system');
                 this.appendOutput('Use #write {filename} to create one.', 'system');
             } else {
                 this.appendOutput('Script files:', 'system');
-                for (const script of data.scripts) {
-                    const size = script.size < 1024 ? `${script.size}B` : `${Math.round(script.size/1024)}KB`;
-                    this.appendOutput(`  ${script.name} (${size})`, 'system');
+                // Group files by directory
+                const grouped = {};
+                for (const file of files) {
+                    const parts = file.name.split('/');
+                    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+                    if (!grouped[dir]) grouped[dir] = [];
+                    grouped[dir].push(file);
+                }
+                // Show root files first
+                if (grouped['']) {
+                    for (const script of grouped['']) {
+                        const size = script.size < 1024 ? `${script.size}B` : `${Math.round(script.size/1024)}KB`;
+                        this.appendOutput(`  ${script.name} (${size})`, 'system');
+                    }
+                }
+                // Show folder contents
+                for (const folder of folders) {
+                    const folderFiles = grouped[folder.name] || [];
+                    this.appendOutput(`  ${folder.name}/ (${folderFiles.length} files)`, 'system');
+                    for (const script of folderFiles) {
+                        const size = script.size < 1024 ? `${script.size}B` : `${Math.round(script.size/1024)}KB`;
+                        const displayName = script.name.split('/').pop();
+                        this.appendOutput(`    ${displayName} (${size})`, 'system');
+                    }
                 }
             }
         } catch (e) {
@@ -6622,22 +7570,40 @@ class WMTClient {
 
     // #gag {pattern} - Create a gag trigger (TinTin++ style)
     cmdGag(args) {
-        if (args.length < 1) {
-            // List gags
-            const gags = this.triggers.filter(t => t.actions?.some(a => a.type === 'gag'));
+        const gags = this.triggers.filter(t => t.actions?.some(a => a.type === 'gag'));
+
+        if (args.length === 0) {
+            // No args: list all gags
             if (gags.length === 0) {
-                this.appendOutput('No gags defined.', 'system');
+                this.appendOutput('#GAG: no gags defined.', 'system');
             } else {
-                this.appendOutput('Gags:', 'system');
                 gags.forEach(g => {
-                    const status = g.enabled === false ? ' [disabled]' : '';
-                    this.appendOutput(`  ${g.pattern}${status}`, 'system');
+                    const pri = g.priority !== undefined ? g.priority : 5;
+                    this.appendOutput(`#GAG {${g.pattern}} {${pri}}`, 'system');
                 });
             }
             return;
         }
 
+        // TinTin++: 1 arg = show matching gags, 2 args = create gag
+        // #gag {pattern} {priority} to create, #gag {pattern} to show
+        if (args.length === 1) {
+            // Show matching gags (wildcard search)
+            const matching = gags.filter(g => this.matchWild(g.pattern, args[0]));
+            if (matching.length === 0) {
+                this.appendOutput(`#GAG: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
+            } else {
+                matching.forEach(g => {
+                    const pri = g.priority !== undefined ? g.priority : 5;
+                    this.appendOutput(`#GAG {${g.pattern}} {${pri}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        // 2+ args: create/update gag
         const pattern = args[0];
+        const priority = args[1] !== undefined ? parseFloat(args[1]) : 5;
 
         // Check if gag already exists
         const existing = this.triggers.findIndex(t =>
@@ -6646,26 +7612,25 @@ class WMTClient {
         );
 
         if (existing >= 0) {
-            this.appendOutput(`Gag already exists: ${pattern}`, 'system');
-            return;
+            this.triggers[existing].priority = priority;
+            this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
+        } else {
+            this.triggers.push({
+                id: this.generateId(),
+                name: `Gag: ${pattern.substring(0, 25)}`,
+                pattern: pattern,
+                matchType: 'tintin',
+                actions: [{ type: 'gag' }],
+                priority: priority,
+                enabled: true,
+                class: this.currentScriptClass || null
+            });
+            this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
         }
-
-        // Create gag trigger with TinTin++ pattern matching
-        this.triggers.push({
-            id: this.generateId(),
-            name: `Gag: ${pattern.substring(0, 25)}`,
-            pattern: pattern,
-            matchType: 'tintin',
-            actions: [{ type: 'gag' }],
-            enabled: true,
-            class: this.currentScriptClass || null
-        });
-
-        this.appendOutput(`Gag created: ${pattern}`, 'system');
         this.saveTriggers();
     }
 
-    // #ungag {pattern}
+    // #ungag {pattern} - Remove gag(s) with wildcard support
     cmdUngag(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #ungag {pattern}', 'error');
@@ -6673,52 +7638,140 @@ class WMTClient {
         }
 
         const pattern = args[0];
-        const index = this.triggers.findIndex(t =>
-            t.pattern === pattern &&
-            t.actions?.some(a => a.type === 'gag')
-        );
-
-        if (index >= 0) {
-            this.triggers.splice(index, 1);
-            this.appendOutput(`Gag removed: ${pattern}`, 'system');
+        let removed = 0;
+        for (let i = this.triggers.length - 1; i >= 0; i--) {
+            if (this.triggers[i].actions?.some(a => a.type === 'gag') &&
+                this.matchWild(this.triggers[i].pattern, pattern)) {
+                this.triggers.splice(i, 1);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} GAG${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
         } else {
-            this.appendOutput(`Gag not found: ${pattern}`, 'error');
+            this.appendOutput(`#UNGAG: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
+    }
+
+    // Parse TinTin++ color string into {fgColor, bgColor, underline, blink, italic, reverse}
+    parseHighlightColor(colorStr) {
+        // TinTin++ color names mapped to ANSI-style hex values
+        const baseColors = {
+            'black': '#555555', 'red': '#ff5555', 'green': '#55ff55',
+            'yellow': '#ffff55', 'blue': '#5555ff', 'magenta': '#ff55ff',
+            'cyan': '#55ffff', 'white': '#ffffff', 'orange': '#ff8800',
+            'pink': '#ff88ff', 'brown': '#aa5500', 'gray': '#aaaaaa',
+            'dark gray': '#666666', 'dark red': '#aa0000', 'dark green': '#00aa00',
+            'dark yellow': '#aa5500', 'dark blue': '#0000aa', 'dark magenta': '#aa00aa',
+            'dark cyan': '#00aaaa', 'dark white': '#aaaaaa',
+            'light black': '#666666', 'light red': '#ff5555', 'light green': '#55ff55',
+            'light yellow': '#ffff55', 'light blue': '#5555ff', 'light magenta': '#ff55ff',
+            'light cyan': '#55ffff', 'light white': '#ffffff'
+        };
+
+        const result = { fgColor: null, bgColor: null, underline: false, blink: false };
+        const lower = colorStr.toLowerCase().trim();
+
+        // If it's already a hex color or CSS color, use directly
+        if (lower.startsWith('#') || lower.startsWith('rgb')) {
+            result.fgColor = colorStr;
+            return result;
+        }
+
+        // Parse modifiers and colors from the string
+        const parts = lower.split(/\s+/);
+        let isBold = false;
+        let colorParts = [];
+
+        for (const part of parts) {
+            switch (part) {
+                case 'bold': isBold = true; break;
+                case 'underline': result.underline = true; break;
+                case 'blink': result.blink = true; break;
+                case 'reverse': result.fgColor = '#000000'; result.bgColor = '#ffffff'; break;
+                default: colorParts.push(part);
+            }
+        }
+
+        // Reconstruct color name from remaining parts
+        let colorName = colorParts.join(' ');
+
+        // "bold red" → look up "light red" first, then "red"
+        if (isBold && colorName && !colorName.startsWith('light ') && !colorName.startsWith('dark ')) {
+            const lightName = 'light ' + colorName;
+            if (baseColors[lightName]) {
+                result.fgColor = baseColors[lightName];
+                return result;
+            }
+        }
+
+        // Direct lookup
+        if (colorName && baseColors[colorName]) {
+            result.fgColor = baseColors[colorName];
+        } else if (colorName) {
+            // Not in map — use as-is (could be a hex or CSS color passed without #)
+            result.fgColor = colorStr;
+        } else if (isBold && !result.fgColor) {
+            // Just "bold" with no color = bright white
+            result.fgColor = '#ffffff';
+        }
+
+        return result;
     }
 
     // #highlight/#high {pattern} {color} - Create highlight trigger (TinTin++ style)
     cmdHighlight(args) {
-        if (args.length < 2) {
-            // List highlights
-            const highlights = this.triggers.filter(t => t.actions?.some(a => a.type === 'highlight'));
+        const highlights = this.triggers.filter(t => t.actions?.some(a => a.type === 'highlight'));
+
+        if (args.length === 0) {
+            // No args: list all highlights
             if (highlights.length === 0) {
-                this.appendOutput('No highlights defined.', 'system');
+                this.appendOutput('#HIGHLIGHT: no highlights defined.', 'system');
             } else {
-                this.appendOutput('Highlights:', 'system');
                 highlights.forEach(h => {
-                    const color = h.actions.find(a => a.type === 'highlight')?.color || 'yellow';
-                    const status = h.enabled === false ? ' [disabled]' : '';
-                    this.appendOutput(`  [${color}] ${h.pattern}${status}`, 'system');
+                    const action = h.actions.find(a => a.type === 'highlight');
+                    const color = action?.fgColor || action?.color || 'yellow';
+                    const pri = h.priority !== undefined ? h.priority : 5;
+                    this.appendOutput(`#HIGHLIGHT {${h.pattern}} {${color}} {${pri}}`, 'system');
                 });
             }
             return;
         }
 
-        // TinTin++ syntax: #highlight {pattern} {color}
+        if (args.length === 1) {
+            // One arg: show matching highlights (wildcard search)
+            const matching = highlights.filter(h => this.matchWild(h.pattern, args[0]));
+            if (matching.length === 0) {
+                this.appendOutput(`#HIGHLIGHT: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
+            } else {
+                matching.forEach(h => {
+                    const action = h.actions.find(a => a.type === 'highlight');
+                    const color = action?.fgColor || action?.color || 'yellow';
+                    const pri = h.priority !== undefined ? h.priority : 5;
+                    this.appendOutput(`#HIGHLIGHT {${h.pattern}} {${color}} {${pri}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        // Syntax: #highlight {pattern} {color} {priority}
         const pattern = args[0];
         const color = args[1];
+        const priority = args[2] !== undefined ? parseFloat(args[2]) : 5;
 
-        // Convert TinTin++ color names to hex if needed
-        const colorMap = {
-            'red': '#ff0000', 'green': '#00ff00', 'blue': '#0000ff',
-            'yellow': '#ffff00', 'cyan': '#00ffff', 'magenta': '#ff00ff',
-            'white': '#ffffff', 'black': '#000000', 'orange': '#ff8800',
-            'pink': '#ff88ff', 'bold': '#ffffff', 'light red': '#ff6666',
-            'light green': '#66ff66', 'light blue': '#6666ff', 'bold yellow': '#ffff88',
-            'bold white': '#ffffff', 'bold cyan': '#88ffff', 'bold magenta': '#ff88ff'
+        // Parse TinTin++ color string (supports modifiers: bold, underline, blink, reverse)
+        const parsed = this.parseHighlightColor(color);
+
+        // Build the action object (compatible with server-side processTriggers)
+        const highlightAction = {
+            type: 'highlight',
+            color: parsed.fgColor || '#ffff00',
+            fgColor: parsed.fgColor || '#ffff00'
         };
-        const hexColor = colorMap[color.toLowerCase()] || color;
+        if (parsed.bgColor) highlightAction.bgColor = parsed.bgColor;
+        if (parsed.underline) highlightAction.underline = true;
+        if (parsed.blink) highlightAction.blink = true;
 
         // Check if highlight already exists
         const existing = this.triggers.findIndex(t =>
@@ -6727,11 +7780,12 @@ class WMTClient {
         );
 
         if (existing >= 0) {
-            // Update existing
-            const action = this.triggers[existing].actions.find(a => a.type === 'highlight');
-            if (action) action.color = hexColor;
+            // Update existing — replace the highlight action
+            const actionIdx = this.triggers[existing].actions.findIndex(a => a.type === 'highlight');
+            if (actionIdx >= 0) this.triggers[existing].actions[actionIdx] = highlightAction;
             this.triggers[existing].matchType = 'tintin';
-            this.appendOutput(`Highlight updated: ${pattern} [${color}]`, 'system');
+            this.triggers[existing].priority = priority;
+            this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
         } else {
             // Create new with TinTin++ pattern matching
             this.triggers.push({
@@ -6739,17 +7793,18 @@ class WMTClient {
                 name: `Highlight: ${pattern.substring(0, 20)}`,
                 pattern: pattern,
                 matchType: 'tintin',
-                actions: [{ type: 'highlight', color: hexColor }],
+                actions: [highlightAction],
+                priority: priority,
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`Highlight created: ${pattern} [${color}]`, 'system');
+            this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
         }
 
         this.saveTriggers();
     }
 
-    // #unhighlight {pattern}
+    // #unhighlight {pattern} - Remove highlight(s) with wildcard support
     cmdUnhighlight(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unhighlight {pattern}', 'error');
@@ -6757,41 +7812,59 @@ class WMTClient {
         }
 
         const pattern = args[0];
-        const index = this.triggers.findIndex(t =>
-            t.pattern === pattern &&
-            t.actions?.some(a => a.type === 'highlight')
-        );
-
-        if (index >= 0) {
-            this.triggers.splice(index, 1);
-            this.appendOutput(`Highlight removed: ${pattern}`, 'system');
+        let removed = 0;
+        for (let i = this.triggers.length - 1; i >= 0; i--) {
+            if (this.triggers[i].actions?.some(a => a.type === 'highlight') &&
+                this.matchWild(this.triggers[i].pattern, pattern)) {
+                this.triggers.splice(i, 1);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} HIGHLIGHT${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
         } else {
-            this.appendOutput(`Highlight not found: ${pattern}`, 'error');
+            this.appendOutput(`#UNHIGHLIGHT: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
     // #substitute/#sub {pattern} {replacement} - Create substitute trigger (TinTin++ style)
     cmdSubstitute(args) {
-        if (args.length < 2) {
-            // List substitutes
-            const subs = this.triggers.filter(t => t.actions?.some(a => a.type === 'substitute'));
+        const subs = this.triggers.filter(t => t.actions?.some(a => a.type === 'substitute'));
+
+        if (args.length === 0) {
+            // No args: list all substitutes
             if (subs.length === 0) {
-                this.appendOutput('No substitutes defined.', 'system');
+                this.appendOutput('#SUBSTITUTE: no substitutes defined.', 'system');
             } else {
-                this.appendOutput('Substitutes:', 'system');
                 subs.forEach(s => {
                     const replacement = s.actions.find(a => a.type === 'substitute')?.replacement || '';
-                    const status = s.enabled === false ? ' [disabled]' : '';
-                    this.appendOutput(`  ${s.pattern} → ${replacement}${status}`, 'system');
+                    const pri = s.priority !== undefined ? s.priority : 5;
+                    this.appendOutput(`#SUBSTITUTE {${s.pattern}} {${replacement}} {${pri}}`, 'system');
                 });
             }
             return;
         }
 
-        // TinTin++ syntax: #sub {pattern} {replacement}
+        if (args.length === 1) {
+            // One arg: show matching substitutes (wildcard search)
+            const matching = subs.filter(s => this.matchWild(s.pattern, args[0]));
+            if (matching.length === 0) {
+                this.appendOutput(`#SUBSTITUTE: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
+            } else {
+                matching.forEach(s => {
+                    const replacement = s.actions.find(a => a.type === 'substitute')?.replacement || '';
+                    const pri = s.priority !== undefined ? s.priority : 5;
+                    this.appendOutput(`#SUBSTITUTE {${s.pattern}} {${replacement}} {${pri}}`, 'system');
+                });
+            }
+            return;
+        }
+
+        // Syntax: #sub {pattern} {replacement} {priority}
         const pattern = args[0];
         const replacement = args[1];
+        const priority = args[2] !== undefined ? parseFloat(args[2]) : 5;
 
         // Check if substitute already exists
         const existing = this.triggers.findIndex(t =>
@@ -6804,7 +7877,8 @@ class WMTClient {
             const action = this.triggers[existing].actions.find(a => a.type === 'substitute');
             if (action) action.replacement = replacement;
             this.triggers[existing].matchType = 'tintin';
-            this.appendOutput(`Substitute updated: ${pattern} → ${replacement}`, 'system');
+            this.triggers[existing].priority = priority;
+            this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
         } else {
             // Create new with TinTin++ pattern matching
             this.triggers.push({
@@ -6813,16 +7887,17 @@ class WMTClient {
                 pattern: pattern,
                 matchType: 'tintin',
                 actions: [{ type: 'substitute', replacement: replacement }],
+                priority: priority,
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`Substitute created: ${pattern} → ${replacement}`, 'system');
+            this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
         }
 
         this.saveTriggers();
     }
 
-    // #unsubstitute/#unsub {pattern}
+    // #unsubstitute/#unsub {pattern} - Remove substitute(s) with wildcard support
     cmdUnsubstitute(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unsub {pattern}', 'error');
@@ -6830,17 +7905,19 @@ class WMTClient {
         }
 
         const pattern = args[0];
-        const index = this.triggers.findIndex(t =>
-            t.pattern === pattern &&
-            t.actions?.some(a => a.type === 'substitute')
-        );
-
-        if (index >= 0) {
-            this.triggers.splice(index, 1);
-            this.appendOutput(`Substitute removed: ${pattern}`, 'system');
+        let removed = 0;
+        for (let i = this.triggers.length - 1; i >= 0; i--) {
+            if (this.triggers[i].actions?.some(a => a.type === 'substitute') &&
+                this.matchWild(this.triggers[i].pattern, pattern)) {
+                this.triggers.splice(i, 1);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            this.appendOutput(`#OK: ${removed} SUBSTITUTE${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
         } else {
-            this.appendOutput(`Substitute not found: ${pattern}`, 'error');
+            this.appendOutput(`#UNSUBSTITUTE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -6908,112 +7985,167 @@ class WMTClient {
         this.editingSubstituteIndex = null;
     }
 
+    // Parse brace-delimited list: "{a}{b}{c}" → ['a', 'b', 'c']
+    // Used for table creation syntax in #var and other TinTin++ commands
+    parseBraceList(str) {
+        const items = [];
+        let i = 0;
+        while (i < str.length) {
+            if (str[i] === '{') {
+                let depth = 1;
+                let start = i + 1;
+                i++;
+                while (i < str.length && depth > 0) {
+                    if (str[i] === '{') depth++;
+                    else if (str[i] === '}') depth--;
+                    i++;
+                }
+                items.push(str.substring(start, i - 1));
+            } else {
+                i++;
+            }
+        }
+        return items;
+    }
+
     // #var {name} {value} - Set a variable
-    // Supports nested syntax: #var hp[self] 34
+    // TinTin++ compliant: 0 args = list all, 1 arg = wildcard show, 2+ args = set
+    // Table creation: #var {name} {{key1}{val1}{key2}{val2}}
     cmdVar(args) {
         if (args.length < 1) {
-            // List all variables (recursive display for nested)
-            const vars = Object.keys(this.variables);
+            // List all variables in TinTin++ format
+            const vars = Object.keys(this.variables).sort();
             if (vars.length === 0) {
-                this.appendOutput('No variables defined.', 'system');
+                this.appendOutput('#VARIABLE: NO VARIABLES DEFINED.', 'system');
             } else {
-                this.appendOutput('Variables:', 'system');
                 vars.forEach(name => {
-                    this.displayVariable(name, this.variables[name], '  ');
+                    this.displayVariable(name, this.variables[name]);
                 });
             }
             return;
         }
 
-        const { name, keys } = this.parseVariableName(args[0]);
-
         if (args.length < 2) {
-            // Show single variable or variables matching prefix
+            // Wildcard show using matchWild
+            const pattern = args[0];
+            const { name, keys } = this.parseVariableName(pattern);
+
             if (keys.length > 0) {
-                // Showing nested variable
+                // Showing nested variable like hp[self]
                 const val = this.getNestedVariable(name, keys);
                 if (val !== undefined) {
-                    this.displayVariable(args[0], val, '');
+                    this.displayVariable(pattern, val);
                 } else {
-                    this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                    this.appendOutput(`#VARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
                 }
-            } else if (this.variables[name] !== undefined) {
-                this.displayVariable(name, this.variables[name], '');
             } else {
-                // Try prefix match (TinTin++ behavior)
-                const matches = Object.keys(this.variables).filter(v => v.startsWith(name));
+                const matches = Object.keys(this.variables).filter(v => this.matchWild(v, pattern)).sort();
                 if (matches.length > 0) {
-                    this.appendOutput(`Variables matching '${name}':`, 'system');
                     matches.forEach(v => {
-                        this.displayVariable(v, this.variables[v], '  ');
+                        this.displayVariable(v, this.variables[v]);
                     });
                 } else {
-                    this.appendOutput(`Variable not found: $${name}`, 'error');
+                    this.appendOutput(`#VARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
                 }
             }
             return;
         }
 
-        // Join all remaining args as the value (handles spaces in captured text)
-        const value = args.slice(1).join(' ');
+        const { name, keys } = this.parseVariableName(args[0]);
+
+        // Join all remaining args as the value
+        let value = args.slice(1).join(' ');
+
+        // Check for table creation syntax: {{key1}{val1}{key2}{val2}}
+        const trimmed = value.trim();
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            const inner = trimmed.substring(1, trimmed.length - 1);
+            // Check if inner content has brace pairs
+            if (inner.includes('{')) {
+                const pairs = this.parseBraceList(inner);
+                if (pairs.length >= 2 && pairs.length % 2 === 0) {
+                    // Create table from key/value pairs
+                    const table = {};
+                    for (let i = 0; i < pairs.length; i += 2) {
+                        table[pairs[i]] = pairs[i + 1];
+                    }
+                    this.setNestedVariable(name, keys, table);
+                    if (!this._silent) {
+                        const displayVal = this.formatVariableValue(table);
+                        this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO ${displayVal}.`, 'system');
+                    }
+                    return;
+                }
+            }
+        }
 
         // Set the variable (handles nested if keys present)
         this.setNestedVariable(name, keys, value);
-        // Silent - no confirmation message (TinTin++ behavior)
+        if (!this._silent) {
+            this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO {${value}}.`, 'system');
+        }
     }
 
-    // Display a variable value (handles nested objects)
-    displayVariable(name, value, indent) {
+    // Format a variable value for TinTin++ display
+    formatVariableValue(value) {
         if (typeof value === 'object' && value !== null) {
-            this.appendOutput(`${indent}$${name}:`, 'system');
-            Object.keys(value).forEach(key => {
-                this.displayVariable(`${name}[${key}]`, value[key], indent + '  ');
+            const parts = Object.entries(value).map(([k, v]) => {
+                return `{${k}}{${this.formatVariableValue(v)}}`;
             });
-        } else {
-            this.appendOutput(`${indent}$${name} = ${value}`, 'system');
+            return `{${parts.join('')}}`;
         }
+        return `{${value}}`;
+    }
+
+    // Display a variable in TinTin++ format: #VARIABLE {name} {value}
+    displayVariable(name, value) {
+        const displayVal = this.formatVariableValue(value);
+        this.appendOutput(`#VARIABLE {${name}} ${displayVal}`, 'system');
     }
 
     // #unvar {name} - Remove a variable
-    // Supports nested syntax: #unvar hp[self]
+    // TinTin++ compliant: 0 args = list all, 1 arg = wildcard delete
     cmdUnvar(args) {
         if (args.length < 1) {
-            this.appendOutput('Usage: #unvar {name}', 'error');
+            // Same as #var with 0 args - list all
+            this.cmdVar([]);
             return;
         }
 
-        const { name, keys } = this.parseVariableName(args[0]);
+        const pattern = args[0];
+        const { name, keys } = this.parseVariableName(pattern);
 
-        if (keys.length === 0) {
-            // Simple variable
-            if (this.variables[name] !== undefined) {
-                delete this.variables[name];
-                this.appendOutput(`Variable removed: $${name}`, 'system');
-            } else {
-                this.appendOutput(`Variable not found: $${name}`, 'error');
-            }
-        } else {
-            // Nested variable - navigate to parent and delete key
+        if (keys.length > 0) {
+            // Nested variable deletion
             let current = this.variables[name];
             if (current === undefined) {
-                this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
                 return;
             }
-
             for (let i = 0; i < keys.length - 1; i++) {
                 if (current === undefined || typeof current !== 'object') {
-                    this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                    this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
                     return;
                 }
                 current = current[keys[i]];
             }
-
             const lastKey = keys[keys.length - 1];
             if (current && typeof current === 'object' && current[lastKey] !== undefined) {
                 delete current[lastKey];
-                this.appendOutput(`Variable removed: $${args[0]}`, 'system');
+                this.syncVariablesToServer();
+                if (!this._silent) this.appendOutput('#OK: 1 VARIABLE(S) REMOVED.', 'system');
             } else {
-                this.appendOutput(`Variable not found: $${args[0]}`, 'error');
+                if (!this._silent) this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
+            }
+        } else {
+            // Wildcard deletion using matchWild
+            const matches = Object.keys(this.variables).filter(v => this.matchWild(v, pattern));
+            if (matches.length > 0) {
+                matches.forEach(v => delete this.variables[v]);
+                this.syncVariablesToServer();
+                if (!this._silent) this.appendOutput(`#OK: ${matches.length} VARIABLE(S) REMOVED.`, 'system');
+            } else {
+                if (!this._silent) this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
             }
         }
     }
@@ -7033,68 +8165,612 @@ class WMTClient {
         // Substitute variables in expression
         expression = this.substituteVariables(expression);
 
-        try {
-            const result = this.evaluateMathExpression(expression);
-            this.setNestedVariable(name, keys, result);
-            this.appendOutput(`#math: $${args[0]} = ${result}`, 'system');
-        } catch (e) {
-            this.appendOutput(`Math error: ${e.message}`, 'error');
+        const result = this.mathexp(expression);
+        const numResult = result.type === 'string' ? this.tintoi(result.str) : result.val;
+        this.setNestedVariable(name, keys, numResult);
+        if (!this._silent) {
+            this.appendOutput(`#math: $${args[0]} = ${numResult}`, 'system');
         }
     }
 
-    // Evaluate a TinTin++ math expression
-    // Supports: +, -, *, /, %, ** (power), // (roots), d (dice)
-    // Bitwise: ~, <<, >>, &, ^, |
-    // Logical: !, &&, ||, ^^ (xor)
-    // Comparison: <, >, <=, >=, ==, !=, ===, !==
-    // Ternary: ? :
-    evaluateMathExpression(expression) {
-        let expr = expression.trim();
+    // =========================================================================
+    // TinTin++ Math Expression Evaluator (ported from math.c)
+    //
+    // Tokenizer → linked-list → precedence-based evaluator.
+    // Replaces all regex/eval-based condition and math evaluation.
+    //
+    // Operator precedence (lower = tighter binding):
+    //  0  constants        7  & (bitwise AND)
+    //  1  d (dice)         8  ^ (bitwise XOR)
+    //  2  * / % ** //      9  | (bitwise OR)
+    //  3  + -             10  && (logical AND)
+    //  4  << >>           11  ^^ (logical XOR)
+    //  5  < > <= >=       12  || (logical OR)
+    //  6  == != === !==   13  ? : (ternary)
+    //                     14  values
+    // =========================================================================
 
-        // Handle TinTin++ style dice: 1d6, 2d10, etc. (must be done before other processing)
-        expr = expr.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
-            let total = 0;
-            const c = parseInt(count);
-            const s = parseInt(sides);
-            for (let i = 0; i < c; i++) {
-                total += Math.floor(Math.random() * s) + 1;
+    /**
+     * tintoi - convert string to number (matches TinTin++ tintoi)
+     * Supports time notation h:m:s and plain numbers.
+     */
+    tintoi(str) {
+        if (typeof str === 'number') return str;
+        if (!str || str.length === 0) return 0;
+        // Time notation: h:m:s or m:s
+        if (str.includes(':')) {
+            const parts = str.split(':').map(Number);
+            if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            if (parts.length === 2) return parts[0] * 60 + parts[1];
+        }
+        const n = Number(str);
+        return isNaN(n) ? 0 : n;
+    }
+
+    /**
+     * tincmp - literal comparison (matches TinTin++ tincmp)
+     * Strings: strcmp semantics (< 0, 0, > 0)
+     * Numbers: subtraction
+     * Type mismatch: returns 0
+     */
+    tincmp(left, right) {
+        if (left.type === 'string' && right.type === 'string') {
+            return left.str < right.str ? -1 : left.str > right.str ? 1 : 0;
+        }
+        if (left.type === 'number' && right.type === 'number') {
+            return left.val - right.val;
+        }
+        // Type mismatch
+        return 0;
+    }
+
+    /**
+     * tineval - regex comparison for strings, numeric for numbers (matches TinTin++ tineval)
+     * For == / !=: strings use wildcard matching, numbers use numeric equality
+     * Type mismatch: returns 0
+     */
+    tineval(left, right) {
+        if (left.type === 'string' && right.type === 'string') {
+            // TinTin++ uses match() which wraps pattern in \A...\Z anchors
+            // Convert TinTin++ wildcards: * → .*, ? → .
+            try {
+                const pattern = right.str
+                    .replace(/([.+^${}()|[\]\\])/g, '\\$1')  // escape regex special chars (not * or ?)
+                    .replace(/\*/g, '.*')     // * → .* (wildcard)
+                    .replace(/\?/g, '.');     // ? → . (single char)
+                const regex = new RegExp('^' + pattern + '$');
+                return regex.test(left.str) ? 1 : 0;
+            } catch (e) {
+                return left.str === right.str ? 1 : 0;
             }
-            return total.toString();
-        });
+        }
+        if (left.type === 'number' && right.type === 'number') {
+            return left.val === right.val ? 1 : 0;
+        }
+        // Type mismatch
+        return 0;
+    }
 
-        // Handle TinTin++ // operator for roots: //2 = sqrt, //3 = cbrt, //n = nth root
-        // Convert "number //n" to "Math.pow(number, 1/n)"
-        expr = expr.replace(/(\d+(?:\.\d+)?)\s*\/\/\s*(\d+)/g, (match, num, root) => {
-            return `Math.pow(${num}, 1/${root})`;
-        });
+    /**
+     * mathexpTokenize - tokenize expression string into array of nodes
+     * State machine alternating between expecting-value and expecting-operator.
+     * Returns array of nodes, or false on tokenization failure.
+     */
+    mathexpTokenize(str) {
+        const nodes = [];
+        let i = 0;
+        let level = 0;
+        let expectValue = true;  // Start expecting a value
+        let hasFloat = false;    // Track if any number has a decimal (TinTin++ precision)
 
-        // Handle ^^ (logical XOR) - convert to != for boolean context
-        expr = expr.replace(/\^\^/g, '!=');
+        while (i < str.length) {
+            // Skip whitespace
+            if (str[i] === ' ' || str[i] === '\t') {
+                i++;
+                continue;
+            }
 
-        // Validate expression - only allow safe characters
-        // Numbers, operators, parentheses, spaces, decimal points, Math functions
-        const safePattern = /^[\d\s+\-*/%<>=!&|^~?:().]+$|Math\.(pow|sqrt|abs|floor|ceil|round|min|max|random)/;
+            if (expectValue) {
+                // --- EXPECTING VALUE ---
 
-        // Remove string literals for validation (they're allowed in comparisons)
-        const exprNoStrings = expr.replace(/"[^"]*"|'[^']*'/g, '0');
+                // Number: digits and decimal point
+                if ((str[i] >= '0' && str[i] <= '9') || (str[i] === '.' && i + 1 < str.length && str[i + 1] >= '0' && str[i + 1] <= '9')) {
+                    let numStr = '';
+                    let hasDot = false;
+                    while (i < str.length && ((str[i] >= '0' && str[i] <= '9') || (str[i] === '.' && !hasDot))) {
+                        if (str[i] === '.') { hasDot = true; hasFloat = true; }
+                        numStr += str[i];
+                        i++;
+                    }
+                    nodes.push({ type: 'number', level, priority: 14, val: Number(numStr), str: numStr });
+                    expectValue = false;
+                    continue;
+                }
 
-        if (!safePattern.test(exprNoStrings) && !/^[\d\s+\-*/%<>=!&|^~?:()."']+$/.test(expr)) {
-            throw new Error('Invalid characters in expression');
+                // Quoted string: "..."
+                if (str[i] === '"') {
+                    i++; // skip opening quote
+                    let s = '';
+                    while (i < str.length && str[i] !== '"') {
+                        if (str[i] === '\\' && i + 1 < str.length) {
+                            s += str[i + 1];
+                            i += 2;
+                        } else {
+                            s += str[i];
+                            i++;
+                        }
+                    }
+                    if (i < str.length) i++; // skip closing quote
+                    nodes.push({ type: 'string', level, priority: 14, val: this.tintoi(s), str: s });
+                    expectValue = false;
+                    continue;
+                }
+
+                // Braced string: {...} (TinTin++ style)
+                if (str[i] === '{') {
+                    i++; // skip opening brace
+                    let s = '';
+                    let depth = 1;
+                    while (i < str.length && depth > 0) {
+                        if (str[i] === '{') depth++;
+                        else if (str[i] === '}') { depth--; if (depth === 0) break; }
+                        s += str[i];
+                        i++;
+                    }
+                    if (i < str.length) i++; // skip closing brace
+                    nodes.push({ type: 'string', level, priority: 14, val: this.tintoi(s), str: s });
+                    expectValue = false;
+                    continue;
+                }
+
+                // Open parenthesis
+                if (str[i] === '(') {
+                    level++;
+                    nodes.push({ type: 'paren', level, priority: 0, val: 0, str: '(' });
+                    i++;
+                    continue; // still expecting value
+                }
+
+                // Unary ! (logical NOT): insert "0 ==" so !x becomes 0 == x
+                if (str[i] === '!') {
+                    nodes.push({ type: 'number', level, priority: 14, val: 0, str: '0' });
+                    nodes.push({ type: 'operator', level, priority: 6, val: 0, str: '==' });
+                    i++;
+                    continue; // still expecting value
+                }
+
+                // Unary - (negate): insert "-1 *"
+                if (str[i] === '-') {
+                    nodes.push({ type: 'number', level, priority: 14, val: -1, str: '-1' });
+                    nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '*' });
+                    i++;
+                    continue; // still expecting value
+                }
+
+                // Unary ~ (bitwise NOT): insert "-1 -" so ~x becomes -1 - x
+                if (str[i] === '~') {
+                    nodes.push({ type: 'number', level, priority: 14, val: -1, str: '-1' });
+                    nodes.push({ type: 'operator', level, priority: 3, val: 0, str: '-' });
+                    i++;
+                    continue; // still expecting value
+                }
+
+                // Unary + (no-op)
+                if (str[i] === '+') {
+                    i++;
+                    continue; // still expecting value
+                }
+
+                // Unresolved $variable — tokenization failure
+                if (str[i] === '$') {
+                    return false;
+                }
+
+                // Unknown character in value position — skip
+                i++;
+
+            } else {
+                // --- EXPECTING OPERATOR ---
+
+                // Close parenthesis
+                if (str[i] === ')') {
+                    nodes.push({ type: 'paren', level, priority: 0, val: 0, str: ')' });
+                    level--;
+                    i++;
+                    continue; // still expecting operator
+                }
+
+                // Two-character operators (check first)
+                if (i + 1 < str.length) {
+                    const two = str[i] + str[i + 1];
+                    // Three-character operators
+                    if (i + 2 < str.length) {
+                        const three = str[i] + str[i + 1] + str[i + 2];
+                        if (three === '===' || three === '!==') {
+                            nodes.push({ type: 'operator', level, priority: 6, val: 0, str: three });
+                            i += 3;
+                            expectValue = true;
+                            continue;
+                        }
+                    }
+                    if (two === '**') {
+                        nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '**' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '//') {
+                        nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '//' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '<<') {
+                        nodes.push({ type: 'operator', level, priority: 4, val: 0, str: '<<' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '>>') {
+                        nodes.push({ type: 'operator', level, priority: 4, val: 0, str: '>>' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '<=') {
+                        nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '<=' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '>=') {
+                        nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '>=' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '==') {
+                        nodes.push({ type: 'operator', level, priority: 6, val: 0, str: '==' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '!=') {
+                        nodes.push({ type: 'operator', level, priority: 6, val: 0, str: '!=' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '&&') {
+                        nodes.push({ type: 'operator', level, priority: 10, val: 0, str: '&&' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '||') {
+                        nodes.push({ type: 'operator', level, priority: 12, val: 0, str: '||' });
+                        i += 2; expectValue = true; continue;
+                    }
+                    if (two === '^^') {
+                        nodes.push({ type: 'operator', level, priority: 11, val: 0, str: '^^' });
+                        i += 2; expectValue = true; continue;
+                    }
+                }
+
+                // Single-character operators
+                if (str[i] === '*') {
+                    nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '*' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '/') {
+                    nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '/' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '%') {
+                    nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '%' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '+') {
+                    nodes.push({ type: 'operator', level, priority: 3, val: 0, str: '+' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '-') {
+                    nodes.push({ type: 'operator', level, priority: 3, val: 0, str: '-' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '<') {
+                    nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '<' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '>') {
+                    nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '>' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '&') {
+                    nodes.push({ type: 'operator', level, priority: 7, val: 0, str: '&' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '^') {
+                    nodes.push({ type: 'operator', level, priority: 8, val: 0, str: '^' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '|') {
+                    nodes.push({ type: 'operator', level, priority: 9, val: 0, str: '|' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === '?') {
+                    nodes.push({ type: 'operator', level, priority: 13, val: 0, str: '?' });
+                    i++; expectValue = true; continue;
+                }
+                if (str[i] === ':') {
+                    nodes.push({ type: 'operator', level, priority: 13, val: 0, str: ':' });
+                    i++; expectValue = true; continue;
+                }
+
+                // Dice operator: d (only if followed by digit)
+                if ((str[i] === 'd' || str[i] === 'D') && i + 1 < str.length && str[i + 1] >= '0' && str[i + 1] <= '9') {
+                    nodes.push({ type: 'operator', level, priority: 1, val: 0, str: 'd' });
+                    i++; expectValue = true; continue;
+                }
+
+                // SI suffixes: multiply previous number
+                const siChar = str[i];
+                if ('KMGTmunp'.includes(siChar) && nodes.length > 0 && nodes[nodes.length - 1].type === 'number') {
+                    const prev = nodes[nodes.length - 1];
+                    const siMap = { K: 1e3, M: 1e6, G: 1e9, T: 1e12, m: 1e-3, u: 1e-6, n: 1e-9, p: 1e-12 };
+                    if (siMap[siChar]) {
+                        prev.val *= siMap[siChar];
+                        i++;
+                        continue; // still expecting operator
+                    }
+                }
+
+                // Unknown character — skip
+                i++;
+            }
         }
 
-        // Prevent dangerous patterns
-        if (/\b(function|eval|require|import|window|document|fetch|XMLHttp)\b/i.test(expr)) {
-            throw new Error('Invalid expression');
+        if (nodes.length === 0) return false;
+        nodes.hasFloat = hasFloat;  // TinTin++ precision: integer division when no decimals
+        return nodes;
+    }
+
+    /**
+     * mathexpCompute - evaluate one operator at nodes[idx], splice result in place
+     * nodes[idx-1] = left, nodes[idx] = operator, nodes[idx+1] = right
+     */
+    mathexpCompute(nodes, idx) {
+        const op = nodes[idx];
+        const left = nodes[idx - 1];
+        const right = nodes[idx + 1];
+
+        if (!left || !right) return; // safety
+
+        let result = { type: 'number', level: op.level, priority: 14, val: 0, str: '' };
+        const lv = left.val;
+        const rv = right.val;
+
+        switch (op.str) {
+            // Arithmetic
+            case '+':
+                if (left.type === 'string' || right.type === 'string') {
+                    result.type = 'string';
+                    result.str = (left.type === 'string' ? left.str : String(left.val)) +
+                                 (right.type === 'string' ? right.str : String(right.val));
+                    result.val = this.tintoi(result.str);
+                } else {
+                    result.val = lv + rv;
+                }
+                break;
+            case '-':
+                result.val = lv - rv;
+                break;
+            case '*':
+                result.val = lv * rv;
+                break;
+            case '/':
+                // TinTin++: integer division when no decimals in expression
+                result.val = rv !== 0 ? (this._mathexpFloat ? lv / rv : Math.trunc(lv / rv)) : 0;
+                break;
+            case '%':
+                result.val = rv !== 0 ? (this._mathexpFloat ? lv % rv : Math.trunc(lv) % Math.trunc(rv)) : 0;
+                break;
+            case '**':
+                result.val = Math.pow(lv, rv);
+                break;
+            case '//':
+                result.val = rv !== 0 ? Math.pow(lv, 1 / rv) : 0;
+                break;
+
+            // Bitwise shifts
+            case '<<':
+                result.val = Math.trunc(lv) << Math.trunc(rv);
+                break;
+            case '>>':
+                result.val = Math.trunc(lv) >> Math.trunc(rv);
+                break;
+
+            // Comparison (literal via tincmp)
+            case '<':
+                result.val = this.tincmp(left, right) < 0 ? 1 : 0;
+                break;
+            case '>':
+                result.val = this.tincmp(left, right) > 0 ? 1 : 0;
+                break;
+            case '<=':
+                result.val = this.tincmp(left, right) <= 0 ? 1 : 0;
+                break;
+            case '>=':
+                result.val = this.tincmp(left, right) >= 0 ? 1 : 0;
+                break;
+
+            // Equality (regex for strings via tineval)
+            case '==':
+                result.val = this.tineval(left, right) ? 1 : 0;
+                break;
+            case '!=':
+                result.val = this.tineval(left, right) ? 0 : 1;
+                break;
+
+            // Strict equality (literal via tincmp)
+            case '===':
+                result.val = this.tincmp(left, right) === 0 ? 1 : 0;
+                break;
+            case '!==':
+                result.val = this.tincmp(left, right) !== 0 ? 1 : 0;
+                break;
+
+            // Bitwise
+            case '&':
+                result.val = Math.trunc(lv) & Math.trunc(rv);
+                break;
+            case '^':
+                result.val = Math.trunc(lv) ^ Math.trunc(rv);
+                break;
+            case '|':
+                result.val = Math.trunc(lv) | Math.trunc(rv);
+                break;
+
+            // Logical
+            case '&&':
+                result.val = (lv !== 0 && rv !== 0) ? 1 : 0;
+                break;
+            case '||':
+                result.val = (lv !== 0 || rv !== 0) ? 1 : 0;
+                break;
+            case '^^':
+                result.val = ((lv !== 0) !== (rv !== 0)) ? 1 : 0;
+                break;
+
+            // Dice
+            case 'd': {
+                let total = 0;
+                const count = Math.max(1, Math.trunc(lv));
+                const sides = Math.max(1, Math.trunc(rv));
+                for (let r = 0; r < count; r++) {
+                    total += Math.floor(Math.random() * sides) + 1;
+                }
+                result.val = total;
+                break;
+            }
+
+            // Ternary: ? finds the matching : and picks left or right
+            case '?': {
+                // Find the matching : node after idx+1
+                let colonIdx = -1;
+                for (let j = idx + 2; j < nodes.length; j++) {
+                    if (nodes[j].type === 'operator' && nodes[j].str === ':' && nodes[j].level === op.level) {
+                        colonIdx = j;
+                        break;
+                    }
+                }
+                if (colonIdx !== -1 && colonIdx + 1 < nodes.length) {
+                    const falseNode = nodes[colonIdx + 1];
+                    if (lv !== 0) {
+                        result = { ...right, level: op.level, priority: 14 };
+                    } else {
+                        result = { ...falseNode, level: op.level, priority: 14 };
+                    }
+                    // Remove extra nodes: the : operator and false-branch value
+                    nodes.splice(colonIdx, 2);
+                } else {
+                    // No : found, just return the true branch
+                    result = lv !== 0 ? { ...right, level: op.level, priority: 14 } : { type: 'number', level: op.level, priority: 14, val: 0, str: '' };
+                }
+                break;
+            }
+
+            // : alone (shouldn't happen if ? handled it, but safety)
+            case ':':
+                result = { ...right, level: op.level, priority: 14 };
+                break;
         }
 
-        // eslint-disable-next-line no-eval
-        const result = eval(expr);
+        // Splice: replace [left, op, right] with result
+        nodes.splice(idx - 1, 3, result);
+    }
 
-        // Return number or boolean as appropriate
-        if (typeof result === 'boolean') {
-            return result ? 1 : 0;
+    /**
+     * mathexpLevel - evaluate all operators within a parenthesis level
+     * Walks by ascending priority (tightest binding first).
+     */
+    mathexpLevel(nodes, startIdx, endIdx) {
+        // Evaluate operators by priority: 0 (tightest) to 13 (loosest)
+        for (let pri = 0; pri <= 13; pri++) {
+            let j = startIdx;
+            while (j <= endIdx && j < nodes.length) {
+                const node = nodes[j];
+                if (node.type === 'operator' && node.priority === pri) {
+                    this.mathexpCompute(nodes, j);
+                    // After splice, the result is at j-1, and endIdx shrinks by 2
+                    endIdx -= 2;
+                    // Don't increment j — next operator might be at same position
+                } else {
+                    j++;
+                }
+            }
         }
-        return result;
+    }
+
+    /**
+     * mathexp - main entry point for TinTin++ expression evaluation
+     * Takes a pre-substituted expression string.
+     * Returns { val, str, type } result node.
+     */
+    mathexp(str) {
+        if (!str || typeof str !== 'string') {
+            return { val: 0, str: '', type: 'number' };
+        }
+
+        const nodes = this.mathexpTokenize(str.trim());
+
+        if (!nodes || nodes.length === 0) {
+            return { val: 0, str: '', type: 'number' };
+        }
+
+        // TinTin++ precision: integer math when no decimals in expression
+        this._mathexpFloat = nodes.hasFloat || false;
+
+        // Process from deepest parenthesis level outward
+        let maxLevel = 0;
+        for (const n of nodes) {
+            if (n.level > maxLevel) maxLevel = n.level;
+        }
+
+        for (let lev = maxLevel; lev >= 0; lev--) {
+            // Find the range of nodes at this level
+            let start = -1;
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i].type === 'paren' && nodes[i].str === '(' && nodes[i].level === lev) {
+                    start = i;
+                } else if (nodes[i].type === 'paren' && nodes[i].str === ')' && nodes[i].level === lev) {
+                    // Evaluate operators between start paren and this close paren
+                    if (start !== -1) {
+                        this.mathexpLevel(nodes, start + 1, i - 1);
+                        // After evaluation, remove the paren nodes
+                        // Find updated positions
+                        let openIdx = -1, closeIdx = -1;
+                        for (let k = 0; k < nodes.length; k++) {
+                            if (nodes[k].type === 'paren' && nodes[k].str === '(' && nodes[k].level === lev) {
+                                openIdx = k;
+                            }
+                            if (nodes[k].type === 'paren' && nodes[k].str === ')' && nodes[k].level === lev) {
+                                closeIdx = k;
+                                break;
+                            }
+                        }
+                        if (openIdx !== -1 && closeIdx !== -1) {
+                            nodes.splice(closeIdx, 1);
+                            nodes.splice(openIdx, 1);
+                        }
+                        start = -1;
+                        // Restart scanning this level
+                        i = -1;
+                    }
+                }
+            }
+
+            // Evaluate any remaining operators at this level (not inside parens)
+            // Find range of nodes at this level
+            let rangeStart = -1, rangeEnd = -1;
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i].level === lev) {
+                    if (rangeStart === -1) rangeStart = i;
+                    rangeEnd = i;
+                }
+            }
+            if (rangeStart !== -1) {
+                this.mathexpLevel(nodes, rangeStart, rangeEnd);
+            }
+        }
+
+        // Should be one node left
+        if (nodes.length > 0) {
+            return nodes[0];
+        }
+        return { val: 0, str: '', type: 'number' };
     }
 
     /**
@@ -7172,12 +8848,17 @@ class WMTClient {
                     }
 
                     const groupStart = nonCapturing ? '(?:' : '(';
+                    // TinTin++: wildcards are non-greedy when more pattern follows,
+                    // greedy only at end of pattern (matches tintin_regexp in regex.c)
+                    const advanceBy = nonCapturing ? 3 : 2;
+                    const atEnd = (i + advanceBy >= pattern.length);
+                    const lazy = atEnd ? '' : '?';
 
                     if (next === '*') {
-                        result += groupStart + '.*)';
+                        result += groupStart + '.*' + lazy + ')';
                         i += 2;
                     } else if (next === '+') {
-                        result += groupStart + '.+)';
+                        result += groupStart + '.+' + lazy + ')';
                         i += 2;
                     } else if (next === '?') {
                         result += groupStart + '.?)';
@@ -7186,28 +8867,28 @@ class WMTClient {
                         result += groupStart + '.)';
                         i += 2;
                     } else if (next === 'd') {
-                        result += groupStart + '[0-9]*)';
+                        result += groupStart + '[0-9]*' + lazy + ')';
                         i += 2;
                     } else if (next === 'D') {
-                        result += groupStart + '[^0-9]*)';
+                        result += groupStart + '[^0-9]*' + lazy + ')';
                         i += 2;
                     } else if (next === 'w') {
-                        result += groupStart + '[A-Za-z0-9_]*)';
+                        result += groupStart + '[A-Za-z0-9_]*' + lazy + ')';
                         i += 2;
                     } else if (next === 'W') {
-                        result += groupStart + '[^A-Za-z0-9_]*)';
+                        result += groupStart + '[^A-Za-z0-9_]*' + lazy + ')';
                         i += 2;
                     } else if (next === 's') {
-                        result += groupStart + '\\s*)';
+                        result += groupStart + '\\s*' + lazy + ')';
                         i += 2;
                     } else if (next === 'S') {
-                        result += groupStart + '\\S*)';
+                        result += groupStart + '\\S*' + lazy + ')';
                         i += 2;
                     } else if (next === 'a') {
-                        result += groupStart + '[\\s\\S]*)';
+                        result += groupStart + '[\\s\\S]*' + lazy + ')';
                         i += 2;
                     } else if (next === 'A') {
-                        result += groupStart + '[\\r\\n]*)';
+                        result += groupStart + '[\\r\\n]*' + lazy + ')';
                         i += 2;
                     } else if (next === 'i' || next === 'I') {
                         i += 2;
@@ -7216,7 +8897,8 @@ class WMTClient {
                         while (j < pattern.length && pattern[j] >= '0' && pattern[j] <= '9') {
                             j++;
                         }
-                        result += '(.*)';
+                        const numAtEnd = (j >= pattern.length);
+                        result += '(.*' + (numAtEnd ? '' : '?') + ')';
                         i = j;
                     } else {
                         result += '%';
@@ -7259,7 +8941,7 @@ class WMTClient {
 
     // #regexp {string} {expression} {true_commands} {false_commands}
     // Also aliased as #regex
-    cmdRegexp(args) {
+    async cmdRegexp(args) {
         if (args.length < 3) {
             this.appendOutput('Usage: #regexp {string} {expression} {true_cmds} {false_cmds}', 'error');
             return;
@@ -7280,10 +8962,10 @@ class WMTClient {
             if (match) {
                 // Substitute &0, &1, etc. with captured groups
                 const cmd = this.substituteRegexpVars(trueCmd, match);
-                // Execute the command(s)
-                this.executeCommandString(cmd);
+                // Execute the command(s) - await to ensure variables are set before next command
+                await this.executeCommandString(cmd);
             } else if (falseCmd) {
-                this.executeCommandString(falseCmd);
+                await this.executeCommandString(falseCmd);
             }
         } catch (e) {
             this.appendOutput(`Regexp error: ${e.message}`, 'error');
@@ -7291,7 +8973,7 @@ class WMTClient {
     }
 
     // #if {condition} {true_commands} [#elseif {cond} {cmds}] [#else {cmds}]
-    cmdIf(args, rest) {
+    async cmdIf(args, rest) {
         if (args.length < 2) {
             this.appendOutput('Usage: #if {condition} {commands}', 'error');
             return;
@@ -7309,6 +8991,12 @@ class WMTClient {
                 const char = str[i];
                 if (char === '{') {
                     if (depth === 0) {
+                        // TinTin++ positional else: #if {cond} {true} {false}
+                        // Third brace group without #else keyword = implicit else
+                        if (state === 'between') {
+                            current.condition = '1';
+                            state = 'commands';
+                        }
                         depth++;
                         continue;
                     }
@@ -7346,7 +9034,7 @@ class WMTClient {
                         const match = remaining.match(/^#else\s*/);
                         if (match) {
                             i += match[0].length - 1;
-                            current.condition = 'true'; // else always runs
+                            current.condition = '1'; // else always runs
                             state = 'commands';
                         }
                     }
@@ -7360,7 +9048,7 @@ class WMTClient {
             // Simple case - just use args
             chain.push({ condition: args[0], commands: args[1] });
             if (args.length >= 3) {
-                chain.push({ condition: 'true', commands: args[2] });
+                chain.push({ condition: '1', commands: args[2] });
             }
         }
 
@@ -7368,20 +9056,15 @@ class WMTClient {
         for (const part of chain) {
             if (this.evaluateCondition(part.condition)) {
                 // Execute the commands
-                this.executeCommandString(part.commands);
+                await this.executeCommandString(part.commands);
                 return;
             }
         }
     }
 
     /**
-     * Evaluate a TinTin++ style condition
-     *
-     * String comparison (quoted): #if {"$var" == "value"} or {"$var" == "{pat1|pat2}"}
-     * Numeric comparison (unquoted): #if {$var > 5000}
-     *
-     * Operators: == != < > <= >= === !== && || ^^ !
-     * Regex matching: == and != can use {pattern|alt} syntax when comparing strings
+     * Evaluate a TinTin++ style condition using mathexp evaluator.
+     * Takes condition string, returns boolean.
      */
     evaluateCondition(condition) {
         if (!condition) return false;
@@ -7389,222 +9072,29 @@ class WMTClient {
         // Substitute variables first
         let cond = this.substituteVariables(condition);
 
+        // Debug trace for #if evaluation
+        const debugIf = this.preferences?.debugIf;
+        if (debugIf) {
+            console.log(`[#if] raw: ${condition}`);
+            console.log(`[#if] sub: ${cond}`);
+            this.appendOutput(`[#if] ${cond}`, 'system');
+        }
+
         // Replace word-based logical operators
         cond = cond.replace(/\band\b/gi, '&&');
         cond = cond.replace(/\bor\b/gi, '||');
         cond = cond.replace(/\bxor\b/gi, '^^');
         cond = cond.replace(/\bnot\b/gi, '!');
 
-        // Try to evaluate as a simple comparison first
-        const result = this.evaluateSimpleCondition(cond);
-        if (result !== null) return result;
+        const result = this.mathexp(cond);
+        const boolResult = result.type === 'string' ? result.str.length > 0 : result.val !== 0;
 
-        // Try compound conditions with && || ^^
-        // Split by logical operators while respecting quotes
-        const parts = this.splitConditionByLogic(cond);
-        if (parts) {
-            return this.evaluateCompoundCondition(parts);
+        if (debugIf) {
+            console.log(`[#if] mathexp → type=${result.type} val=${result.val} str="${result.str}" → ${boolResult}`);
+            if (boolResult) this.appendOutput(`[#if] → TRUE`, 'system');
         }
 
-        // Fallback: try direct eval for simple numeric expressions
-        try {
-            // Only allow safe characters
-            const safeExpr = cond.replace(/[^0-9+\-*/%().&|^!<>=\s]/g, '');
-            if (safeExpr.trim()) {
-                // eslint-disable-next-line no-eval
-                return !!eval(safeExpr);
-            }
-        } catch (e) {
-            // Ignore eval errors
-        }
-
-        return false;
-    }
-
-    /**
-     * Evaluate a simple comparison (no && || ^^)
-     * Returns null if not a simple comparison
-     */
-    evaluateSimpleCondition(cond) {
-        cond = cond.trim();
-
-        // Check for negation
-        if (cond.startsWith('!') && !cond.startsWith('!=') && !cond.startsWith('!==')) {
-            const inner = cond.substring(1).trim();
-            // Remove parentheses if present
-            const innerCond = inner.startsWith('(') && inner.endsWith(')')
-                ? inner.slice(1, -1)
-                : inner;
-            const result = this.evaluateCondition(innerCond);
-            return !result;
-        }
-
-        // Match comparison: "string" op "string" or number op number
-        // Regex to capture: left side, operator, right side
-        // Supports both quoted strings and unquoted values
-        const comparisonMatch = cond.match(
-            /^(["'].*?["']|\S+)\s*(===|!==|==|!=|<=|>=|<|>)\s*(["'].*?["']|\S+)$/
-        );
-
-        if (comparisonMatch) {
-            let [, leftRaw, op, rightRaw] = comparisonMatch;
-
-            // Extract values, removing quotes if present
-            const isLeftQuoted = /^["']/.test(leftRaw);
-            const isRightQuoted = /^["']/.test(rightRaw);
-            const left = isLeftQuoted ? leftRaw.slice(1, -1) : leftRaw;
-            const right = isRightQuoted ? rightRaw.slice(1, -1) : rightRaw;
-
-            // Determine if this is a string or numeric comparison
-            // Quoted = string, Unquoted with valid number = numeric
-            const leftNum = parseFloat(left);
-            const rightNum = parseFloat(right);
-            const isNumeric = !isLeftQuoted && !isRightQuoted && !isNaN(leftNum) && !isNaN(rightNum);
-
-            // For == and != with strings, check if right side is a regex pattern {a|b}
-            const canUseRegex = (op === '==' || op === '!=') && (isLeftQuoted || isRightQuoted);
-            const isRegexPattern = canUseRegex && /^\{.*\}$/.test(right);
-
-            switch (op) {
-                case '===':
-                    // Strict equal - never regex
-                    return isNumeric ? leftNum === rightNum : left === right;
-                case '!==':
-                    // Strict not equal - never regex
-                    return isNumeric ? leftNum !== rightNum : left !== right;
-                case '==':
-                    if (isRegexPattern) {
-                        // Convert {a|b|c} to regex (a|b|c) - case-sensitive
-                        const pattern = right.slice(1, -1);
-                        try {
-                            const regex = new RegExp(`^(${pattern})$`);
-                            return regex.test(left);
-                        } catch (e) {
-                            return left === right;
-                        }
-                    }
-                    return isNumeric ? leftNum === rightNum : left === right;
-                case '!=':
-                    if (isRegexPattern) {
-                        const pattern = right.slice(1, -1);
-                        try {
-                            const regex = new RegExp(`^(${pattern})$`);
-                            return !regex.test(left);
-                        } catch (e) {
-                            return left !== right;
-                        }
-                    }
-                    return isNumeric ? leftNum !== rightNum : left !== right;
-                case '<':
-                    return isNumeric ? leftNum < rightNum : left < right;
-                case '>':
-                    return isNumeric ? leftNum > rightNum : left > right;
-                case '<=':
-                    return isNumeric ? leftNum <= rightNum : left <= right;
-                case '>=':
-                    return isNumeric ? leftNum >= rightNum : left >= right;
-            }
-        }
-
-        // Check for simple truthy value (non-zero number or non-empty string)
-        const num = parseFloat(cond);
-        if (!isNaN(num)) {
-            return num !== 0;
-        }
-
-        // Non-empty string is truthy
-        return cond.length > 0 && cond !== '0' && cond.toLowerCase() !== 'false';
-    }
-
-    /**
-     * Split condition by && || ^^ while respecting quotes and parentheses
-     */
-    splitConditionByLogic(cond) {
-        const parts = [];
-        let current = '';
-        let depth = 0;
-        let inQuote = null;
-        let lastOp = null;
-
-        for (let i = 0; i < cond.length; i++) {
-            const char = cond[i];
-            const next = cond[i + 1];
-
-            // Track quotes
-            if ((char === '"' || char === "'") && cond[i - 1] !== '\\') {
-                if (inQuote === char) {
-                    inQuote = null;
-                } else if (!inQuote) {
-                    inQuote = char;
-                }
-            }
-
-            // Track parentheses depth
-            if (!inQuote) {
-                if (char === '(' || char === '{') depth++;
-                if (char === ')' || char === '}') depth--;
-            }
-
-            // Check for logical operators at depth 0, outside quotes
-            if (depth === 0 && !inQuote) {
-                if (char === '&' && next === '&') {
-                    parts.push({ value: current.trim(), op: lastOp });
-                    lastOp = '&&';
-                    current = '';
-                    i++; // Skip next &
-                    continue;
-                }
-                if (char === '|' && next === '|') {
-                    parts.push({ value: current.trim(), op: lastOp });
-                    lastOp = '||';
-                    current = '';
-                    i++; // Skip next |
-                    continue;
-                }
-                if (char === '^' && next === '^') {
-                    parts.push({ value: current.trim(), op: lastOp });
-                    lastOp = '^^';
-                    current = '';
-                    i++; // Skip next ^
-                    continue;
-                }
-            }
-
-            current += char;
-        }
-
-        if (current.trim()) {
-            parts.push({ value: current.trim(), op: lastOp });
-        }
-
-        return parts.length > 1 ? parts : null;
-    }
-
-    /**
-     * Evaluate compound condition with && || ^^
-     */
-    evaluateCompoundCondition(parts) {
-        let result = this.evaluateCondition(parts[0].value);
-
-        for (let i = 1; i < parts.length; i++) {
-            const part = parts[i];
-            const partResult = this.evaluateCondition(part.value);
-
-            switch (part.op) {
-                case '&&':
-                    result = result && partResult;
-                    break;
-                case '||':
-                    result = result || partResult;
-                    break;
-                case '^^':
-                    // XOR: true if exactly one is true
-                    result = (result && !partResult) || (!result && partResult);
-                    break;
-            }
-        }
-
-        return result;
+        return boolResult;
     }
 
     // Process TinTin++ escape sequences in a string
@@ -7652,6 +9142,10 @@ class WMTClient {
     substituteVariables(str) {
         if (!str) return str;
 
+        // Handle $$ escape → literal $ (TinTin++ behavior)
+        const DOLLAR_PLACEHOLDER = '\x00DOLLAR\x00';
+        str = str.replace(/\$\$/g, DOLLAR_PLACEHOLDER);
+
         // First handle @function{args} calls
         // Match @name{args} where args can contain nested braces
         let maxIterations = 10; // Prevent infinite loops from nested function calls
@@ -7686,35 +9180,46 @@ class WMTClient {
             return name;
         });
 
-        // Handle ${variable} brace-delimited syntax (disambiguation)
+        // Handle ${variable} and ${variable[key][subkey]} brace-delimited syntax
         // Must come before $var[key] handling so ${hpmax}[literal] isn't misread as $hpmax[key]
-        str = str.replace(/\$\{(\w+)\}/g, (match, name) => {
+        str = str.replace(/\$\{(\w+)((?:\[[^\]]*\])*)\}/g, (match, name, brackets) => {
+            // Look up base value from local scopes first, then globals
+            let val;
             for (let i = this.localScopes.length - 1; i >= 0; i--) {
                 if (name in this.localScopes[i]) {
-                    const val = this.localScopes[i][name];
-                    if (typeof val === 'object') return JSON.stringify(val);
-                    return String(val);
+                    val = this.localScopes[i][name];
+                    break;
                 }
             }
-            if (this.variables[name] !== undefined) {
-                const val = this.variables[name];
-                if (typeof val === 'object') return JSON.stringify(val);
-                return String(val);
+            if (val === undefined && this.variables[name] !== undefined) {
+                val = this.variables[name];
             }
-            if (this.mipVars[name] !== undefined) {
-                return String(this.mipVars[name]);
+            if (val === undefined) return match;
+
+            // If brackets present, navigate nested keys
+            if (brackets) {
+                const keys = [];
+                const keyRegex = /\[([^\]]*)\]/g;
+                let keyMatch;
+                while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+                    keys.push(keyMatch[1]);
+                }
+                for (const key of keys) {
+                    if (val === undefined || val === null || typeof val !== 'object') return '';
+                    val = val[key];
+                }
             }
-            return match;
+
+            if (val === undefined) return '';
+            if (typeof val === 'object') return JSON.stringify(val);
+            return String(val);
         });
 
         // Handle $variable[key] and $variable[key][subkey] patterns
         // This regex matches $varname followed by one or more [key] brackets
         str = str.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
             let val = this.variables[name];
-            if (val === undefined) {
-                // Try MIP variables
-                val = this.mipVars[name];
-            }
+            // MIP variables not resolved here (namespace collision prevention)
             if (val === undefined) return match;
 
             // Parse the bracket keys
@@ -7790,12 +9295,14 @@ class WMTClient {
                 if (typeof val === 'object') return JSON.stringify(val);
                 return String(val);  // Ensure string return for replace
             }
-            // Finally check MIP variables
-            if (this.mipVars[name] !== undefined) {
-                return String(this.mipVars[name]);  // Ensure string return
-            }
+            // MIP variables are NOT resolved here to prevent namespace collision
+            // (e.g., MIP's $enemy=0 overriding TinTin++ $enemy="none")
+            // MIP conditions use their own evaluation path via mipVars directly
             return match;
         });
+
+        // Restore $$ escapes → literal $
+        str = str.replace(/\x00DOLLAR\x00/g, '$');
 
         return str;
     }
@@ -7809,6 +9316,7 @@ class WMTClient {
             this.fireEvent('VARIABLE_UPDATE', name);
             this._firingVariableEvent = false;
         }
+        this.syncVariablesToServer();
     }
 
     // Get a simple variable
@@ -7845,6 +9353,7 @@ class WMTClient {
             this.fireEvent('VARIABLE_UPDATE', name);
             this._firingVariableEvent = false;
         }
+        this.syncVariablesToServer();
     }
 
     // Get a nested variable value
@@ -7859,6 +9368,16 @@ class WMTClient {
             val = val[key];
         }
         return val;
+    }
+
+    // Debounced sync of variables to server (prevents flooding during loops)
+    syncVariablesToServer() {
+        if (this._varSyncTimer) clearTimeout(this._varSyncTimer);
+        this._varSyncTimer = setTimeout(() => {
+            if (this.connection) {
+                this.connection.setVariables(this.variables);
+            }
+        }, 100);
     }
 
     // Parse variable name with optional bracket keys
@@ -8300,7 +9819,7 @@ class WMTClient {
     cmdList(args, rest) {
         if (args.length < 2) {
             this.appendOutput('Usage: #list {variable} {option} [argument]', 'error');
-            this.appendOutput('Options: add, clear, create, delete, find, get, insert, set, size, sort, reverse, shuffle', 'system');
+            this.appendOutput('Options: add, clear, copy, create, delete, explode, filter, find, get, indexate, insert, numerate, order, reverse, set, shuffle, simplify, size, sort, swap, tokenize', 'system');
             return;
         }
 
@@ -8566,10 +10085,102 @@ class WMTClient {
                 break;
             }
 
+            case 'copy': {
+                // #list {dst} copy {src} - Deep copy one list variable to another
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {dst} copy {src}', 'error');
+                    return;
+                }
+                const srcName = args[2];
+                const srcVal = this.variables[srcName];
+                if (srcVal === undefined) {
+                    this.appendOutput(`#LIST: VARIABLE {${srcName}} NOT FOUND.`, 'error');
+                    return;
+                }
+                this.variables[varName] = JSON.parse(JSON.stringify(srcVal));
+                break;
+            }
+
+            case 'filter': {
+                // #list {var} filter {pattern} {result} - Find all matching items
+                if (args.length < 4) {
+                    this.appendOutput('Usage: #list {var} filter {pattern} {result_var}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const pattern = this.substituteVariables(args[2]);
+                const resultVar = args[3];
+                const indices = [];
+                arr.forEach((item, idx) => {
+                    if (this.matchWild(String(item), pattern)) {
+                        indices.push(idx + 1); // 1-based
+                    }
+                });
+                this.variables[resultVar] = fromArray(indices);
+                break;
+            }
+
+            case 'swap': {
+                // #list {var} swap {idx1} {idx2} - Swap two elements
+                if (args.length < 4) {
+                    this.appendOutput('Usage: #list {var} swap {idx1} {idx2}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const idx1 = resolveIndex(args[2], arr.length);
+                const idx2 = resolveIndex(args[3], arr.length);
+                if (idx1 >= 0 && idx1 < arr.length && idx2 >= 0 && idx2 < arr.length) {
+                    [arr[idx1], arr[idx2]] = [arr[idx2], arr[idx1]];
+                    this.variables[varName] = fromArray(arr);
+                }
+                break;
+            }
+
+            case 'indexate': {
+                // #list {var} indexate - Re-index to 1..N (repair key gaps)
+                const list = ensureList();
+                const arr = toArray(list);
+                this.variables[varName] = fromArray(arr);
+                break;
+            }
+
+            case 'numerate': {
+                // #list {var} numerate - Convert string values that look like numbers
+                const list = ensureList();
+                const arr = toArray(list);
+                const numerated = arr.map(item => {
+                    const num = Number(item);
+                    return (!isNaN(num) && String(item).trim() !== '') ? num : item;
+                });
+                this.variables[varName] = fromArray(numerated);
+                break;
+            }
+
+            case 'simplify': {
+                // #list {var} simplify {result} - If single element, store as scalar
+                if (args.length < 3) {
+                    this.appendOutput('Usage: #list {var} simplify {result_var}', 'error');
+                    return;
+                }
+                const list = ensureList();
+                const arr = toArray(list);
+                const resultVar = args[2];
+                if (arr.length === 1) {
+                    this.variables[resultVar] = arr[0];
+                } else {
+                    this.variables[resultVar] = fromArray(arr);
+                }
+                break;
+            }
+
             default:
                 this.appendOutput(`Unknown list option: ${option}`, 'error');
-                this.appendOutput('Options: add, clear, create, delete, find, get, insert, set, size, sort, order, reverse, shuffle, collapse, explode, tokenize', 'system');
+                this.appendOutput('Options: add, clear, create, delete, find, get, insert, set, size, sort, order, reverse, shuffle, collapse, explode, tokenize, copy, filter, swap, indexate, numerate, simplify', 'system');
+                return;  // Don't sync on error
         }
+        this.syncVariablesToServer();
     }
 
     // #prompt {text} {new text} {row} {col}
@@ -8722,8 +10333,12 @@ class WMTClient {
     cmdConfig(args) {
         if (args.length < 1) {
             // Show current config
+            const deadmanStatus = this.preferences.idleDisconnectMinutes
+                ? `ON (${this.preferences.idleDisconnectMinutes} min)`
+                : 'OFF';
             this.appendOutput('Configuration:', 'system');
             this.appendOutput(`  SPEEDWALK: ${this.speedwalkEnabled ? 'ON' : 'OFF'}`, 'system');
+            this.appendOutput(`  DEADMAN: ${deadmanStatus}`, 'system');
             return;
         }
 
@@ -8745,9 +10360,37 @@ class WMTClient {
                 }
                 break;
 
+            case 'DEADMAN':
+                if (value === 'OFF' || value === '0' || value === 'FALSE') {
+                    this.preferences.idleDisconnectMinutes = 0;
+                    this.stopIdleChecker();
+                    this.appendOutput('Deadman switch disabled', 'system');
+                } else if (value === null) {
+                    const status = this.preferences.idleDisconnectMinutes
+                        ? `ON (${this.preferences.idleDisconnectMinutes} min)`
+                        : 'OFF';
+                    this.appendOutput(`DEADMAN: ${status}`, 'system');
+                } else {
+                    // Accept ON (uses 30 min default) or a number of minutes
+                    let minutes = 0;
+                    if (value === 'ON' || value === '1' || value === 'TRUE') {
+                        minutes = 30;
+                    } else {
+                        minutes = parseInt(value);
+                    }
+                    if (minutes > 0) {
+                        this.preferences.idleDisconnectMinutes = minutes;
+                        this.startIdleChecker();
+                        this.appendOutput(`Deadman switch enabled: ${minutes} minutes`, 'system');
+                    } else {
+                        this.appendOutput('Usage: #config {DEADMAN} {ON|OFF|minutes}', 'error');
+                    }
+                }
+                break;
+
             default:
                 this.appendOutput(`Unknown config option: ${option}`, 'error');
-                this.appendOutput('Available options: SPEEDWALK', 'system');
+                this.appendOutput('Available options: SPEEDWALK, DEADMAN', 'system');
         }
     }
 
@@ -8852,10 +10495,9 @@ class WMTClient {
                     result = String(parseFloat(val) || 0);
                     break;
                 case 'm': // Math expression
-                    try {
-                        result = String(this.evaluateMathExpression(val));
-                    } catch (e) {
-                        result = '0';
+                    {
+                        const mres = this.mathexp(val);
+                        result = String(mres.type === 'string' ? this.tintoi(mres.str) : mres.val);
                     }
                     break;
                 case 'g': // Thousand grouping (1234567 -> 1,234,567)
@@ -9117,8 +10759,12 @@ class WMTClient {
     }
 
     // Update a specific row in the split screen
-    // Positive rows (1, 2, 3...) are in top area
-    // Negative rows (-1, -2, -3...) are in bottom area (from bottom up)
+    // Positive rows (1, 2, 3...) are in top area (1 = topmost)
+    // Negative rows use TinTin++ convention:
+    //   -1 = input line (no-op in web client)
+    //   -2 = bottom-most status row (nearest input)
+    //   -3 = next row up, etc.
+    //   -(bottom+1) = top-most status row (nearest scroll)
     updateSplitRow(row, content) {
         if (row > 0 && row <= this.splitConfig.top) {
             // Top area (1-indexed)
@@ -9128,9 +10774,13 @@ class WMTClient {
             if (rowEl) {
                 rowEl.innerHTML = this.ansiToHtml(content);
             }
-        } else if (row < 0 && Math.abs(row) <= this.splitConfig.bottom) {
-            // Bottom area (negative, -1 is first bottom row)
-            const index = Math.abs(row) - 1;
+        } else if (row < 0 && this.splitConfig.bottom > 0) {
+            // Bottom area: TinTin++ maps -2 to bottom-most, increasing negative goes UP
+            // Formula: index = bottom + 1 - abs(row)
+            // -1 is the input line in TinTin++ (skip in web client)
+            if (row === -1) return;
+            const index = this.splitConfig.bottom + 1 - Math.abs(row);
+            if (index < 0 || index >= this.splitConfig.bottom) return;
             this.splitRows.bottom[index] = content;
             const rowEl = document.getElementById(`split-row-bottom-${index}`);
             if (rowEl) {
@@ -9148,6 +10798,14 @@ class WMTClient {
 
     generateId() {
         return Math.random().toString(36).substr(2, 9);
+    }
+
+    // TinTin++ glob matching: * = any string, ? = any single char (case-insensitive)
+    // Used by show_node_with_wild / delete_node_with_wild equivalents
+    matchWild(str, pattern) {
+        const regex = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+        return regex.test(str);
     }
 
     // Parse commands separated by semicolons or newlines, respecting brace depth
