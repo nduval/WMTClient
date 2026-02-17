@@ -15,7 +15,7 @@ const url = require('url');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.8.0'; // Persist server logs to IONOS
+const VERSION = '2.9.0'; // Persist all sessions, fix SIGTERM/restore race
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 
 // Session persistence configuration
@@ -300,42 +300,44 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
 }
 
 /**
- * Persist all active wizard sessions to PHP backend
+ * Persist all active sessions to PHP backend
  * Called on SIGTERM before server shutdown
  */
-async function persistWizardSessions() {
+async function persistAllSessions() {
   if (!ADMIN_KEY) {
     logSessionEvent('PERSIST_SKIP', { reason: 'no admin key' });
     return;
   }
 
-  const wizardSessions = [];
+  const activeSessions = [];
 
   for (const [token, session] of sessions) {
-    // Only persist wizard sessions with active MUD connections
-    if (session.isWizard && session.mudSocket && !session.mudSocket.destroyed) {
-      wizardSessions.push({
+    // Persist ALL sessions with active MUD connections
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      activeSessions.push({
         userId: session.userId,
         characterId: session.characterId,
         characterName: session.characterName,
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
-        token: token
+        token: token,
+        isWizard: session.isWizard || false,
+        persistedAt: Date.now()
       });
     }
   }
 
-  if (wizardSessions.length === 0) {
-    logSessionEvent('PERSIST_SKIP', { reason: 'no wizard sessions' });
+  if (activeSessions.length === 0) {
+    logSessionEvent('PERSIST_SKIP', { reason: 'no active sessions' });
     return;
   }
 
   logSessionEvent('PERSIST_START', {
-    count: wizardSessions.length,
-    chars: wizardSessions.map(s => s.characterName).join(',')
+    count: activeSessions.length,
+    chars: activeSessions.map(s => s.characterName).join(',')
   });
 
   try {
-    const payload = JSON.stringify({ sessions: wizardSessions });
+    const payload = JSON.stringify({ sessions: activeSessions });
     const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
 
     await new Promise((resolve, reject) => {
@@ -355,7 +357,7 @@ async function persistWizardSessions() {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           if (res.statusCode === 200) {
-            logSessionEvent('PERSIST_SUCCESS', { count: wizardSessions.length });
+            logSessionEvent('PERSIST_SUCCESS', { count: activeSessions.length });
             resolve(JSON.parse(data));
           } else {
             reject(new Error(`HTTP ${res.statusCode}: ${data}`));
@@ -557,7 +559,8 @@ function autoLoginToMud(session, password) {
       logSessionEvent('AUTOLOGIN_TIMEOUT', {
         token: tokenShort,
         char: charName,
-        state: loginState
+        state: loginState,
+        lastData: dataBuffer.substring(0, 200) // Log what MUD sent for debugging
       });
       if (session.mudSocket && !session.mudSocket.destroyed) {
         session.mudSocket.destroy();
@@ -678,13 +681,14 @@ function autoLoginToMud(session, password) {
           if (dataBuffer.includes('Unknown user') ||
               dataBuffer.includes('Bad password') ||
               dataBuffer.includes('Invalid password') ||
+              dataBuffer.includes('Incorrect password') ||
               dataBuffer.includes('No such player') ||
               dataBuffer.includes('already logged in') ||
               dataBuffer.includes('attempting to login')) {
             // Extract the specific error for logging
             let reason = 'unknown';
             if (dataBuffer.includes('Unknown user') || dataBuffer.includes('No such player')) reason = 'unknown_user';
-            else if (dataBuffer.includes('Bad password') || dataBuffer.includes('Invalid password')) reason = 'bad_password';
+            else if (dataBuffer.includes('Bad password') || dataBuffer.includes('Invalid password') || dataBuffer.includes('Incorrect password')) reason = 'bad_password';
             else if (dataBuffer.includes('already logged in') || dataBuffer.includes('attempting to login')) reason = 'already_logged_in';
 
             logSessionEvent('AUTOLOGIN_REJECTED', {
@@ -752,6 +756,16 @@ async function restorePersistentSessions() {
       server: ps.server
     });
 
+    // Skip stale sessions from previous deploys (> 2 minutes old)
+    if (ps.persistedAt && (Date.now() - ps.persistedAt > 120000)) {
+      logSessionEvent('RESTORE_SKIP_STALE', {
+        token: ps.token.substring(0, 8),
+        char: ps.characterName,
+        age: Math.round((Date.now() - ps.persistedAt) / 1000)
+      });
+      continue;
+    }
+
     // Skip if this user+character already has an active session
     // (they reconnected on their own between persist and restore)
     const userCharKey = `${ps.userId}:${ps.characterId}`;
@@ -785,7 +799,7 @@ async function restorePersistentSessions() {
     session.userId = ps.userId;
     session.characterId = ps.characterId;
     session.characterName = ps.characterName;
-    session.isWizard = true; // Only wizard sessions are persisted
+    session.isWizard = ps.isWizard || false;
     session.targetHost = ps.server === '3s' ? '3scapes.org' : '3k.org';
     session.targetPort = ps.server === '3s' ? 3200 : 3000;
     session.disconnectedAt = Date.now(); // No browser connected yet
@@ -1499,6 +1513,10 @@ function replayBuffer(session) {
  * Close a session completely
  */
 function closeSession(session, reason) {
+  // Guard against double-close (e.g., explicit disconnect + socket close event)
+  if (session.closed) return;
+  session.closed = true;
+
   const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
   logSessionEvent('SESSION_CLOSE', {
     token: session.token.substring(0, 8),
@@ -2135,10 +2153,13 @@ function connectToMud(session) {
 
   session.mudSocket.on('close', () => {
     console.log('MUD connection closed');
-    sendToClient(session, {
-      type: 'system',
-      message: 'Connection to MUD closed.'
-    });
+    // Don't send misleading messages during server restart — browser already got notified
+    if (!session.serverRestarting) {
+      sendToClient(session, {
+        type: 'system',
+        message: 'Connection to MUD closed.'
+      });
+    }
     // Don't delete session - user might want to reconnect
     // Just clean up the socket reference so reconnect works cleanly
     session.mudSocket = null;
@@ -2150,19 +2171,24 @@ function connectToMud(session) {
 
   session.mudSocket.on('error', (err) => {
     console.error('MUD socket error:', err.message);
-    sendToClient(session, {
-      type: 'error',
-      message: 'MUD connection error: ' + err.message
-    });
+    if (!session.serverRestarting) {
+      sendToClient(session, {
+        type: 'error',
+        message: 'MUD connection error: ' + err.message
+      });
+    }
   });
 
   // Handle remote close (MUD closes connection, e.g., idle timeout)
   session.mudSocket.on('end', () => {
     console.log('MUD connection ended (remote close)');
-    sendToClient(session, {
-      type: 'system',
-      message: 'MUD has closed the connection (idle timeout or linkdead).'
-    });
+    // During server restart, browser already got the "Server restarting" message
+    if (!session.serverRestarting) {
+      sendToClient(session, {
+        type: 'system',
+        message: 'MUD has closed the connection (idle timeout or linkdead).'
+      });
+    }
     if (session.mudSocket) {
       session.mudSocket.destroy();
       session.mudSocket = null;
@@ -3364,12 +3390,31 @@ function substituteUserVariables(message, variables) {
 
 // Graceful shutdown: persist sessions, then close all MUD connections cleanly
 async function gracefulShutdown(signal) {
-  console.log(`${signal} received, persisting wizard sessions and closing connections...`);
+  console.log(`${signal} received, persisting sessions and closing connections...`);
+
+  // Notify all connected browsers that the server is restarting
+  // This lets the client show a proper message instead of "MUD closed connection"
+  for (const [token, session] of sessions) {
+    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+      try {
+        session.ws.send(JSON.stringify({
+          type: 'system',
+          message: 'Server restarting — reconnecting automatically...'
+        }));
+      } catch (e) {}
+    }
+    // Mark session so the MUD socket end/close handlers know this is a server restart
+    session.serverRestarting = true;
+  }
+
   await flushLogsToIONOS();
-  await persistWizardSessions();
+  await persistAllSessions();
+
+  // Flush again to capture PERSIST_SUCCESS/PERSIST_ERROR
+  await flushLogsToIONOS();
 
   // Cleanly close all MUD connections so the MUD knows they're gone
-  // This prevents "Someone is attempting to login" on restore
+  // This makes characters go linkdead, allowing restore to reconnect them
   let closedCount = 0;
   for (const [token, session] of sessions) {
     if (session.mudSocket && !session.mudSocket.destroyed) {
@@ -3407,10 +3452,11 @@ server.listen(PORT, async () => {
     await restorePersistentSessions();
   }, 5000);
 
-  // Safety net: clear persistent sessions again after 30 seconds.
-  // Guards against race where old server's SIGTERM persist lands after
-  // the new server already checked and found nothing.
+  // Second restore attempt at 30s: catches the common Render race condition
+  // where old server's SIGTERM persist lands AFTER the new server's 5s restore.
+  // By 30s, the old server has definitely persisted and closed MUD connections,
+  // so characters are linkdead and auto-login will reconnect them cleanly.
   setTimeout(async () => {
-    await clearAllPersistentSessions();
+    await restorePersistentSessions();
   }, 30000);
 });
