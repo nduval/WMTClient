@@ -15,8 +15,9 @@ const url = require('url');
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.9.0'; // Persist all sessions, fix SIGTERM/restore race
+const VERSION = '3.0.0'; // Bridge architecture for zero-downtime deploys
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
+const BRIDGE_URL = process.env.BRIDGE_URL || null; // ws://localhost:4000 for bridge mode
 
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
@@ -39,6 +40,168 @@ let lastFlushedIndex = 0;
 let flushInProgress = false;
 const LOG_FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// ==================== Bridge Mode ====================
+// When BRIDGE_URL is set, MUD TCP connections go through bridge.js
+// which holds them across server.js restarts (zero-downtime deploys).
+
+const EventEmitter = require('events');
+let bridgeWs = null;
+let bridgeReconnectTimer = null;
+const bridgeSockets = new Map(); // token -> BridgeSocket
+
+/**
+ * BridgeSocket — net.Socket-compatible wrapper that communicates through bridge.js.
+ * Emits the same events (data, close, error, end) so the rest of server.js
+ * doesn't need to know whether it's talking to a real socket or the bridge.
+ */
+class BridgeSocket extends EventEmitter {
+  constructor(token) {
+    super();
+    this.token = token;
+    this.destroyed = false;
+    this.writable = false;
+    bridgeSockets.set(token, this);
+  }
+
+  connect(port, host, callback) {
+    if (callback) this._connectCallback = callback;
+    this._host = host;
+    this._port = port;
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      // Try to resume an existing bridge connection first.
+      // If the bridge has a live MUD TCP connection for this token
+      // (from before server.js restarted), resume it seamlessly.
+      // If not, bridge responds with error and we fall back to init.
+      this._tryingResume = true;
+      bridgeWs.send(JSON.stringify({ type: 'resume', token: this.token }));
+    } else {
+      // Bridge not connected — emit error
+      process.nextTick(() => this.emit('error', new Error('Bridge not connected')));
+    }
+  }
+
+  write(data) {
+    if (this.destroyed || !bridgeWs || bridgeWs.readyState !== WebSocket.OPEN) return false;
+    bridgeWs.send(JSON.stringify({
+      type: 'data',
+      token: this.token,
+      data: Buffer.from(data).toString('base64')
+    }));
+    return true;
+  }
+
+  end() {
+    if (!this.destroyed && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      try { bridgeWs.send(JSON.stringify({ type: 'destroy', token: this.token })); } catch (e) {}
+    }
+    this.destroyed = true;
+    this.writable = false;
+    bridgeSockets.delete(this.token);
+  }
+
+  destroy() {
+    this.end();
+  }
+
+  // Resume an existing MUD connection through the bridge (after server.js restart)
+  resume() {
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      bridgeWs.send(JSON.stringify({ type: 'resume', token: this.token }));
+    }
+  }
+}
+
+/**
+ * Handle messages from bridge.js — route to the correct BridgeSocket
+ */
+function handleBridgeMessage(msg) {
+  const bs = bridgeSockets.get(msg.token);
+  if (!bs) return;
+
+  switch (msg.type) {
+    case 'connected':
+      bs.resumed = bs._tryingResume; // true if this was a successful resume
+      bs._tryingResume = false;
+      bs.writable = true;
+      bs.destroyed = false;
+      if (bs._connectCallback) {
+        bs._connectCallback();
+        bs._connectCallback = null;
+      }
+      break;
+    case 'data':
+      bs.emit('data', Buffer.from(msg.data, 'base64'));
+      break;
+    case 'close':
+      bs.destroyed = true;
+      bs.writable = false;
+      bs.emit('close');
+      bridgeSockets.delete(msg.token);
+      break;
+    case 'error':
+      if (bs._tryingResume) {
+        // Resume failed — no existing connection in bridge. Fall back to init (new TCP connection).
+        bs._tryingResume = false;
+        bs.resumed = false;
+        console.log(`[bridge] No existing connection for ${msg.token.substring(0, 8)}, creating new`);
+        // Mark session so connected callback sends session_new to override the
+        // optimistic session_resumed that was already sent
+        const session = Array.from(sessions.values()).find(s => s.token === msg.token);
+        if (session) session._bridgeResumeFailed = true;
+        if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+          bridgeWs.send(JSON.stringify({ type: 'init', token: msg.token, host: bs._host, port: bs._port }));
+        }
+      } else {
+        bs.emit('error', new Error(msg.message));
+      }
+      break;
+    case 'end':
+      bs.emit('end');
+      break;
+    case 'buffered':
+      console.log(`[bridge] Resuming ${msg.token.substring(0, 8)}: ${msg.count} buffered chunks`);
+      break;
+  }
+}
+
+/**
+ * Connect to bridge.js with auto-reconnect
+ */
+function connectToBridge() {
+  if (!BRIDGE_URL) return;
+
+  console.log(`[bridge] Connecting to ${BRIDGE_URL}...`);
+  bridgeWs = new WebSocket(BRIDGE_URL);
+
+  bridgeWs.on('open', () => {
+    console.log('[bridge] Connected to bridge');
+    if (bridgeReconnectTimer) {
+      clearTimeout(bridgeReconnectTimer);
+      bridgeReconnectTimer = null;
+    }
+  });
+
+  bridgeWs.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      handleBridgeMessage(msg);
+    } catch (e) {}
+  });
+
+  bridgeWs.on('close', () => {
+    console.log('[bridge] Disconnected from bridge — reconnecting in 2s');
+    bridgeWs = null;
+    bridgeReconnectTimer = setTimeout(connectToBridge, 2000);
+  });
+
+  bridgeWs.on('error', (err) => {
+    console.log('[bridge] Connection error:', err.message);
+    // close event will fire after this, triggering reconnect
+  });
+}
+
+// ==================== End Bridge Mode ====================
+
 /**
  * Log a session event to both console and the in-memory buffer
  * Events are structured for easy analysis
@@ -59,7 +222,7 @@ function logSessionEvent(type, data) {
       lastFlushedIndex--;
     }
     // Buffer wrapped — flush immediately so we don't lose entries
-    flushLogsToIONOS();
+    if (!BRIDGE_URL) flushLogsToIONOS();
   }
 
   // Also log to console for Render's log viewer
@@ -549,7 +712,7 @@ function autoLoginToMud(session, password) {
       host: session.targetHost
     });
 
-    session.mudSocket = new net.Socket();
+    session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.token) : new net.Socket();
     let loginState = 'CONNECTING';
     let dataBuffer = '';
     let loginTimeout = null;
@@ -783,17 +946,6 @@ async function restorePersistentSessions() {
       }
     }
 
-    // Fetch password
-    const password = await fetchCharacterPassword(ps.userId, ps.characterId);
-    if (!password) {
-      logSessionEvent('RESTORE_NO_PASSWORD', {
-        token: ps.token.substring(0, 8),
-        char: ps.characterName
-      });
-      await removePersistentSession(ps.token);
-      continue;
-    }
-
     // Create session object
     const session = createSession(ps.token);
     session.userId = ps.userId;
@@ -804,16 +956,107 @@ async function restorePersistentSessions() {
     session.targetPort = ps.server === '3s' ? 3200 : 3000;
     session.disconnectedAt = Date.now(); // No browser connected yet
 
-    // Try to auto-login
-    const success = await autoLoginToMud(session, password);
+    let success = false;
+
+    if (BRIDGE_URL) {
+      // Bridge mode: resume existing TCP connection (no re-login needed!)
+      // The bridge held the MUD connection while we restarted.
+      session.mudSocket = new BridgeSocket(ps.token);
+
+      // Set up normal data handler
+      session.lineBuffer = '';
+      session.currentAnsiState = '';
+      session.mudSocket.on('data', (data) => {
+        const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
+        const text = cleanData.toString('utf8');
+
+        if (session.lineBufferTimeout) {
+          clearTimeout(session.lineBufferTimeout);
+          session.lineBufferTimeout = null;
+        }
+
+        const fullText = session.lineBuffer + text;
+        const parts = fullText.split('\n');
+
+        if (hasGA) {
+          session.lineBuffer = '';
+          parts.forEach(line => processLine(session, line));
+          return;
+        }
+
+        if (!text.endsWith('\n') && parts.length > 0) {
+          session.lineBuffer = parts.pop();
+          if (session.lineBuffer) {
+            session.lineBufferTimeout = setTimeout(() => {
+              if (session.lineBuffer) {
+                processLine(session, session.lineBuffer);
+                session.lineBuffer = '';
+              }
+            }, 500);
+          }
+        } else {
+          session.lineBuffer = '';
+        }
+
+        parts.forEach(line => processLine(session, line));
+      });
+
+      session.mudSocket.on('close', () => {
+        console.log('MUD connection closed (bridge)');
+        if (!session.serverRestarting) {
+          sendToClient(session, { type: 'system', message: 'Connection to MUD closed.' });
+        }
+        session.mudSocket = null;
+        if (session.explicitDisconnect) closeSession(session, 'explicit disconnect');
+      });
+
+      session.mudSocket.on('error', (err) => {
+        console.error('MUD socket error (bridge):', err.message);
+        if (!session.serverRestarting) {
+          sendToClient(session, { type: 'error', message: 'MUD connection error: ' + err.message });
+        }
+      });
+
+      session.mudSocket.on('end', () => {
+        console.log('MUD connection ended (bridge)');
+        if (!session.serverRestarting) {
+          sendToClient(session, { type: 'system', message: 'MUD has closed the connection (idle timeout or linkdead).' });
+        }
+        if (session.mudSocket) {
+          session.mudSocket.destroy();
+          session.mudSocket = null;
+        }
+      });
+
+      // Tell bridge to resume — it will replay buffered data
+      session.mudSocket.resume();
+      success = true;
+
+      logSessionEvent('RESTORE_BRIDGE_RESUME', {
+        token: ps.token.substring(0, 8),
+        char: ps.characterName
+      });
+    } else {
+      // Direct mode: need to re-login to MUD
+      const password = await fetchCharacterPassword(ps.userId, ps.characterId);
+      if (!password) {
+        logSessionEvent('RESTORE_NO_PASSWORD', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName
+        });
+        await removePersistentSession(ps.token);
+        continue;
+      }
+      success = await autoLoginToMud(session, password);
+    }
 
     if (success) {
       // Register the session
       sessions.set(ps.token, session);
 
       // Register in user+character tracking
-      const userCharKey = `${ps.userId}:${ps.characterId}`;
-      userCharacterSessions.set(userCharKey, ps.token);
+      const userCharKey2 = `${ps.userId}:${ps.characterId}`;
+      userCharacterSessions.set(userCharKey2, ps.token);
 
       // Fetch Discord prefs
       fetchDiscordPrefsFromPHP(ps.userId, ps.characterId, session);
@@ -822,7 +1065,8 @@ async function restorePersistentSessions() {
         token: ps.token.substring(0, 8),
         user: ps.userId,
         char: ps.characterName,
-        server: ps.server
+        server: ps.server,
+        mode: BRIDGE_URL ? 'bridge' : 'direct'
       });
     } else {
       logSessionEvent('RESTORE_FAILED', {
@@ -837,7 +1081,9 @@ async function restorePersistentSessions() {
     await removePersistentSession(ps.token);
 
     // Small delay between restores to avoid overwhelming the MUD
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!BRIDGE_URL) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
 
   // Clear ALL persistent sessions after restore completes.
@@ -1258,8 +1504,9 @@ const server = http.createServer(async (req, res) => {
 // Create WebSocket server
 const wss = new WebSocket.Server({ server });
 
-console.log('WMT WebSocket Proxy starting...');
+console.log(`WMT WebSocket Proxy v${VERSION} starting...`);
 console.log(`MUD Server: ${MUD_HOST}:${MUD_PORT}`);
+if (BRIDGE_URL) console.log(`Bridge: ${BRIDGE_URL}`);
 
 /**
  * Create a new session object with all required state
@@ -1673,7 +1920,11 @@ function parseMipMessage(session, msgType, msgData) {
     case 'CAA': // Chat channels
       {
         const parts = msgData.split('~');
-        if (parts[0] === 'ptell' && msgData.includes('Divvy of') && msgData.includes('coins called by')) {
+        if (parts[0] === 'ptell' && (
+          (msgData.includes('Divvy of') && msgData.includes('coins called by')) ||
+          msgData.includes('divvy called by') ||
+          msgData.includes('gold divvied, total')
+        )) {
           break;
         }
 
@@ -2098,19 +2349,32 @@ function connectToMud(session) {
   session.mipId = null;
   session.currentAnsiState = '';
 
-  sendToClient(session, {
-    type: 'system',
-    message: `Connecting to ${session.targetHost}:${session.targetPort}...`
-  });
+  session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.token) : new net.Socket();
 
-  session.mudSocket = new net.Socket();
-
-  session.mudSocket.connect(session.targetPort, session.targetHost, () => {
-    console.log(`Connected to MUD: ${session.targetHost}:${session.targetPort}`);
+  if (!BRIDGE_URL) {
     sendToClient(session, {
       type: 'system',
-      message: `Connected to ${session.targetHost}:${session.targetPort}!`
+      message: `Connecting to ${session.targetHost}:${session.targetPort}...`
     });
+  }
+
+  session.mudSocket.connect(session.targetPort, session.targetHost, () => {
+    const wasResumed = BRIDGE_URL && session.mudSocket.resumed;
+    console.log(`${wasResumed ? 'Resumed' : 'Connected to'} MUD: ${session.targetHost}:${session.targetPort}${BRIDGE_URL ? ' (via bridge)' : ''}`);
+
+    if (!wasResumed) {
+      // New connection — notify client
+      sendToClient(session, {
+        type: 'system',
+        message: `Connected to ${session.targetHost}:${session.targetPort}!`
+      });
+      // If bridge mode but resume failed (new init), client needs session_new
+      if (BRIDGE_URL && session._bridgeResumeFailed) {
+        session._bridgeResumeFailed = false;
+        sendToClient(session, { type: 'session_new' });
+      }
+    }
+    // Bridge resume: silent — client already got session_resumed before triggers were sent
   });
 
   session.mudSocket.on('data', (data) => {
@@ -2428,9 +2692,21 @@ wss.on('connection', (ws, req) => {
             // Do this async so we don't block the session creation
             fetchDiscordPrefsFromPHP(userId, characterId, session);
 
-            ws.send(JSON.stringify({
-              type: 'session_new'
-            }));
+            if (BRIDGE_URL) {
+              // Bridge mode: send session_resumed immediately so the client
+              // sends triggers BEFORE we resume the bridge connection.
+              // This prevents a gap where MUD data flows without gags/triggers.
+              // connectToMud will be called when set_triggers arrives.
+              session._pendingBridgeResume = true;
+              ws.send(JSON.stringify({
+                type: 'session_resumed',
+                mudConnected: true
+              }));
+            } else {
+              ws.send(JSON.stringify({
+                type: 'session_new'
+              }));
+            }
           }
 
           authenticated = true;
@@ -2506,6 +2782,12 @@ wss.on('connection', (ws, req) => {
 
         case 'set_triggers':
           session.triggers = data.triggers || [];
+          // Bridge mode: triggers arrived, now safe to resume bridge connection.
+          // MUD data will flow through processLine with triggers ready.
+          if (session._pendingBridgeResume) {
+            session._pendingBridgeResume = false;
+            connectToMud(session);
+          }
           break;
 
         case 'set_aliases':
@@ -2574,7 +2856,14 @@ wss.on('connection', (ws, req) => {
               session.targetHost = data.host;
               session.targetPort = data.port;
               console.log(`Target server set to ${session.targetHost}:${session.targetPort}`);
-              connectToMud(session);
+              // In bridge mode, connectToMud was already called during auth
+              // (to check for existing bridge connection). Don't call again
+              // unless the MUD connection isn't active.
+              if (BRIDGE_URL && session.mudSocket && !session.mudSocket.destroyed) {
+                // Already connected via bridge resume — skip
+              } else {
+                connectToMud(session);
+              }
             } else {
               console.log(`Rejected invalid server: ${data.host}:${data.port}`);
               ws.send(JSON.stringify({
@@ -3392,45 +3681,65 @@ function substituteUserVariables(message, variables) {
 async function gracefulShutdown(signal) {
   console.log(`${signal} received, persisting sessions and closing connections...`);
 
-  // Notify all connected browsers that the server is restarting
-  // This lets the client show a proper message instead of "MUD closed connection"
+  // Notify browsers and mark sessions for restart
   for (const [token, session] of sessions) {
     if (session.ws && session.ws.readyState === WebSocket.OPEN) {
       try {
-        session.ws.send(JSON.stringify({
-          type: 'system',
-          message: 'Server restarting — reconnecting automatically...'
-        }));
+        if (BRIDGE_URL) {
+          // Bridge mode: seamless restart, just show brief status update
+          session.ws.send(JSON.stringify({
+            type: 'system',
+            subtype: 'status_only',
+            message: 'WMT WebSocket updating...'
+          }));
+        } else {
+          session.ws.send(JSON.stringify({
+            type: 'system',
+            message: 'Server restarting — reconnecting automatically...'
+          }));
+        }
       } catch (e) {}
     }
-    // Mark session so the MUD socket end/close handlers know this is a server restart
     session.serverRestarting = true;
   }
 
-  await flushLogsToIONOS();
+  if (!BRIDGE_URL) await flushLogsToIONOS();
   await persistAllSessions();
 
   // Flush again to capture PERSIST_SUCCESS/PERSIST_ERROR
-  await flushLogsToIONOS();
+  if (!BRIDGE_URL) await flushLogsToIONOS();
 
-  // Cleanly close all MUD connections so the MUD knows they're gone
-  // This makes characters go linkdead, allowing restore to reconnect them
-  let closedCount = 0;
-  for (const [token, session] of sessions) {
-    if (session.mudSocket && !session.mudSocket.destroyed) {
-      try {
-        session.mudSocket.end();  // Send TCP FIN (clean close)
-        closedCount++;
-      } catch (e) {}
+  if (BRIDGE_URL) {
+    // Bridge mode: DON'T close MUD connections — bridge holds them!
+    // Just disconnect from bridge cleanly so it starts buffering.
+    console.log('Bridge mode: MUD connections preserved in bridge.js');
+    if (bridgeWs) {
+      try { bridgeWs.close(); } catch (e) {}
     }
-  }
-  console.log(`Closed ${closedCount} MUD connections`);
+    setTimeout(() => {
+      console.log('Shutting down...');
+      process.exit(0);
+    }, 1000);
+  } else {
+    // Direct mode: close all MUD connections so the MUD knows they're gone
+    // This makes characters go linkdead, allowing restore to reconnect them
+    let closedCount = 0;
+    for (const [token, session] of sessions) {
+      if (session.mudSocket && !session.mudSocket.destroyed) {
+        try {
+          session.mudSocket.end();  // Send TCP FIN (clean close)
+          closedCount++;
+        } catch (e) {}
+      }
+    }
+    console.log(`Closed ${closedCount} MUD connections`);
 
-  // Give TCP FINs time to propagate before exiting
-  setTimeout(() => {
-    console.log('Shutting down...');
-    process.exit(0);
-  }, 2000);
+    // Give TCP FINs time to propagate before exiting
+    setTimeout(() => {
+      console.log('Shutting down...');
+      process.exit(0);
+    }, 2000);
+  }
 }
 
 // SIGTERM handler - Render sends this before killing the process
@@ -3440,23 +3749,34 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}${BRIDGE_URL ? ' (bridge mode: ' + BRIDGE_URL + ')' : ' (direct mode)'}`);
+
+  // Connect to bridge if configured
+  if (BRIDGE_URL) {
+    connectToBridge();
+  }
 
   // Periodically flush session logs to IONOS for persistence
-  setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
+  // Bridge mode (Lightsail) uses journalctl — no need to flush to IONOS
+  if (!BRIDGE_URL) {
+    setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
+  }
 
   // Restore persistent sessions after startup
-  // 5 second delay: ensures server is ready AND gives old MUD connections
-  // time to fully close (old instance sends TCP FIN during SIGTERM)
-  setTimeout(async () => {
-    await restorePersistentSessions();
-  }, 5000);
+  if (BRIDGE_URL) {
+    // Bridge mode: wait for bridge connection, then restore (bridge has the TCP connections)
+    setTimeout(async () => {
+      await restorePersistentSessions();
+    }, 3000);
+  } else {
+    // Direct mode: wait for old MUD connections to close, then re-login
+    setTimeout(async () => {
+      await restorePersistentSessions();
+    }, 5000);
 
-  // Second restore attempt at 30s: catches the common Render race condition
-  // where old server's SIGTERM persist lands AFTER the new server's 5s restore.
-  // By 30s, the old server has definitely persisted and closed MUD connections,
-  // so characters are linkdead and auto-login will reconnect them cleanly.
-  setTimeout(async () => {
-    await restorePersistentSessions();
-  }, 30000);
+    // Second restore attempt at 30s for Render race condition
+    setTimeout(async () => {
+      await restorePersistentSessions();
+    }, 30000);
+  }
 });
