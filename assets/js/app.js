@@ -7839,7 +7839,7 @@ class WMTClient {
                 if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
                     this.renderScriptsSidebar();
                 }
-                this.loadScriptFiles();
+                this.loadScriptFilesList();
             } else {
                 this.appendOutput(`Upload failed: ${data.error}`, 'error');
             }
