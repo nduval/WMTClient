@@ -4262,6 +4262,151 @@ function serverEvalMath(expr) {
  * The command is STILL sent to the client afterward — this just ensures the
  * server has the updated value immediately for the next alias/trigger expansion.
  */
+/**
+ * Parse brace-delimited arguments from a string.
+ * e.g. '{result} {%d} {42}' → ['result', '%d', '42']
+ * Also handles unbraced single-word arguments.
+ */
+function parseBracedArgs(str) {
+  const args = [];
+  let i = 0;
+  while (i < str.length) {
+    while (i < str.length && str[i] === ' ') i++;
+    if (i >= str.length) break;
+    if (str[i] === '{') {
+      let depth = 1;
+      let start = i + 1;
+      i++;
+      while (i < str.length && depth > 0) {
+        if (str[i] === '{') depth++;
+        else if (str[i] === '}') depth--;
+        i++;
+      }
+      args.push(str.slice(start, i - 1));
+    } else {
+      let start = i;
+      while (i < str.length && str[i] !== ' ' && str[i] !== '{') i++;
+      args.push(str.slice(start, i));
+    }
+  }
+  return args;
+}
+
+/**
+ * Server-side #format implementation (mirrors client-side cmdFormat).
+ * Returns the formatted string result.
+ */
+function serverFormat(formatStr, args, variables, functions) {
+  let argIndex = 0;
+  const getArg = () => {
+    if (argIndex < args.length) {
+      return substituteUserVariables(args[argIndex++], variables, functions);
+    }
+    return '';
+  };
+
+  return formatStr.replace(/%([+\-]?)(\d*)(?:\.(\d+))?(\d+|[sdcfxXaAmMgGulnrphDLTtUH%])/g, (match, padDir, padWidth, maxLen, spec) => {
+    if (spec === '%') return '%';
+
+    // Handle positional args like %1, %2
+    if (/^\d+$/.test(spec)) {
+      const idx = parseInt(spec);
+      let val = idx < args.length ? substituteUserVariables(args[idx], variables, functions) : '';
+      return applyFormatPadding(val, padDir, padWidth, maxLen);
+    }
+
+    let val = getArg();
+    let result;
+
+    switch (spec) {
+      case 's': result = String(val); break;
+      case 'd':
+        result = String(Math.trunc(serverEvalMath(String(val))) || 0);
+        break;
+      case 'f': result = String(parseFloat(val) || 0); break;
+      case 'G':
+      case 'g':
+        result = (parseFloat(val) || 0).toLocaleString('en-US');
+        break;
+      case 'u': result = String(val).toUpperCase(); break;
+      case 'l': result = String(val).toLowerCase(); break;
+      case 'n': result = String(val).charAt(0).toUpperCase() + String(val).slice(1); break;
+      case 'r': result = String(val).split('').reverse().join(''); break;
+      case 'p': result = String(val).trim(); break;
+      case 'L': result = String(String(val).replace(/\x1b\[[0-9;]*m/g, '').length); break;
+      case 'M': result = serverFormatMetric(parseFloat(val) || 0); break;
+      case 'T': result = String(Math.floor(Date.now() / 1000)); break;
+      case 'U': result = String(Date.now() * 1000); break;
+      case 'H': result = String(serverSimpleHash(String(val))); break;
+      case 'D': result = String(parseInt(val, 16) || 0); break;
+      case 'x': result = (parseInt(val) || 0).toString(16); break;
+      case 'X': result = (parseInt(val) || 0).toString(16).toUpperCase(); break;
+      case 'a': result = String.fromCharCode(parseInt(val) || 0); break;
+      case 'A': result = String(String(val).charCodeAt(0) || 0); break;
+      case 'c': result = String(val); break;
+      case 'h': {
+        const hdrLen = parseInt(padWidth) || 78;
+        const hdrText = String(val);
+        if (hdrText) {
+          const side = Math.floor((hdrLen - hdrText.length - 2) / 2);
+          result = '-'.repeat(Math.max(0, side)) + ' ' + hdrText + ' ' + '-'.repeat(Math.max(0, side));
+        } else {
+          result = '-'.repeat(hdrLen);
+        }
+        break;
+      }
+      case 'm': result = String(serverEvalMath(String(val)) || 0); break;
+      case 't': {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        result = String(val)
+          .replace(/%Y/g, now.getFullYear())
+          .replace(/%y/g, String(now.getFullYear()).slice(-2))
+          .replace(/%m/g, pad(now.getMonth() + 1))
+          .replace(/%d/g, pad(now.getDate()))
+          .replace(/%H/g, pad(now.getHours()))
+          .replace(/%M/g, pad(now.getMinutes()))
+          .replace(/%S/g, pad(now.getSeconds()))
+          .replace(/%%/g, '%');
+        break;
+      }
+      default: result = val;
+    }
+    return applyFormatPadding(String(result), padDir, padWidth, maxLen);
+  });
+}
+
+function applyFormatPadding(val, padDir, padWidth, maxLen) {
+  let result = val;
+  if (maxLen) result = result.substring(0, parseInt(maxLen));
+  if (padWidth) {
+    const width = parseInt(padWidth);
+    result = padDir === '-' ? result.padEnd(width) : result.padStart(width);
+  }
+  return result;
+}
+
+function serverFormatMetric(num) {
+  const units = ['', 'K', 'M', 'G', 'T', 'P'];
+  let unitIndex = 0;
+  let value = Math.abs(num);
+  while (value >= 1000 && unitIndex < units.length - 1) {
+    value /= 1000;
+    unitIndex++;
+  }
+  const formatted = value.toFixed(value < 10 && unitIndex > 0 ? 1 : 0);
+  return (num < 0 ? '-' : '') + formatted + units[unitIndex];
+}
+
+function serverSimpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
 function serverProcessInlineCommand(cmd, session) {
   if (!cmd || !session) return false;
   const trimmed = cmd.trim();
@@ -4317,6 +4462,61 @@ function serverProcessInlineCommand(cmd, session) {
     // Track server-side modification time
     if (!session._varServerModified) session._varServerModified = {};
     session._varServerModified[varName] = Date.now();
+    return true;
+  }
+
+  // #format {variable} {format} [args...]
+  const formatMatch = trimmed.match(/^#format\s+(.*)/i);
+  if (formatMatch) {
+    const fargs = parseBracedArgs(formatMatch[1]);
+    if (fargs.length >= 2) {
+      const varName = fargs[0];
+      const formatStr = fargs[1];
+      const formatArgs = fargs.slice(2);
+      const result = serverFormat(formatStr, formatArgs, session.variables || {}, session.functions || {});
+      if (!session.variables) session.variables = {};
+      session.variables[varName] = result;
+      if (!session._varServerModified) session._varServerModified = {};
+      session._varServerModified[varName] = Date.now();
+    }
+    return true;
+  }
+
+  // #cat {variable} {value1} [value2] ...
+  const catMatch = trimmed.match(/^#cat\s+(.*)/i);
+  if (catMatch) {
+    const cargs = parseBracedArgs(catMatch[1]);
+    if (cargs.length >= 2) {
+      const varName = cargs[0];
+      if (!session.variables) session.variables = {};
+      let current = session.variables[varName] || '';
+      for (let i = 1; i < cargs.length; i++) {
+        const val = substituteUserVariables(cargs[i], session.variables, session.functions || {});
+        current = String(current) + val;
+      }
+      session.variables[varName] = current;
+      if (!session._varServerModified) session._varServerModified = {};
+      session._varServerModified[varName] = Date.now();
+    }
+    return true;
+  }
+
+  // #replace {variable} {old} {new}
+  const replaceMatch = trimmed.match(/^#replace\s+(.*)/i);
+  if (replaceMatch) {
+    const rargs = parseBracedArgs(replaceMatch[1]);
+    if (rargs.length >= 3) {
+      const varName = rargs[0];
+      if (!session.variables) session.variables = {};
+      const currentVal = session.variables[varName];
+      if (currentVal !== undefined) {
+        const oldText = substituteUserVariables(rargs[1], session.variables, session.functions || {});
+        const newText = substituteUserVariables(rargs[2], session.variables, session.functions || {});
+        session.variables[varName] = String(currentVal).split(oldText).join(newText);
+        if (!session._varServerModified) session._varServerModified = {};
+        session._varServerModified[varName] = Date.now();
+      }
+    }
     return true;
   }
 
