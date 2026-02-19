@@ -1802,14 +1802,10 @@ function startTicker(session, ticker) {
       // Expand aliases before sending
       const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
       expanded.forEach(cmd => {
-        // Handle #N repeat pattern
+        // Handle #N repeat pattern: #34 {buy dagger;dismantle dagger}
         const repeatMatch = cmd.match(/^#(\d+)\s+(.+)$/);
         if (repeatMatch) {
-          const count = Math.min(parseInt(repeatMatch[1]), 100);
-          const repeatCmd = processEscapes(repeatMatch[2]);
-          for (let i = 0; i < count; i++) {
-            session.mudSocket.write(repeatCmd + '\r\n');
-          }
+          executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
         } else if (cmd.startsWith('#')) {
           // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: cmd });
@@ -2486,14 +2482,10 @@ function processLine(session, line) {
       // Expand aliases before sending to MUD
       const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
       expanded.forEach(ec => {
-        // Check for #N command pattern (e.g., #15 e) - repeat command N times
+        // Check for #N command pattern: #34 {buy dagger;dismantle dagger}
         const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
         if (repeatMatch) {
-          const count = Math.min(parseInt(repeatMatch[1]), 100);
-          const repeatCmd = processEscapes(repeatMatch[2]);
-          for (let i = 0; i < count; i++) {
-            session.mudSocket.write(repeatCmd + '\r\n');
-          }
+          executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
         } else if (ec.startsWith('#')) {
           // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: ec });
@@ -3037,14 +3029,10 @@ wss.on('connection', (ws, req) => {
                 if (isAsyncRead) {
                   return 'async_read';
                 }
-                // Check for #N command pattern (e.g., #15 e) - repeat command N times
+                // Check for #N command pattern: #34 {buy dagger;dismantle dagger}
                 const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
                 if (repeatMatch) {
-                  const count = Math.min(parseInt(repeatMatch[1]), 100);
-                  const repeatCmd = processEscapes(repeatMatch[2]);
-                  for (let i = 0; i < count; i++) {
-                    session.mudSocket.write(repeatCmd + '\r\n');
-                  }
+                  executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
                 } else if (ec.startsWith('#')) {
                   // #var/#math already processed during expansion (for sequential side effects)
                   // Forward to client for #delay, #showme, etc.
@@ -3269,11 +3257,7 @@ wss.on('connection', (ws, req) => {
                 expanded.forEach(ec => {
                   const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
                   if (repeatMatch) {
-                    const count = Math.min(parseInt(repeatMatch[1]), 100);
-                    const repeatCmd = processEscapes(repeatMatch[2]);
-                    for (let i = 0; i < count; i++) {
-                      session.mudSocket.write(repeatCmd + '\r\n');
-                    }
+                    executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
                   } else if (ec.startsWith('#')) {
                     // #var/#math already processed during expansion for sequential side effects
                     sendToClient(session, { type: 'client_command', command: ec });
@@ -3652,6 +3636,24 @@ function parseCommands(input) {
   if (escaped) current += '\\';
   if (current.trim()) commands.push(current.trim());
   return commands;
+}
+
+/**
+ * Execute a #N repeat command: #34 {buy dagger;dismantle dagger}
+ * Strips outer braces, parses semicolons, sends each sub-command N times.
+ */
+function executeRepeat(count, body, session) {
+  // Strip outer braces: {buy dagger;dismantle dagger} → buy dagger;dismantle dagger
+  let cmd = body;
+  if (cmd.startsWith('{') && cmd.endsWith('}')) {
+    cmd = cmd.slice(1, -1);
+  }
+  const subCmds = parseCommands(cmd);
+  for (let i = 0; i < count; i++) {
+    subCmds.forEach(sc => {
+      session.mudSocket.write(processEscapes(sc) + '\r\n');
+    });
+  }
 }
 
 /**
