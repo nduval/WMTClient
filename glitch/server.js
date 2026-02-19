@@ -2578,7 +2578,7 @@ function connectToMud(session) {
       }
       // New clients were silent (bridgeMode). Send session_resumed so they
       // show "Session resumed" message, enable MIP, run startup script.
-      sendToClient(session, { type: 'session_resumed', mudConnected: true });
+      sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });
     }
   });
 
@@ -2763,7 +2763,8 @@ wss.on('connection', (ws, req) => {
 
               ws.send(JSON.stringify({
                 type: 'session_resumed',
-                mudConnected: oldMudConnected
+                mudConnected: oldMudConnected,
+                variables: session.variables || {}
               }));
 
               // Clear buffer
@@ -2853,7 +2854,8 @@ wss.on('connection', (ws, req) => {
 
             ws.send(JSON.stringify({
               type: 'session_resumed',
-              mudConnected: mudConnected
+              mudConnected: mudConnected,
+              variables: session.variables || {}
             }));
 
             // Clear buffer - user doesn't need history replay, just resume receiving new lines

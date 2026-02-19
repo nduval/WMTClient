@@ -123,7 +123,7 @@ class MudConnection {
                     this.authenticated = true;
                     this.sessionResumed = false;
                     this.onStatusChange('connected');
-                    this.onSessionResumed(data.mudConnected);
+                    this.onSessionResumed(data.mudConnected, data.variables);
                     this.startKeepAlive();
                     return;
                 }

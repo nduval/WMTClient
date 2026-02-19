@@ -534,7 +534,7 @@ class WMTClient {
             onMessage: (data) => this.onMessage(data),
             onError: (error) => this.onError(error),
             onStatusChange: (status) => this.updateConnectionStatus(status),
-            onSessionResumed: (mudConnected) => this.onSessionResumed(mudConnected),
+            onSessionResumed: (mudConnected, variables) => this.onSessionResumed(mudConnected, variables),
             onSessionInit: () => this.onSessionInit()
         });
 
@@ -610,8 +610,13 @@ class WMTClient {
         this.sendFilteredTriggersAndAliases();
     }
 
-    onSessionResumed(mudConnected) {
+    onSessionResumed(mudConnected, serverVariables) {
         // Called when reconnecting to an existing session (e.g., after app switch)
+        // Restore server-side variables (bot state like $secstepnumber survives refresh)
+        if (serverVariables && Object.keys(serverVariables).length > 0) {
+            Object.assign(this.variables, serverVariables);
+        }
+
         // Restart periodic health checks
         this.startPeriodicHealthCheck();
 
