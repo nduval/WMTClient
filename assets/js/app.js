@@ -5867,6 +5867,9 @@ class WMTClient {
             case 'replace':
                 this.cmdReplace(args);
                 break;
+            case 'cat':
+                this.cmdCat(args);
+                break;
 
             // Split screen commands
             case 'split':
@@ -7607,6 +7610,9 @@ class WMTClient {
                 break;
             case 'replace':
                 this.cmdReplace(args);
+                break;
+            case 'cat':
+                this.cmdCat(args);
                 break;
             case 'pathdir':
                 this.cmdPathdir(args);
@@ -10828,7 +10834,7 @@ class WMTClient {
         };
 
         // Process format specifiers with optional padding: %+9s, %-9s, %.8s, %9s
-        format = format.replace(/%([+\-]?)(\d*)(?:\.(\d+))?(\d+|[sdcfxXaAmMgulnrphDLTUH%])/g, (match, padDir, padWidth, maxLen, spec) => {
+        format = format.replace(/%([+\-]?)(\d*)(?:\.(\d+))?(\d+|[sdcfxXaAmMgGulnrphDLTtUH%])/g, (match, padDir, padWidth, maxLen, spec) => {
             // Handle %% escape
             if (spec === '%') return '%';
 
@@ -10846,8 +10852,11 @@ class WMTClient {
                 case 's': // String
                     result = String(val);
                     break;
-                case 'd': // Integer
-                    result = String(parseInt(val) || 0);
+                case 'd': // Integer (evaluates math expressions like TinTin++ get_number())
+                    {
+                        const dres = this.mathexp(String(val));
+                        result = String(Math.trunc(dres.type === 'string' ? this.tintoi(dres.str) : dres.val) || 0);
+                    }
                     break;
                 case 'f': // Float
                     result = String(parseFloat(val) || 0);
@@ -10858,6 +10867,7 @@ class WMTClient {
                         result = String(mres.type === 'string' ? this.tintoi(mres.str) : mres.val);
                     }
                     break;
+                case 'G': // Alias for %g
                 case 'g': // Thousand grouping (1234567 -> 1,234,567)
                     const num = parseFloat(val) || 0;
                     result = num.toLocaleString('en-US');
@@ -10868,8 +10878,8 @@ class WMTClient {
                 case 'l': // Lowercase
                     result = String(val).toLowerCase();
                     break;
-                case 'n': // Capitalize first letter
-                    result = String(val).charAt(0).toUpperCase() + String(val).slice(1).toLowerCase();
+                case 'n': // Capitalize first letter (only first char, rest unchanged)
+                    result = String(val).charAt(0).toUpperCase() + String(val).slice(1);
                     break;
                 case 'r': // Reverse string
                     result = String(val).split('').reverse().join('');
@@ -10887,12 +10897,14 @@ class WMTClient {
                         result = '-'.repeat(hdrLen);
                     }
                     break;
-                case 'a': // Character from charset value (same as %c)
-                case 'c': // Character from value
+                case 'a': // Character from charset value (number to character)
                     result = String.fromCharCode(parseInt(val) || 0);
                     break;
+                case 'c': // Color code (TinTin++ color name to escape) - pass through in web client
+                    result = String(val);
+                    break;
                 case 'A': // Character's numeric value
-                    result = String(val).charCodeAt(0) || 0;
+                    result = String(String(val).charCodeAt(0) || 0);
                     break;
                 case 'x': // Decimal to hex (lowercase)
                     result = (parseInt(val) || 0).toString(16);
@@ -10903,8 +10915,8 @@ class WMTClient {
                 case 'D': // Hex to decimal
                     result = String(parseInt(val, 16) || 0);
                     break;
-                case 'L': // String length
-                    result = String(String(val).length);
+                case 'L': // Visible string length (strips ANSI/VT102 codes)
+                    result = String(String(val).replace(/\x1b\[[0-9;]*m/g, '').replace(/<[^>]*>/g, '').length);
                     break;
                 case 'T': // Current epoch time (seconds)
                     result = String(Math.floor(Date.now() / 1000));
@@ -10929,7 +10941,7 @@ class WMTClient {
         });
 
         this.setNestedVariable(varName, varKeys, format);
-        this.appendOutput(`#format: $${args[0]} = ${format}`, 'system');
+        if (!this._silent) this.appendOutput(`#FORMAT: VARIABLE {${args[0]}} HAS BEEN SET TO {${format}}.`, 'system');
     }
 
     // Apply padding to formatted value
@@ -11033,7 +11045,31 @@ class WMTClient {
         const original = String(currentVal);
         const replaced = original.split(oldText).join(newText);
         this.setNestedVariable(name, keys, replaced);
-        this.appendOutput(`#replace: $${args[0]} = ${replaced}`, 'system');
+        if (!this._silent) this.appendOutput(`#REPLACE: VARIABLE {${args[0]}} HAS BEEN SET TO {${replaced}}.`, 'system');
+    }
+
+    // #cat {variable} {value1} [value2] ... - Concatenate/append to variable
+    cmdCat(args) {
+        if (args.length < 2) {
+            this.appendOutput('Usage: #cat {variable} {value1} [value2] ...', 'error');
+            return;
+        }
+
+        const { name, keys } = this.parseVariableName(args[0]);
+
+        // Get current value (empty string if variable doesn't exist yet)
+        let current = keys.length > 0
+            ? (this.getNestedVariable(name, keys) || '')
+            : (this.variables[name] || '');
+
+        // Concatenate all remaining arguments
+        for (let i = 1; i < args.length; i++) {
+            const val = this.substituteVariables(args[i]);
+            current = String(current) + val;
+        }
+
+        this.setNestedVariable(name, keys, current);
+        if (!this._silent) this.appendOutput(`#CAT: VARIABLE {${args[0]}} HAS BEEN SET TO {${current}}.`, 'system');
     }
 
     // #split {top} [bottom] - Create split screen areas
