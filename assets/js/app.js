@@ -1710,8 +1710,24 @@ class WMTClient {
 
         // Track this channel for the settings UI
         if (channel && !this.channelPrefs[channelKey]) {
-            this.channelPrefs[channelKey] = { sound: false, hidden: false, discord: false, webhookUrl: '' };
+            this.channelPrefs[channelKey] = { sound: false, hidden: false, discord: false, webhookUrl: '', headerColor: '', bgColor: '' };
         }
+
+        // Helper to apply custom channel colors to a chat line element
+        const applyChannelColors = (line) => {
+            if (prefs.headerColor) {
+                const firstSpan = line.querySelector('span');
+                if (firstSpan) firstSpan.style.color = prefs.headerColor;
+            }
+            if (prefs.bgColor) {
+                const r = parseInt(prefs.bgColor.slice(1, 3), 16);
+                const g = parseInt(prefs.bgColor.slice(3, 5), 16);
+                const b = parseInt(prefs.bgColor.slice(5, 7), 16);
+                line.style.background = `rgba(${r}, ${g}, ${b}, 0.15)`;
+                line.style.borderLeft = `2px solid ${prefs.bgColor}`;
+                line.style.paddingLeft = '8px';
+            }
+        };
 
         // Append to chat window
         const chatOutput = document.getElementById('chat-output');
@@ -1720,6 +1736,7 @@ class WMTClient {
             line.className = `chat-line ${chatType}`;
             line.dataset.channel = channelKey;
             line.innerHTML = message;
+            applyChannelColors(line);
             chatOutput.appendChild(line);
 
             // Auto-scroll to bottom
@@ -1734,6 +1751,7 @@ class WMTClient {
                 line.className = `chat-line ${chatType}`;
                 line.dataset.channel = channelKey;
                 line.innerHTML = message;
+                applyChannelColors(line);
                 popoutOutput.appendChild(line);
                 popoutOutput.scrollTop = popoutOutput.scrollHeight;
             }
@@ -1801,6 +1819,9 @@ class WMTClient {
                 channelList.innerHTML = channels.sort().map(channel => {
                     const prefs = this.channelPrefs[channel] || {};
                     const webhookUrl = prefs.webhookUrl || '';
+                    const hasColors = !!(prefs.headerColor || prefs.bgColor);
+                    const headerColor = prefs.headerColor || '#44dddd';
+                    const bgColor = prefs.bgColor || '#64c8ff';
                     return `
                         <div class="channel-row" data-channel="${channel}">
                             <div class="channel-row-main">
@@ -1817,11 +1838,20 @@ class WMTClient {
                                     <input type="checkbox" class="channel-discord" ${prefs.discord ? 'checked' : ''}>
                                     <span class="channel-icon">📤</span>
                                 </label>
+                                <label class="channel-option" title="Custom colors">
+                                    <input type="checkbox" class="channel-colors-toggle" ${hasColors ? 'checked' : ''}>
+                                    <span class="channel-icon">🎨</span>
+                                </label>
                             </div>
                             <div class="channel-webhook-row" style="display: ${prefs.discord ? 'flex' : 'none'};">
                                 <input type="text" class="channel-webhook"
                                     placeholder="Discord webhook URL for ${channel}..."
                                     value="${webhookUrl}">
+                            </div>
+                            <div class="channel-color-row" style="display: ${hasColors ? 'flex' : 'none'};">
+                                <label>Header <input type="color" class="channel-header-color" value="${headerColor}"></label>
+                                <label>Background <input type="color" class="channel-bg-color" value="${bgColor}"></label>
+                                <button class="btn-reset-colors" title="Reset to defaults">Reset</button>
                             </div>
                         </div>
                     `;
@@ -1835,6 +1865,28 @@ class WMTClient {
                         if (webhookRow) {
                             webhookRow.style.display = e.target.checked ? 'flex' : 'none';
                         }
+                    });
+                });
+
+                // Add event listeners to toggle color row visibility
+                channelList.querySelectorAll('.channel-colors-toggle').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => {
+                        const row = e.target.closest('.channel-row');
+                        const colorRow = row.querySelector('.channel-color-row');
+                        if (colorRow) {
+                            colorRow.style.display = e.target.checked ? 'flex' : 'none';
+                        }
+                    });
+                });
+
+                // Add event listeners for reset buttons
+                channelList.querySelectorAll('.btn-reset-colors').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const row = e.target.closest('.channel-row');
+                        row.querySelector('.channel-header-color').value = '#44dddd';
+                        row.querySelector('.channel-bg-color').value = '#64c8ff';
+                        row.querySelector('.channel-colors-toggle').checked = false;
+                        row.querySelector('.channel-color-row').style.display = 'none';
                     });
                 });
             }
@@ -1860,7 +1912,10 @@ class WMTClient {
             const hidden = row.querySelector('.channel-hidden')?.checked || false;
             const discord = row.querySelector('.channel-discord')?.checked || false;
             const webhookUrl = row.querySelector('.channel-webhook')?.value?.trim() || '';
-            this.channelPrefs[channel] = { sound, hidden, discord, webhookUrl };
+            const colorsEnabled = row.querySelector('.channel-colors-toggle')?.checked || false;
+            const headerColor = colorsEnabled ? (row.querySelector('.channel-header-color')?.value || '') : '';
+            const bgColor = colorsEnabled ? (row.querySelector('.channel-bg-color')?.value || '') : '';
+            this.channelPrefs[channel] = { sound, hidden, discord, webhookUrl, headerColor, bgColor };
         });
         this.saveChannelPrefs();
         this.closeChannelSettingsModal();

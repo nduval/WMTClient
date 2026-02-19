@@ -250,6 +250,22 @@ switch ($action) {
                     }
                 }
 
+                // Validate header color (hex string or empty)
+                if (isset($prefs['headerColor']) && is_string($prefs['headerColor'])) {
+                    $hc = trim($prefs['headerColor']);
+                    if ($hc === '' || preg_match('/^#[0-9a-fA-F]{6}$/', $hc)) {
+                        $channelData['headerColor'] = $hc;
+                    }
+                }
+
+                // Validate background color (hex string or empty)
+                if (isset($prefs['bgColor']) && is_string($prefs['bgColor'])) {
+                    $bc = trim($prefs['bgColor']);
+                    if ($bc === '' || preg_match('/^#[0-9a-fA-F]{6}$/', $bc)) {
+                        $channelData['bgColor'] = $bc;
+                    }
+                }
+
                 $validatedChannels[$channel] = $channelData;
             }
             $validated['channelPrefs'] = $validatedChannels;
