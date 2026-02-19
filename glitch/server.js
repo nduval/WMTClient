@@ -4130,25 +4130,38 @@ function substituteUserVariables(message, variables, functions) {
   });
 
   // Handle ${var} and ${var[key][subkey]} brace-delimited
-  message = message.replace(/\$\{(\w+)((?:\[[^\]]*\])*)\}/g, (match, name, brackets) => {
-    let val = variables[name];
-    if (val === undefined) return '';
-    if (brackets) {
-      const keys = [];
-      const keyRegex = /\[([^\]]*)\]/g;
-      let keyMatch;
-      while ((keyMatch = keyRegex.exec(brackets)) !== null) {
-        keys.push(keyMatch[1]);
-      }
-      for (const key of keys) {
-        if (val === undefined || val === null || typeof val !== 'object') return '';
-        val = val[key];
-      }
+  // Resolve inside-out so ${bot[steps][${bot[step]}]} works
+  {
+    let maxNest = 10;
+    while (maxNest-- > 0) {
+      let changed = false;
+      message = message.replace(/\$\{([^{}]*)\}/g, (match, content) => {
+        const m = content.match(/^(\w+)((?:\[[^\]]*\])*)$/);
+        if (!m) return match;
+        const name = m[1];
+        const brackets = m[2];
+        let val = variables[name];
+        if (val === undefined) return '';
+        if (brackets) {
+          const keys = [];
+          const keyRegex = /\[([^\]]*)\]/g;
+          let keyMatch;
+          while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+            keys.push(keyMatch[1]);
+          }
+          for (const key of keys) {
+            if (val === undefined || val === null || typeof val !== 'object') return '';
+            val = val[key];
+          }
+        }
+        if (val === undefined) return '';
+        changed = true;
+        if (typeof val === 'object') return JSON.stringify(val);
+        return String(val);
+      });
+      if (!changed) break;
     }
-    if (val === undefined) return '';
-    if (typeof val === 'object') return JSON.stringify(val);
-    return String(val);
-  });
+  }
 
   // Handle $var[key][subkey]...
   message = message.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {

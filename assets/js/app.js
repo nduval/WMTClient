@@ -9588,39 +9588,54 @@ class WMTClient {
         });
 
         // Handle ${variable} and ${variable[key][subkey]} brace-delimited syntax
-        // Must come before $var[key] handling so ${hpmax}[literal] isn't misread as $hpmax[key]
-        str = str.replace(/\$\{(\w+)((?:\[[^\]]*\])*)\}/g, (match, name, brackets) => {
-            // Look up base value from local scopes first, then globals
-            let val;
-            for (let i = this.localScopes.length - 1; i >= 0; i--) {
-                if (name in this.localScopes[i]) {
-                    val = this.localScopes[i][name];
-                    break;
-                }
-            }
-            if (val === undefined && this.variables[name] !== undefined) {
-                val = this.variables[name];
-            }
-            if (val === undefined) return match;
+        // Resolve inside-out so ${bot[steps][${bot[step]}]} works:
+        // inner ${bot[step]} resolves first, then outer ${bot[steps][1]} resolves
+        {
+            let maxNest = 10;
+            while (maxNest-- > 0) {
+                let changed = false;
+                str = str.replace(/\$\{([^{}]*)\}/g, (match, content) => {
+                    // Parse content as varname + optional [key][subkey]...
+                    const m = content.match(/^(\w+)((?:\[[^\]]*\])*)$/);
+                    if (!m) return match;
+                    const name = m[1];
+                    const brackets = m[2];
 
-            // If brackets present, navigate nested keys
-            if (brackets) {
-                const keys = [];
-                const keyRegex = /\[([^\]]*)\]/g;
-                let keyMatch;
-                while ((keyMatch = keyRegex.exec(brackets)) !== null) {
-                    keys.push(keyMatch[1]);
-                }
-                for (const key of keys) {
-                    if (val === undefined || val === null || typeof val !== 'object') return '';
-                    val = val[key];
-                }
-            }
+                    // Look up base value from local scopes first, then globals
+                    let val;
+                    for (let i = this.localScopes.length - 1; i >= 0; i--) {
+                        if (name in this.localScopes[i]) {
+                            val = this.localScopes[i][name];
+                            break;
+                        }
+                    }
+                    if (val === undefined && this.variables[name] !== undefined) {
+                        val = this.variables[name];
+                    }
+                    if (val === undefined) return match;
 
-            if (val === undefined) return '';
-            if (typeof val === 'object') return JSON.stringify(val);
-            return String(val);
-        });
+                    // If brackets present, navigate nested keys
+                    if (brackets) {
+                        const keys = [];
+                        const keyRegex = /\[([^\]]*)\]/g;
+                        let keyMatch;
+                        while ((keyMatch = keyRegex.exec(brackets)) !== null) {
+                            keys.push(keyMatch[1]);
+                        }
+                        for (const key of keys) {
+                            if (val === undefined || val === null || typeof val !== 'object') return '';
+                            val = val[key];
+                        }
+                    }
+
+                    if (val === undefined) return '';
+                    changed = true;
+                    if (typeof val === 'object') return JSON.stringify(val);
+                    return String(val);
+                });
+                if (!changed) break;
+            }
+        }
 
         // Handle $variable[key] and $variable[key][subkey] patterns
         // This regex matches $varname followed by one or more [key] brackets
