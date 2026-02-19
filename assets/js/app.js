@@ -5967,8 +5967,6 @@ class WMTClient {
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} ALIAS${removed > 1 ? 'ES' : ''} REMOVED.`, 'system');
             this.saveAliases();
-        } else {
-            this.appendOutput(`#UNALIAS: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -6058,8 +6056,6 @@ class WMTClient {
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} ACTION${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
-        } else {
-            this.appendOutput(`#UNACTION: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -6146,8 +6142,6 @@ class WMTClient {
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTickers();
-        } else {
-            this.appendOutput(`#UNTICKER: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -6246,8 +6240,6 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} DELAY${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
-        } else {
-            this.appendOutput(`#UNDELAY: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -7983,8 +7975,6 @@ class WMTClient {
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} GAG${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
-        } else {
-            this.appendOutput(`#UNGAG: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -8160,8 +8150,6 @@ class WMTClient {
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} HIGHLIGHT${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
-        } else {
-            this.appendOutput(`#UNHIGHLIGHT: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -8256,8 +8244,6 @@ class WMTClient {
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} SUBSTITUTE${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             this.saveTriggers();
-        } else {
-            this.appendOutput(`#UNSUBSTITUTE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
         }
     }
 
@@ -8458,15 +8444,9 @@ class WMTClient {
         if (keys.length > 0) {
             // Nested variable deletion
             let current = this.variables[name];
-            if (current === undefined) {
-                this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
-                return;
-            }
+            if (current === undefined) return;
             for (let i = 0; i < keys.length - 1; i++) {
-                if (current === undefined || typeof current !== 'object') {
-                    this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
-                    return;
-                }
+                if (current === undefined || typeof current !== 'object') return;
                 current = current[keys[i]];
             }
             const lastKey = keys[keys.length - 1];
@@ -8474,8 +8454,6 @@ class WMTClient {
                 delete current[lastKey];
                 this.syncVariablesToServer();
                 if (!this._silent) this.appendOutput('#OK: 1 VARIABLE(S) REMOVED.', 'system');
-            } else {
-                if (!this._silent) this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
             }
         } else {
             // Wildcard deletion using matchWild
@@ -8484,8 +8462,6 @@ class WMTClient {
                 matches.forEach(v => delete this.variables[v]);
                 this.syncVariablesToServer();
                 if (!this._silent) this.appendOutput(`#OK: ${matches.length} VARIABLE(S) REMOVED.`, 'system');
-            } else {
-                if (!this._silent) this.appendOutput(`#UNVARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
             }
         }
     }

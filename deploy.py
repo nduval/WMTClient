@@ -256,8 +256,8 @@ def git_commit_before_deploy():
     # Build a summary of what changed
     changed_files = []
     for line in tracked_changes:
-        # Format: "XY filename" — X=staged, Y=unstaged
-        filepath = line[3:].strip().strip('"')
+        # Format: "XY filename" or "XY filename -> newname" (renames)
+        filepath = line[3:].strip().strip('"').split(' -> ')[-1].strip('"')
         changed_files.append(filepath)
 
     # Summarize by area
@@ -273,8 +273,14 @@ def git_commit_before_deploy():
             areas.add('API')
         elif f.startswith('includes/'):
             areas.add('includes')
+        elif f.startswith('docs/'):
+            areas.add('docs')
         elif f.endswith('.php'):
             areas.add('PHP')
+        elif f.endswith('.py'):
+            areas.add('tooling')
+        elif f.endswith('.md'):
+            areas.add('config')
         else:
             areas.add('other')
 
