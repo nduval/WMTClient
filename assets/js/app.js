@@ -4075,6 +4075,26 @@ class WMTClient {
         this.loadPanelContent('triggers');
     }
 
+    showSaveError(msg) {
+        // Show persistent banner at top of output so save failures can't be missed
+        let banner = document.getElementById('save-error-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'save-error-banner';
+            banner.style.cssText = 'background:#8b0000;color:#fff;padding:8px 12px;font-size:13px;' +
+                'position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;';
+            const outputEl = document.getElementById('output') || document.getElementById('chat-output');
+            if (outputEl) {
+                outputEl.parentNode.insertBefore(banner, outputEl);
+            } else {
+                document.body.prepend(banner);
+            }
+        }
+        banner.innerHTML = `<span>${msg}</span>` +
+            `<button onclick="this.parentNode.remove()" style="background:none;border:1px solid rgba(255,255,255,0.5);` +
+            `color:#fff;cursor:pointer;padding:2px 8px;border-radius:3px;margin-left:12px;font-size:12px;">Dismiss</button>`;
+    }
+
     async saveTriggers() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
@@ -4084,7 +4104,7 @@ class WMTClient {
                 body: JSON.stringify({ triggers: this.triggers })
             });
             if (!res.ok) {
-                this.appendOutput(`Failed to save triggers (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                this.showSaveError(`Triggers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`);
                 return;
             }
             this.sendFilteredTriggersAndAliases();
@@ -4094,7 +4114,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save triggers:', e);
-            this.appendOutput('Failed to save triggers — network error.', 'error');
+            this.showSaveError('Triggers NOT saved — network error. Your changes exist only in memory and will be lost if you disconnect.');
         }
     }
 
@@ -4621,7 +4641,7 @@ class WMTClient {
                 body: JSON.stringify({ aliases: this.aliases })
             });
             if (!res.ok) {
-                this.appendOutput(`Failed to save aliases (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                this.showSaveError(`Aliases NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`);
                 return;
             }
             this.sendFilteredTriggersAndAliases();
@@ -4631,7 +4651,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save aliases:', e);
-            this.appendOutput('Failed to save aliases — network error.', 'error');
+            this.showSaveError('Aliases NOT saved — network error. Your changes exist only in memory and will be lost if you disconnect.');
         }
     }
 
@@ -4644,7 +4664,7 @@ class WMTClient {
                 body: JSON.stringify({ tickers: this.tickers })
             });
             if (!res.ok) {
-                this.appendOutput(`Failed to save tickers (${res.status}) — your session may have expired. Please log in again.`, 'error');
+                this.showSaveError(`Tickers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`);
                 return;
             }
             this.sendFilteredTriggersAndAliases();
@@ -4654,7 +4674,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save tickers:', e);
-            this.appendOutput('Failed to save tickers — network error.', 'error');
+            this.showSaveError('Tickers NOT saved — network error. Your changes exist only in memory and will be lost if you disconnect.');
         }
     }
 
@@ -5691,31 +5711,31 @@ class WMTClient {
             // Alias commands
             case 'alias':
             case 'ali':
-                this.cmdAlias(args);
+                await this.cmdAlias(args);
                 break;
             case 'unalias':
             case 'unali':
-                this.cmdUnalias(args);
+                await this.cmdUnalias(args);
                 break;
 
             // Action/Trigger commands
             case 'action':
             case 'act':
-                this.cmdAction(args);
+                await this.cmdAction(args);
                 break;
             case 'unaction':
             case 'unact':
-                this.cmdUnaction(args);
+                await this.cmdUnaction(args);
                 break;
 
             // Ticker commands
             case 'ticker':
             case 'tick':
-                this.cmdTicker(args);
+                await this.cmdTicker(args);
                 break;
             case 'unticker':
             case 'untick':
-                this.cmdUnticker(args);
+                await this.cmdUnticker(args);
                 break;
 
             // Delay commands
@@ -5754,30 +5774,30 @@ class WMTClient {
 
             // Gag command (shortcut for gag trigger)
             case 'gag':
-                this.cmdGag(args);
+                await this.cmdGag(args);
                 break;
             case 'ungag':
-                this.cmdUngag(args);
+                await this.cmdUngag(args);
                 break;
 
             // Highlight command
             case 'highlight':
             case 'high':
-                this.cmdHighlight(args);
+                await this.cmdHighlight(args);
                 break;
             case 'unhighlight':
             case 'unhigh':
-                this.cmdUnhighlight(args);
+                await this.cmdUnhighlight(args);
                 break;
 
             // Substitute command (text replacement)
             case 'substitute':
             case 'sub':
-                this.cmdSubstitute(args);
+                await this.cmdSubstitute(args);
                 break;
             case 'unsubstitute':
             case 'unsub':
-                this.cmdUnsubstitute(args);
+                await this.cmdUnsubstitute(args);
                 break;
 
             // Variable commands
@@ -5966,7 +5986,7 @@ class WMTClient {
     // Supports: #alias {name} {command} or #alias name command with multiple words
     // #alias {pattern} {replacement} {priority}
     // Priority: 1-9 (default 5), lower fires first. TinTin++ convention.
-    cmdAlias(args) {
+    async cmdAlias(args) {
         if (args.length === 0) {
             // No args: list all aliases
             if (this.aliases.length === 0) {
@@ -6028,11 +6048,11 @@ class WMTClient {
             this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
         }
 
-        this.saveAliases();
+        await this.saveAliases();
     }
 
     // #unalias {pattern} - Remove alias(es) with wildcard support
-    cmdUnalias(args) {
+    async cmdUnalias(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unalias {pattern}', 'error');
             return;
@@ -6048,13 +6068,13 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} ALIAS${removed > 1 ? 'ES' : ''} REMOVED.`, 'system');
-            this.saveAliases();
+            await this.saveAliases();
         }
     }
 
     // #action {pattern} {command} {priority}
     // Priority: 1-9 (default 5), lower fires first. TinTin++ convention.
-    cmdAction(args) {
+    async cmdAction(args) {
         const actions = this.triggers.filter(t => t.actions?.some(a => a.type === 'command'));
 
         if (args.length === 0) {
@@ -6116,11 +6136,11 @@ class WMTClient {
         });
         this.appendOutput(`#OK: #ACTION {${pattern}} {${command}} @ {${priority}}.`, 'system');
 
-        this.saveTriggers();
+        await this.saveTriggers();
     }
 
     // #unaction {pattern} - Remove action(s) with wildcard support
-    cmdUnaction(args) {
+    async cmdUnaction(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unaction {pattern}', 'error');
             return;
@@ -6137,12 +6157,12 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} ACTION${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
-            this.saveTriggers();
+            await this.saveTriggers();
         }
     }
 
     // #ticker {name} {command} {interval} - Create/update a ticker (server-side, persistent)
-    cmdTicker(args) {
+    async cmdTicker(args) {
         if (args.length === 0) {
             // No args: list all tickers
             if (this.tickers.length === 0) {
@@ -6203,11 +6223,11 @@ class WMTClient {
             this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
         }
 
-        this.saveTickers();
+        await this.saveTickers();
     }
 
     // #unticker {name} - Delete ticker(s) with wildcard support
-    cmdUnticker(args) {
+    async cmdUnticker(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unticker {name}', 'error');
             return;
@@ -6223,7 +6243,7 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
-            this.saveTickers();
+            await this.saveTickers();
         }
     }
 
@@ -7478,41 +7498,41 @@ class WMTClient {
         switch (command.toLowerCase()) {
             case 'action':
             case 'act':
-                this.cmdAction(args);
+                await this.cmdAction(args);
                 break;
             case 'unaction':
             case 'unact':
-                this.cmdUnaction(args);
+                await this.cmdUnaction(args);
                 break;
             case 'alias':
             case 'ali':
-                this.cmdAlias(args);
+                await this.cmdAlias(args);
                 break;
             case 'unalias':
             case 'unali':
-                this.cmdUnalias(args);
+                await this.cmdUnalias(args);
                 break;
             case 'gag':
-                this.cmdGag(args);
+                await this.cmdGag(args);
                 break;
             case 'ungag':
-                this.cmdUngag(args);
+                await this.cmdUngag(args);
                 break;
             case 'highlight':
             case 'high':
-                this.cmdHighlight(args);
+                await this.cmdHighlight(args);
                 break;
             case 'unhighlight':
             case 'unhigh':
-                this.cmdUnhighlight(args);
+                await this.cmdUnhighlight(args);
                 break;
             case 'substitute':
             case 'sub':
-                this.cmdSubstitute(args);
+                await this.cmdSubstitute(args);
                 break;
             case 'unsubstitute':
             case 'unsub':
-                this.cmdUnsubstitute(args);
+                await this.cmdUnsubstitute(args);
                 break;
             case 'regexp':
             case 'regex':
@@ -7981,7 +8001,7 @@ class WMTClient {
     }
 
     // #gag {pattern} - Create a gag trigger (TinTin++ style)
-    cmdGag(args) {
+    async cmdGag(args) {
         const gags = this.triggers.filter(t => t.actions?.some(a => a.type === 'gag'));
 
         if (args.length === 0) {
@@ -8042,11 +8062,11 @@ class WMTClient {
             });
             this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
         }
-        this.saveTriggers();
+        await this.saveTriggers();
     }
 
     // #ungag {pattern} - Remove gag(s) with wildcard support
-    cmdUngag(args) {
+    async cmdUngag(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #ungag {pattern}', 'error');
             return;
@@ -8063,7 +8083,7 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} GAG${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
-            this.saveTriggers();
+            await this.saveTriggers();
         }
     }
 
@@ -8134,7 +8154,7 @@ class WMTClient {
     }
 
     // #highlight/#high {pattern} {color} - Create highlight trigger (TinTin++ style)
-    cmdHighlight(args) {
+    async cmdHighlight(args) {
         const highlights = this.triggers.filter(t => t.actions?.some(a => a.type === 'highlight'));
 
         if (args.length === 0) {
@@ -8217,11 +8237,11 @@ class WMTClient {
             this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
         }
 
-        this.saveTriggers();
+        await this.saveTriggers();
     }
 
     // #unhighlight {pattern} - Remove highlight(s) with wildcard support
-    cmdUnhighlight(args) {
+    async cmdUnhighlight(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unhighlight {pattern}', 'error');
             return;
@@ -8238,12 +8258,12 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} HIGHLIGHT${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
-            this.saveTriggers();
+            await this.saveTriggers();
         }
     }
 
     // #substitute/#sub {pattern} {replacement} - Create substitute trigger (TinTin++ style)
-    cmdSubstitute(args) {
+    async cmdSubstitute(args) {
         const subs = this.triggers.filter(t => t.actions?.some(a => a.type === 'substitute'));
 
         if (args.length === 0) {
@@ -8311,11 +8331,11 @@ class WMTClient {
             this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
         }
 
-        this.saveTriggers();
+        await this.saveTriggers();
     }
 
     // #unsubstitute/#unsub {pattern} - Remove substitute(s) with wildcard support
-    cmdUnsubstitute(args) {
+    async cmdUnsubstitute(args) {
         if (args.length < 1) {
             this.appendOutput('Usage: #unsub {pattern}', 'error');
             return;
@@ -8332,7 +8352,7 @@ class WMTClient {
         }
         if (removed > 0) {
             this.appendOutput(`#OK: ${removed} SUBSTITUTE${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
-            this.saveTriggers();
+            await this.saveTriggers();
         }
     }
 
@@ -10084,7 +10104,7 @@ class WMTClient {
                         class: null
                     };
                     this.triggers.push(trigger);
-                    this.saveTriggers();
+                    await this.saveTriggers();
                     if (!this._silent) this.appendOutput(`#OK: ONESHOT ACTION {${pattern}} CREATED.`, 'system');
                 } else if (triggerType === 'gag') {
                     if (triggerArgs.length < 1) return;
@@ -10104,7 +10124,7 @@ class WMTClient {
                         class: null
                     };
                     this.triggers.push(trigger);
-                    this.saveTriggers();
+                    await this.saveTriggers();
                     if (!this._silent) this.appendOutput(`#OK: ONESHOT GAG {${pattern}} CREATED.`, 'system');
                 } else if (triggerType === 'highlight' || triggerType === 'high') {
                     if (triggerArgs.length < 2) return;
@@ -10125,7 +10145,7 @@ class WMTClient {
                         class: null
                     };
                     this.triggers.push(trigger);
-                    this.saveTriggers();
+                    await this.saveTriggers();
                     if (!this._silent) this.appendOutput(`#OK: ONESHOT HIGHLIGHT {${pattern}} CREATED.`, 'system');
                 }
                 break;
