@@ -2475,10 +2475,6 @@ function processLine(session, line) {
 
   // Execute trigger commands (with alias expansion)
   processed.commands.forEach(cmd => {
-    // DEBUG: trace trigger command execution for bot steps
-    if (cmd.includes('step') || cmd.includes('walk')) {
-      console.log(`[DEBUG-TRIG-CMD] cmd="${cmd.substring(0, 120)}" startsHash=${cmd.startsWith('#')}`);
-    }
     if (cmd.startsWith('#')) {
       // Process #math/#var server-side for immediate variable updates
       serverProcessInlineCommand(cmd, session);
@@ -2489,10 +2485,6 @@ function processLine(session, line) {
     } else if (session.mudSocket && !session.mudSocket.destroyed) {
       // Expand aliases before sending to MUD
       const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
-      // DEBUG: trace expansion result
-      if (cmd.includes('step') || cmd.includes('walk')) {
-        console.log(`[DEBUG-TRIG-EXP] expanded=[${expanded.map(e => e.substring(0, 60)).join(', ')}]`);
-      }
       expanded.forEach(ec => {
         // Check for #N command pattern (e.g., #15 e) - repeat command N times
         const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
@@ -3853,10 +3845,6 @@ function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, funct
     // Substitute $variables BEFORE alias pattern matching
     const substituted = substituteUserVariables(partTrimmed, variables, functions);
     const expanded = processAliases(substituted, aliases, variables, functions);
-    // DEBUG: trace alias expansion for bot steps
-    if (session && (partTrimmed.includes('step') || partTrimmed.includes('walk'))) {
-      console.log(`[DEBUG-ALIAS] raw="${partTrimmed}" sub="${substituted}" exp="${expanded}" match=${expanded !== substituted}`);
-    }
     if (expanded === substituted) {
       results.push(substituted);
     } else {
