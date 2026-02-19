@@ -7690,16 +7690,17 @@ class WMTClient {
             'echo': 0,                    // #echo {text} [row]
             'send': 0,                    // #send {text}
             'action': 1, 'act': 1,       // #action {pattern} {body} [priority]
-            'alias': 1,                   // #alias {pattern} {body} [priority]
+            'alias': 1, 'ali': 1,        // #alias {pattern} {body} [priority]
             'gag': 0,                     // #gag {pattern}
-            'highlight': 1, 'hi': 1,     // #highlight {pattern} {color} [priority]
+            'highlight': 1, 'high': 1, 'hi': 1,  // #highlight {pattern} {color} [priority]
             'substitute': 1, 'sub': 1,   // #sub {pattern} {replacement} [priority]
             'ticker': 1, 'tick': 1,      // #ticker {name} {command} {interval}
             'delay': 1, 'del': 1,        // #delay {name} {command} {seconds}
             'class': 2,                   // #class {name} {option} {body}
             'replace': 2,                 // #replace {var} {old} {new}
+            'format': 1,                  // #format {var} {format} [args...]
             'unaction': 0, 'unact': 0,   // #unaction {pattern}
-            'unalias': 0,                 // #unalias {pattern}
+            'unalias': 0, 'unali': 0,    // #unalias {pattern}
             'ungag': 0,                   // #ungag {pattern}
         };
         const getAllAfter = GET_ALL_AFTER[command];
@@ -10125,6 +10126,35 @@ class WMTClient {
                     this._silent = oldSilent;
                 }
                 break;
+
+            case 'substitute': {
+                // #line substitute {flags} {command} - force substitution before execution
+                // Common usage: #line substitute variables {command}
+                // Flags: variables, functions, colors, escapes, all
+                if (args.length >= 3) {
+                    const flags = args[1].toLowerCase();
+                    let cmd = args.slice(2).join(' ');
+                    // Strip outer braces if present
+                    if (cmd.startsWith('{') && cmd.endsWith('}')) {
+                        cmd = cmd.slice(1, -1);
+                    }
+                    // Apply requested substitutions
+                    if (flags === 'variables' || flags === 'all') {
+                        cmd = this.substituteVariables(cmd);
+                    }
+                    if (flags === 'functions' || flags === 'all') {
+                        cmd = this.substituteVariables(cmd); // functions are resolved during var substitution
+                    }
+                    if (flags === 'colors' || flags === 'all') {
+                        cmd = this.parseTinTinColors(cmd);
+                    }
+                    if (flags === 'escapes' || flags === 'all') {
+                        cmd = this.processTinTinEscapes(cmd);
+                    }
+                    await this.executeCommandString(cmd);
+                }
+                break;
+            }
 
             case 'ignore':
                 // #line ignore {command} - execute command with triggers disabled
