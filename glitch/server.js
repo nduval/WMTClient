@@ -3330,6 +3330,12 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
+      // If session.ws was already replaced by a rekey/takeover, this close
+      // is for the OLD WebSocket — don't null out the new one
+      if (session.ws !== ws) {
+        return;
+      }
+
       // Unexpected disconnect - keep MUD connection alive
       session.ws = null;
       session.disconnectedAt = Date.now();
@@ -3349,6 +3355,8 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (err) => {
     console.error('WebSocket error:', err.message);
     if (session) {
+      // Don't null out ws if session was rekeyed to a different connection
+      if (session.ws !== ws) return;
       session.ws = null;
       session.disconnectedAt = Date.now();
     }
