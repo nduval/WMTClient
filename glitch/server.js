@@ -2464,6 +2464,15 @@ function processLine(session, line) {
     });
   }
 
+  // Remove oneshot triggers that fired
+  if (processed.firedOneshots.length > 0) {
+    session.triggers = (session.triggers || []).filter(t => !processed.firedOneshots.includes(t.id));
+    // Notify client to remove them too
+    processed.firedOneshots.forEach(id => {
+      sendToClient(session, { type: 'remove_trigger', triggerId: id });
+    });
+  }
+
   // Execute trigger commands (with alias expansion)
   processed.commands.forEach(cmd => {
     if (cmd.startsWith('#')) {
@@ -3864,7 +3873,8 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
     highlight: null,
     commands: [],
     sound: null,
-    loopDetected: null  // Will contain trigger info if loop detected
+    loopDetected: null,  // Will contain trigger info if loop detected
+    firedOneshots: []    // Oneshot trigger IDs that fired and should be removed
   };
 
   const now = Date.now();
@@ -4050,8 +4060,22 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
             break;
         }
       }
+
+      // Track oneshot triggers that fired for removal
+      if (trigger.oneshot && trigger.id) {
+        result.firedOneshots.push(trigger.id);
+      }
     }
   }
+
+  // Process #line gag commands — scan and remove from commands, set gag flag
+  result.commands = result.commands.filter(cmd => {
+    if (/^#line\s+gag\s*$/i.test(cmd.trim())) {
+      result.gag = true;
+      return false;
+    }
+    return true;
+  });
 
   return result;
 }
@@ -4498,6 +4522,55 @@ function serverProcessInlineCommand(cmd, session) {
       if (!session._varServerModified) session._varServerModified = {};
       session._varServerModified[varName] = Date.now();
     }
+    return true;
+  }
+
+  // #line oneshot #action {pattern} {commands} [priority]
+  // Also handles: #line oneshot #act, #line oneshot #gag, #line oneshot #highlight
+  const lineOneshotMatch = trimmed.match(/^#line\s+oneshot\s+#(action|act|gag|highlight|high)\s+(.*)/i);
+  if (lineOneshotMatch) {
+    const triggerType = lineOneshotMatch[1].toLowerCase();
+    const triggerArgs = parseBracedArgs(lineOneshotMatch[2]);
+    if (triggerArgs.length >= 1) {
+      const pattern = triggerArgs[0];
+      const id = 'oneshot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const actions = [];
+
+      if (triggerType === 'gag') {
+        actions.push({ type: 'gag' });
+      } else if (triggerType === 'highlight' || triggerType === 'high') {
+        // #line oneshot #highlight {pattern} {color}
+        const color = triggerArgs[1] || '';
+        actions.push({ type: 'highlight', fgColor: color });
+      } else {
+        // #action/#act: second arg is command body
+        const command = triggerArgs[1] || '';
+        actions.push({ type: 'command', command: command });
+      }
+
+      const priority = triggerArgs[2] ? parseInt(triggerArgs[2]) || 5 : 5;
+
+      const trigger = {
+        id,
+        name: `[oneshot] ${pattern.substring(0, 30)}`,
+        pattern,
+        matchType: isTinTinPattern(pattern) ? 'tintin' : 'substring',
+        actions,
+        priority,
+        enabled: true,
+        oneshot: true,
+        class: null
+      };
+
+      if (!session.triggers) session.triggers = [];
+      session.triggers.push(trigger);
+    }
+    return true;
+  }
+
+  // #line gag (standalone, outside of trigger context — handled in processTriggers for trigger context)
+  if (/^#line\s+gag\s*$/i.test(trimmed)) {
+    // When used from a command (not trigger), this is a no-op since there's no "current line"
     return true;
   }
 

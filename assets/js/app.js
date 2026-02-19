@@ -815,6 +815,17 @@ class WMTClient {
                 }
                 break;
 
+            case 'remove_trigger':
+                // Server removed a trigger (e.g., oneshot that fired)
+                if (data.triggerId) {
+                    const idx = this.triggers.findIndex(t => t.id === data.triggerId);
+                    if (idx !== -1) {
+                        this.triggers.splice(idx, 1);
+                        this.saveTriggers();
+                    }
+                }
+                break;
+
             case 'trigger_chatmon':
                 // Trigger sent a message to ChatMon
                 if (data.message) {
@@ -5879,6 +5890,11 @@ class WMTClient {
                 this.cmdUnsplit();
                 break;
 
+            // #line subcommands
+            case 'line':
+                await this.cmdLine(args, rest);
+                break;
+
             // No operation (comment)
             case 'nop':
                 // Do nothing - it's a comment
@@ -7625,6 +7641,9 @@ class WMTClient {
                 break;
             case 'mip':
                 this.cmdMip(args);
+                break;
+            case 'line':
+                await this.cmdLine(args, rest);
                 break;
             case 'nop':
                 break;
@@ -9971,6 +9990,154 @@ class WMTClient {
         const lines = message.split('\n');
         for (const line of lines) {
             this.appendOutput(line, 'system');
+        }
+    }
+
+    // #line {subcommand} {args} - Line processing subcommands
+    async cmdLine(args, rest) {
+        if (args.length < 1) {
+            this.appendOutput('Usage: #line {gag|oneshot|quiet|ignore} {command}', 'error');
+            return;
+        }
+
+        const subcommand = args[0].toLowerCase();
+
+        switch (subcommand) {
+            case 'gag':
+                // #line gag - suppress current line (only meaningful in trigger context, handled server-side)
+                // Client-side this is a no-op since there's no "current line"
+                break;
+
+            case 'oneshot': {
+                // #line oneshot #action {pattern} {commands} [priority]
+                // Creates a one-shot trigger that auto-removes after first match
+                if (args.length < 2) {
+                    this.appendOutput('Usage: #line oneshot #action {pattern} {commands}', 'error');
+                    return;
+                }
+                // Reassemble remaining args to get the trigger command
+                const triggerCmd = args.slice(1).join(' ');
+                const typeMatch = triggerCmd.match(/^#?(action|act|gag|highlight|high)\s*/i);
+                if (!typeMatch) {
+                    this.appendOutput('#line oneshot: expected #action, #gag, or #highlight', 'error');
+                    return;
+                }
+                const triggerType = typeMatch[1].toLowerCase();
+                const triggerRest = triggerCmd.slice(typeMatch[0].length);
+
+                // Parse braced arguments inline
+                const triggerArgs = [];
+                let ti = 0;
+                while (ti < triggerRest.length) {
+                    while (ti < triggerRest.length && triggerRest[ti] === ' ') ti++;
+                    if (ti >= triggerRest.length) break;
+                    if (triggerRest[ti] === '{') {
+                        let depth = 1; let start = ti + 1; ti++;
+                        while (ti < triggerRest.length && depth > 0) {
+                            if (triggerRest[ti] === '{') depth++;
+                            else if (triggerRest[ti] === '}') depth--;
+                            ti++;
+                        }
+                        triggerArgs.push(triggerRest.slice(start, ti - 1));
+                    } else {
+                        let start = ti;
+                        while (ti < triggerRest.length && triggerRest[ti] !== ' ') ti++;
+                        triggerArgs.push(triggerRest.slice(start, ti));
+                    }
+                }
+
+                if (triggerType === 'action' || triggerType === 'act') {
+                    if (triggerArgs.length < 2) {
+                        this.appendOutput('Usage: #line oneshot #action {pattern} {commands} [priority]', 'error');
+                        return;
+                    }
+                    const pattern = triggerArgs[0];
+                    const command = triggerArgs[1];
+                    const priority = triggerArgs[2] ? parseInt(triggerArgs[2]) || 5 : 5;
+                    const isTinTin = /%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern) ||
+                                     pattern.startsWith('^') || pattern.endsWith('$');
+                    const trigger = {
+                        id: this.generateId(),
+                        name: `[oneshot] ${pattern.substring(0, 30)}`,
+                        pattern,
+                        matchType: isTinTin ? 'tintin' : 'exact',
+                        actions: [{ type: 'command', command }],
+                        priority,
+                        enabled: true,
+                        oneshot: true,
+                        class: null
+                    };
+                    this.triggers.push(trigger);
+                    this.saveTriggers();
+                    if (!this._silent) this.appendOutput(`#OK: ONESHOT ACTION {${pattern}} CREATED.`, 'system');
+                } else if (triggerType === 'gag') {
+                    if (triggerArgs.length < 1) return;
+                    const pattern = triggerArgs[0];
+                    const priority = triggerArgs[1] ? parseInt(triggerArgs[1]) || 5 : 5;
+                    const isTinTin = /%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern) ||
+                                     pattern.startsWith('^') || pattern.endsWith('$');
+                    const trigger = {
+                        id: this.generateId(),
+                        name: `[oneshot] ${pattern.substring(0, 30)}`,
+                        pattern,
+                        matchType: isTinTin ? 'tintin' : 'exact',
+                        actions: [{ type: 'gag' }],
+                        priority,
+                        enabled: true,
+                        oneshot: true,
+                        class: null
+                    };
+                    this.triggers.push(trigger);
+                    this.saveTriggers();
+                    if (!this._silent) this.appendOutput(`#OK: ONESHOT GAG {${pattern}} CREATED.`, 'system');
+                } else if (triggerType === 'highlight' || triggerType === 'high') {
+                    if (triggerArgs.length < 2) return;
+                    const pattern = triggerArgs[0];
+                    const color = triggerArgs[1];
+                    const priority = triggerArgs[2] ? parseInt(triggerArgs[2]) || 5 : 5;
+                    const isTinTin = /%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern) ||
+                                     pattern.startsWith('^') || pattern.endsWith('$');
+                    const trigger = {
+                        id: this.generateId(),
+                        name: `[oneshot] ${pattern.substring(0, 30)}`,
+                        pattern,
+                        matchType: isTinTin ? 'tintin' : 'exact',
+                        actions: [{ type: 'highlight', fgColor: color }],
+                        priority,
+                        enabled: true,
+                        oneshot: true,
+                        class: null
+                    };
+                    this.triggers.push(trigger);
+                    this.saveTriggers();
+                    if (!this._silent) this.appendOutput(`#OK: ONESHOT HIGHLIGHT {${pattern}} CREATED.`, 'system');
+                }
+                break;
+            }
+
+            case 'quiet':
+                // #line quiet {command} - execute command without system messages
+                if (args.length >= 2) {
+                    const oldSilent = this._silent;
+                    this._silent = true;
+                    const cmd = args.slice(1).join(' ');
+                    await this.executeCommandString(cmd);
+                    this._silent = oldSilent;
+                }
+                break;
+
+            case 'ignore':
+                // #line ignore {command} - execute command with triggers disabled
+                // (client-side no-op since triggers run server-side)
+                if (args.length >= 2) {
+                    const cmd = args.slice(1).join(' ');
+                    await this.executeCommandString(cmd);
+                }
+                break;
+
+            default:
+                // Unknown #line subcommand — pass through silently
+                break;
         }
     }
 
