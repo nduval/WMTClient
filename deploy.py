@@ -257,7 +257,8 @@ def git_commit_before_deploy():
     changed_files = []
     for line in tracked_changes:
         # Format: "XY filename" or "XY filename -> newname" (renames)
-        filepath = line[3:].strip().strip('"').split(' -> ')[-1].strip('"')
+        # Skip 2-char status, strip whitespace (handles tabs/spaces)
+        filepath = line[2:].lstrip().strip('"').split(' -> ')[-1].strip('"')
         changed_files.append(filepath)
 
     # Summarize by area
