@@ -2199,7 +2199,7 @@ class WMTClient {
             '3': '<span style="font-style:italic">',     // italic
             '4': '<span style="text-decoration:underline">',
             '5': '<span style="animation:blink 1s step-end infinite">', // blink
-            '7': '<span style="filter:invert(1)">',      // reverse
+            '7': '<span style="color:var(--mud-bg-color, #000000);background-color:var(--mud-text-color, #00ff00)">',  // reverse
             '30': '<span style="color:#555555">',  // dark gray (visible on black)
             '31': '<span style="color:#cc4444">',  // dim red
             '32': '<span style="color:#44cc44">',  // dim green
