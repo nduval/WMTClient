@@ -2193,6 +2193,9 @@ class WMTClient {
     }
 
     ansiToHtml(text) {
+        // Handle backspace characters (MUD uses \b to overwrite previous char for formatting)
+        text = text.replace(/.\x08/g, '');
+
         // Escape HTML first
         text = text.replace(/&/g, '&amp;')
                    .replace(/</g, '&lt;')
