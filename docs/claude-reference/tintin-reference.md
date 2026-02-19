@@ -118,6 +118,36 @@ Without braces, `$hpmax[<088>$hpchange<269>]` would be misread as nested key `$h
 
 ---
 
+## Script File Parsing (#read)
+
+Based on TinTin++ `read_file()` from `files.c`. Uses a two-pass architecture:
+
+### Pass 1: Preprocessing (`preprocessScript()`)
+
+Reads the entire file character-by-character with brace depth tracking:
+
+1. **Inside braces (depth > 0)**: Newlines are collapsed into single spaces. Trailing/leading whitespace is stripped. This turns multi-line commands into single lines.
+2. **At depth 0**: Looks ahead past whitespace. If the next non-whitespace char is `{`, replaces the newline with a space (joining lines). Otherwise keeps the newline as a command boundary.
+3. **Comments**: `/* */` block comments and `//` line comments are stripped.
+
+This handles all TinTin++ multi-line formats:
+```
+#ALIAS {name} {body}                     # Single line - works
+#ALIAS {name} {                          # Body starts on same line - works
+    body
+}
+#ALIAS {name}                            # Body on NEXT line - works (depth-0 look-ahead)
+{
+    body
+}
+```
+
+### Pass 2: Execution
+
+Split on remaining `\n` characters. Each line starting with `#` is executed via `executeTinTinLine()`. Non-`#` lines are skipped (in TinTin++ these would be sent to MUD, but in .tin files they're typically just comments or blank lines).
+
+---
+
 ## Command Reference
 
 ### #if Command

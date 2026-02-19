@@ -11,6 +11,8 @@ const net = require('net');
 const http = require('http');
 const https = require('https');
 const url = require('url');
+const fs = require('fs');
+const path = require('path');
 
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
@@ -225,6 +227,86 @@ function logSessionEvent(type, data) {
   const logParts = Object.entries(data).map(([k, v]) => `${k}=${v}`).join(' ');
   console.log(`${type}: ${logParts}`);
 }
+
+// ==================== File-based Session Logging ====================
+// Writes detailed JSONL logs per-character per-day for troubleshooting.
+// Logs: input, MUD output, trigger matches, session events, settings.
+// Files: /var/log/wmt/YYYY-MM-DD/CharacterName.jsonl
+
+const LOG_DIR = '/var/log/wmt';
+const LOG_RETENTION_DAYS = 3; // Keep logs on Lightsail for 3 days
+const LOG_USER_ID = process.env.LOG_USER_ID || null; // If set, only log this user's sessions
+const _logDirsCreated = new Set();
+
+function writeSessionLog(session, type, data) {
+  if (!session) return;
+  // Only log for the configured user (if filter is set)
+  if (LOG_USER_ID && String(session.userId) !== LOG_USER_ID) return;
+  try {
+    const date = new Date().toISOString().slice(0, 10);
+    const charName = (session.characterName || session.characterId || 'unknown')
+      .toString().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const dir = path.join(LOG_DIR, date);
+    const filePath = path.join(dir, `${charName}.jsonl`);
+
+    if (!_logDirsCreated.has(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        _logDirsCreated.add(dir);
+      } catch (e) {
+        console.error('Log dir create error:', dir, e.message);
+        return; // Can't write without the directory
+      }
+    }
+
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      type,
+      ...data
+    }) + '\n';
+
+    fs.appendFile(filePath, entry, (err) => {
+      if (err && !writeSessionLog._errLogged) {
+        console.error('Log write error:', err.message);
+        writeSessionLog._errLogged = true;
+      }
+    });
+  } catch (e) {
+    // Never let logging crash the server
+  }
+}
+
+// Clean up old log directories on startup and every 6 hours
+function cleanupOldLogs() {
+  try {
+    if (!fs.existsSync(LOG_DIR)) return;
+    const cutoff = Date.now() - (LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const entries = fs.readdirSync(LOG_DIR);
+    for (const entry of entries) {
+      // Directory names are YYYY-MM-DD
+      const dateMatch = entry.match(/^(\d{4}-\d{2}-\d{2})$/);
+      if (!dateMatch) continue;
+      const dirDate = new Date(dateMatch[1] + 'T00:00:00Z').getTime();
+      if (dirDate < cutoff) {
+        const dirPath = path.join(LOG_DIR, entry);
+        try {
+          const files = fs.readdirSync(dirPath);
+          for (const f of files) fs.unlinkSync(path.join(dirPath, f));
+          fs.rmdirSync(dirPath);
+          console.log(`Cleaned up old logs: ${entry}`);
+        } catch (e) {
+          console.error(`Failed to clean logs ${entry}:`, e.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Log cleanup error:', e.message);
+  }
+}
+
+// Run cleanup on startup and every 6 hours
+cleanupOldLogs();
+setInterval(cleanupOldLogs, 6 * 60 * 60 * 1000);
 
 /**
  * Flush unflushed session logs to IONOS for persistence
@@ -1491,6 +1573,108 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
       }
     });
+  } else if (parsedUrl.pathname === '/logs/files' && req.method === 'GET') {
+    // List available session log files
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+    try {
+      const result = [];
+      if (fs.existsSync(LOG_DIR)) {
+        const dates = fs.readdirSync(LOG_DIR).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+        for (const date of dates) {
+          const dirPath = path.join(LOG_DIR, date);
+          const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl')).sort();
+          for (const file of files) {
+            const stats = fs.statSync(path.join(dirPath, file));
+            result.push({ date, file, size: stats.size });
+          }
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, files: result }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+
+  } else if (parsedUrl.pathname === '/logs/view' && req.method === 'GET') {
+    // View a session log file (supports ?date=YYYY-MM-DD&char=Name&tail=N&type=input)
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+    const params = new URLSearchParams(parsedUrl.query || '');
+    const date = params.get('date') || new Date().toISOString().slice(0, 10);
+    const char = params.get('char');
+    const tail = parseInt(params.get('tail')) || 0;
+    const typeFilter = params.get('type') || '';
+
+    if (!char || !/^[a-zA-Z0-9_-]+$/.test(char) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid params. Need ?date=YYYY-MM-DD&char=Name' }));
+      return;
+    }
+
+    const filePath = path.join(LOG_DIR, date, `${char}.jsonl`);
+    if (!fs.existsSync(filePath)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Log file not found' }));
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      let lines = content.trim().split('\n').filter(Boolean);
+      if (typeFilter) {
+        lines = lines.filter(l => { try { return JSON.parse(l).type === typeFilter; } catch { return false; } });
+      }
+      if (tail > 0) {
+        lines = lines.slice(-tail);
+      }
+      const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, count: entries.length, entries }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+
+  } else if (parsedUrl.pathname === '/logs/sessions' && req.method === 'GET') {
+    // List active sessions for the logged user
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+    const result = [];
+    for (const [token, session] of sessions) {
+      if (LOG_USER_ID && String(session.userId) !== LOG_USER_ID) continue;
+      result.push({
+        token: token.substring(0, 8) + '...',
+        userId: session.userId,
+        characterId: session.characterId,
+        characterName: session.characterName || null,
+        mudConnected: !!(session.mudSocket || session.bridgeSocket?.writable),
+        wsConnected: !!session.ws,
+        targetHost: session.targetHost,
+        targetPort: session.targetPort,
+        triggerCount: (session.triggers || []).length,
+        aliasCount: (session.aliases || []).length,
+        tickerCount: (session.tickers || []).length,
+        variableCount: Object.keys(session.variables || {}).length,
+        createdAt: session.createdAt || null,
+      });
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, sessions: result }));
+
   } else {
     res.writeHead(404);
     res.end('Not found');
@@ -1614,23 +1798,23 @@ function startTicker(session, ticker) {
     // Only execute if MUD is connected
     if (session.mudSocket && !session.mudSocket.destroyed) {
       // TinTin++: substitute variables at fire time (not creation time)
-      let cmd = substituteUserVariables(ticker.command, session.variables || {});
+      let cmd = substituteUserVariables(ticker.command, session.variables || {}, session.functions || {});
       // Expand aliases before sending
-      const expanded = expandCommandWithAliases(cmd, session.aliases || []);
+      const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
       expanded.forEach(cmd => {
         // Handle #N repeat pattern
         const repeatMatch = cmd.match(/^#(\d+)\s+(.+)$/);
         if (repeatMatch) {
           const count = Math.min(parseInt(repeatMatch[1]), 100);
-          const repeatCmd = repeatMatch[2];
+          const repeatCmd = processEscapes(repeatMatch[2]);
           for (let i = 0; i < count; i++) {
             session.mudSocket.write(repeatCmd + '\r\n');
           }
         } else if (cmd.startsWith('#')) {
-          // Client-side command from alias expansion - send back to client
+          // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: cmd });
         } else {
-          session.mudSocket.write(cmd + '\r\n');
+          session.mudSocket.write(processEscapes(cmd) + '\r\n');
         }
       });
     }
@@ -1769,6 +1953,7 @@ function closeSession(session, reason) {
     mudWasConnected: mudConnected,
     wizard: session.isWizard
   });
+  writeSessionLog(session, 'session', { event: 'close', reason });
 
   // Clear all tickers
   clearAllTickers(session);
@@ -2125,7 +2310,7 @@ function processLine(session, line) {
       const mipStart = line.lastIndexOf('#K%');
       const beforeMip = line.substring(0, mipStart);
       if (beforeMip.trim()) {
-        const processed = processTriggers(beforeMip, session.triggers, null, session.variables || {});
+        const processed = processTriggers(beforeMip, session.triggers, null, session.variables || {}, session.functions || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -2156,7 +2341,7 @@ function processLine(session, line) {
       displayText = displayText.replace(/^\]\s*/, '');
 
       if (displayText) {
-        const processed = processTriggers(displayText, session.triggers, null, session.variables || {});
+        const processed = processTriggers(displayText, session.triggers, null, session.variables || {}, session.functions || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -2185,7 +2370,7 @@ function processLine(session, line) {
       const displayText = beforeMip + afterMip;
 
       if (displayText.trim()) {
-        const processed = processTriggers(displayText, session.triggers, null, session.variables || {});
+        const processed = processTriggers(displayText, session.triggers, null, session.variables || {}, session.functions || {});
         if (!processed.gag) {
           sendToClient(session, {
             type: 'mud',
@@ -2245,7 +2430,16 @@ function processLine(session, line) {
   }
 
   // Process triggers with loop detection
-  const processed = processTriggers(line, session.triggers, session.loopTracker, session.variables || {});
+  const processed = processTriggers(line, session.triggers, session.loopTracker, session.variables || {}, session.functions || {});
+
+  // Log trigger matches that produced commands or gags
+  if (processed.commands.length > 0 || processed.gag) {
+    writeSessionLog(session, 'trigger', {
+      line: stripAnsi(line).substring(0, 200),
+      gag: processed.gag,
+      cmds: processed.commands.length > 0 ? processed.commands : undefined
+    });
+  }
 
   // Handle loop detection - notify client and disable the trigger
   if (processed.loopDetected) {
@@ -2273,27 +2467,29 @@ function processLine(session, line) {
   // Execute trigger commands (with alias expansion)
   processed.commands.forEach(cmd => {
     if (cmd.startsWith('#')) {
+      // Process #math/#var server-side for immediate variable updates
+      serverProcessInlineCommand(cmd, session);
       sendToClient(session, {
         type: 'client_command',
         command: cmd
       });
     } else if (session.mudSocket && !session.mudSocket.destroyed) {
       // Expand aliases before sending to MUD
-      const expanded = expandCommandWithAliases(cmd, session.aliases || []);
+      const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
       expanded.forEach(ec => {
         // Check for #N command pattern (e.g., #15 e) - repeat command N times
         const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
         if (repeatMatch) {
           const count = Math.min(parseInt(repeatMatch[1]), 100);
-          const repeatCmd = repeatMatch[2];
+          const repeatCmd = processEscapes(repeatMatch[2]);
           for (let i = 0; i < count; i++) {
             session.mudSocket.write(repeatCmd + '\r\n');
           }
         } else if (ec.startsWith('#')) {
-          // Client-side command from alias expansion - send back to client
+          // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: ec });
         } else {
-          session.mudSocket.write(ec + '\r\n');
+          session.mudSocket.write(processEscapes(ec) + '\r\n');
         }
       });
     }
@@ -2302,7 +2498,7 @@ function processLine(session, line) {
   // Send Discord webhooks (with user variable substitution, routed through IONOS proxy)
   if (processed.discordWebhooks) {
     processed.discordWebhooks.forEach(webhook => {
-      let finalMessage = substituteUserVariables(webhook.message, session.variables || {});
+      let finalMessage = substituteUserVariables(webhook.message, session.variables || {}, session.functions || {});
       sendToDiscordWebhook(webhook.webhookUrl, finalMessage, session.discordUsername);
     });
   }
@@ -2310,7 +2506,7 @@ function processLine(session, line) {
   // Send ChatMon messages (with user variable substitution)
   if (processed.chatmonMessages) {
     processed.chatmonMessages.forEach(chat => {
-      let finalMessage = substituteUserVariables(chat.message, session.variables || {});
+      let finalMessage = substituteUserVariables(chat.message, session.variables || {}, session.functions || {});
       sendToClient(session, {
         type: 'trigger_chatmon',
         message: finalMessage,
@@ -2357,6 +2553,7 @@ function connectToMud(session) {
   session.mudSocket.connect(session.targetPort, session.targetHost, () => {
     const wasResumed = BRIDGE_URL && session.mudSocket.resumed;
     console.log(`${wasResumed ? 'Resumed' : 'Connected to'} MUD: ${session.targetHost}:${session.targetPort}${BRIDGE_URL ? ' (via bridge)' : ''}`);
+    writeSessionLog(session, 'mud_connect', { host: session.targetHost, port: session.targetPort, resumed: wasResumed });
 
     if (!wasResumed) {
       // New connection — notify client
@@ -2364,9 +2561,11 @@ function connectToMud(session) {
         type: 'system',
         message: `Connected to ${session.targetHost}:${session.targetPort}!`
       });
-      // Bridge mode: the initial session_new had bridgeMode (silent onConnect).
-      // Now send a plain session_new so the client runs the full login flow.
-      if (BRIDGE_URL) {
+      // Bridge mode: only send session_new for new sessions (bridgeMode init).
+      // Session resumes already triggered onConnect via onSessionResumed(false) —
+      // sending session_new again would cause duplicate char name → bad password.
+      if (BRIDGE_URL && session._bridgeModeInit) {
+        session._bridgeModeInit = false;
         sendToClient(session, { type: 'session_new' });
       }
     } else {
@@ -2386,6 +2585,7 @@ function connectToMud(session) {
   session.mudSocket.on('data', (data) => {
     const { buffer: cleanData, hasGA } = stripTelnetSequences(data);
     const text = cleanData.toString('utf8');
+    if (text.trim()) writeSessionLog(session, 'output', { text: text.substring(0, 4000) });
 
     if (session.lineBufferTimeout) {
       clearTimeout(session.lineBufferTimeout);
@@ -2423,6 +2623,7 @@ function connectToMud(session) {
 
   session.mudSocket.on('close', () => {
     console.log('MUD connection closed');
+    writeSessionLog(session, 'mud_disconnect', {});
     // Don't send misleading messages during server restart — browser already got notified
     if (!session.serverRestarting) {
       sendToClient(session, {
@@ -2553,6 +2754,7 @@ wss.on('connection', (ws, req) => {
                 chatBuffer: session.chatBuffer.length,
                 note: 'rekeyed from different token'
               });
+              writeSessionLog(session, 'session', { event: 'resume', mudConnected: oldMudConnected, disconnectedFor: disconnectDuration });
 
               // If Discord prefs are empty, fetch from PHP backend
               if (Object.keys(session.discordChannelPrefs).length === 0) {
@@ -2641,6 +2843,7 @@ wss.on('connection', (ws, req) => {
               bufferSize: session.buffer.length,
               chatBuffer: session.chatBuffer.length
             });
+            writeSessionLog(session, 'session', { event: 'resume', mudConnected, disconnectedFor: disconnectDuration });
 
             // If Discord prefs are empty, fetch from PHP backend
             // This handles the case where server restarted while browser was disconnected
@@ -2693,6 +2896,7 @@ wss.on('connection', (ws, req) => {
               char: characterName || characterId,
               wizard: isWizard
             });
+            writeSessionLog(session, 'session', { event: 'new', user: userId, char: characterName || characterId });
 
             // Fetch Discord prefs from PHP backend (survives server restarts)
             // Do this async so we don't block the session creation
@@ -2708,6 +2912,7 @@ wss.on('connection', (ws, req) => {
               // Old clients ignore bridgeMode flag and run full onConnect — the
               // server-side _suppressAutoLogin handles the char name for those.
               session._pendingBridgeResume = true;
+              session._bridgeModeInit = true;  // Track that this was a bridgeMode new session
               ws.send(JSON.stringify({
                 type: 'session_new',
                 bridgeMode: true
@@ -2729,6 +2934,27 @@ wss.on('connection', (ws, req) => {
       // Handle authenticated messages
       switch (data.type) {
         case 'command':
+          // Queue commands until aliases have synced from client (prevents
+          // commands being sent raw to MUD before alias expansion is ready).
+          if (!session._aliasesSynced) {
+            if (!session._commandQueue) session._commandQueue = [];
+            session._commandQueue.push(data);
+            // Safety timeout: flush after 3s even if sync never arrives
+            if (!session._syncTimeout) {
+              session._syncTimeout = setTimeout(() => {
+                session._aliasesSynced = true;
+                if (session._commandQueue && session._commandQueue.length > 0) {
+                  const queued = session._commandQueue;
+                  session._commandQueue = [];
+                  queued.forEach(qd => {
+                    // Re-emit as command
+                    ws.emit('message', JSON.stringify({ type: 'command', ...qd }));
+                  });
+                }
+              }, 3000);
+            }
+            break;
+          }
           // Suppress auto-login character name after bridge resume.
           // onConnect sends the name after 1.5s, but for resumed sessions
           // the MUD is already logged in — silently drop it.
@@ -2741,26 +2967,47 @@ wss.on('connection', (ws, req) => {
             }
           }
           if (session.mudSocket && !session.mudSocket.destroyed) {
+            writeSessionLog(session, 'input', { cmd: data.command || '' });
             // If raw flag is set, send as-is without semicolon splitting or alias processing
             // (used by #send for ANSI codes containing semicolons)
             if (data.raw) {
               session.mudSocket.write((data.command || '') + '\r\n');
             } else {
-              // Recursively expand aliases and handle semicolons
-              // expandCommand handles a single command, recursively expanding aliases
+              // Recursively expand aliases and handle semicolons.
+              // TinTin++ processes commands sequentially: #var/#math in an alias
+              // body take effect immediately so later commands in the same body
+              // see updated variables (e.g. "#var x 1;dostep$x").
+              const ASYNC_READ_RE = /^#(?:class\s+\{[^}]*\}\s+\{read\}|read\b)/i;
+              let hitAsyncRead = false;  // Once set, stop expanding — remaining go to client
+
               const expandCommand = (cmd, depth = 0) => {
-                if (depth > 10) return [cmd];  // Prevent infinite loops
+                if (depth > 10) return [cmd];
                 const trimmed = cmd.trim();
                 if (!trimmed) return [];
 
-                const expanded = processAliases(trimmed, session.aliases);
-                if (expanded === trimmed) {
-                  // No alias matched, return as-is
+                // After a #read/#class read, don't expand — return literal for client
+                if (hitAsyncRead) return [trimmed];
+
+                // For # commands: execute #var/#math inline for side effects,
+                // then return the command for client forwarding
+                if (trimmed.startsWith('#')) {
+                  // Check if this is an async read — stop expanding after it
+                  if (ASYNC_READ_RE.test(trimmed)) {
+                    hitAsyncRead = true;
+                  } else {
+                    serverProcessInlineCommand(trimmed, session);
+                  }
                   return [trimmed];
                 }
 
-                // Alias matched - the result might contain semicolons
-                // Split and recursively expand each part
+                // Substitute $variables BEFORE alias pattern matching
+                const substituted = substituteUserVariables(trimmed, session.variables || {}, session.functions || {});
+                const expanded = processAliases(substituted, session.aliases, session.variables || {}, session.functions || {});
+                if (expanded === substituted) {
+                  return [substituted];
+                }
+
+                // Alias matched - split result and recursively expand each part
                 const parts = parseCommands(expanded);
                 const results = [];
                 parts.forEach(part => {
@@ -2769,32 +3016,57 @@ wss.on('connection', (ws, req) => {
                 return results;
               };
 
-              // Split initial command by semicolons, expand each part
-              const commands = parseCommands(data.command || '');
-              const allExpanded = [];
-              commands.forEach(c => {
-                allExpanded.push(...expandCommand(c));
-              });
-
-              // Send all expanded commands to MUD (or back to client for # commands)
-              allExpanded.forEach(ec => {
+              // TinTin++ sequential execution: expand and execute each command
+              // one at a time so that #var/#math side effects are visible to
+              // subsequent commands in the same chain.
+              // e.g. "#var x 1;dosomething$x" — $x must be 1 when dosomething expands.
+              const executeOneCommand = (ec) => {
+                // Detect #class {X} {read} {Y} or #read {Y} — async script loading
+                const isAsyncRead = /^#(?:class\s+\{[^}]*\}\s+\{read\}|read\b)/i.test(ec);
+                if (isAsyncRead) {
+                  return 'async_read';
+                }
                 // Check for #N command pattern (e.g., #15 e) - repeat command N times
                 const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
                 if (repeatMatch) {
-                  const count = Math.min(parseInt(repeatMatch[1]), 100); // Cap at 100 for safety
-                  const repeatCmd = repeatMatch[2];
+                  const count = Math.min(parseInt(repeatMatch[1]), 100);
+                  const repeatCmd = processEscapes(repeatMatch[2]);
                   for (let i = 0; i < count; i++) {
                     session.mudSocket.write(repeatCmd + '\r\n');
                   }
                 } else if (ec.startsWith('#')) {
-                  // Client-side command (like #delay, #showme, etc.) - send back to client
+                  // #var/#math already processed during expansion (for sequential side effects)
+                  // Forward to client for #delay, #showme, etc.
                   sendToClient(session, { type: 'client_command', command: ec });
                 } else {
-                  session.mudSocket.write(ec + '\r\n');
+                  session.mudSocket.write(processEscapes(ec) + '\r\n');
                 }
-              });
+                return 'ok';
+              };
 
-              if (allExpanded.length === 0) {
+              // Split initial command by semicolons
+              const commands = parseCommands(data.command || '');
+              let didSomething = false;
+
+              for (const c of commands) {
+                // Expand this one command (alias resolution + variable sub)
+                const expanded = expandCommand(c);
+                for (let ci = 0; ci < expanded.length; ci++) {
+                  const ec = expanded[ci];
+                  didSomething = true;
+                  const result = executeOneCommand(ec);
+                  if (result === 'async_read') {
+                    // Bundle this + remaining expanded + remaining top-level into one client_command
+                    const remaining = [...expanded.slice(ci), ...commands.slice(commands.indexOf(c) + 1)].join(';');
+                    sendToClient(session, { type: 'client_command', command: remaining });
+                    didSomething = true;
+                    // Break out of both loops
+                    return;
+                  }
+                }
+              }
+
+              if (!didSomething) {
                 session.mudSocket.write('\r\n');
               }
             }
@@ -2803,6 +3075,7 @@ wss.on('connection', (ws, req) => {
 
         case 'set_triggers':
           session.triggers = data.triggers || [];
+          writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
           // Bridge mode: triggers arrived, now safe to resume bridge connection.
           // MUD data will flow through processLine with triggers ready.
           if (session._pendingBridgeResume) {
@@ -2813,15 +3086,61 @@ wss.on('connection', (ws, req) => {
 
         case 'set_aliases':
           session.aliases = data.aliases || [];
+          writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
+          // Mark synced and flush any queued commands
+          if (!session._aliasesSynced) {
+            session._aliasesSynced = true;
+            if (session._syncTimeout) {
+              clearTimeout(session._syncTimeout);
+              session._syncTimeout = null;
+            }
+            if (session._commandQueue && session._commandQueue.length > 0) {
+              const queued = session._commandQueue;
+              session._commandQueue = [];
+              queued.forEach(qd => {
+                ws.emit('message', JSON.stringify({ type: 'command', ...qd }));
+              });
+            }
+          }
           break;
 
         case 'set_tickers':
           // Update tickers and restart intervals
           updateSessionTickers(session, data.tickers || []);
+          writeSessionLog(session, 'settings', { what: 'tickers', count: (data.tickers || []).length });
           break;
 
         case 'set_variables':
-          session.variables = data.variables || {};
+          // Merge client variables instead of wholesale replace.
+          // Protect variables recently modified server-side (by #math/#var in
+          // trigger/alias expansion) from being overwritten by stale client sync.
+          {
+            const incoming = data.variables || {};
+            if (!session.variables) session.variables = {};
+            const now = Date.now();
+            const SERVER_VAR_PROTECT_MS = 2000; // 2s protection window
+            for (const key of Object.keys(incoming)) {
+              const serverMod = (session._varServerModified && session._varServerModified[key]) || 0;
+              if (now - serverMod > SERVER_VAR_PROTECT_MS) {
+                session.variables[key] = incoming[key];
+              }
+            }
+            // Remove variables deleted client-side (not in incoming),
+            // unless they were recently set server-side
+            for (const key of Object.keys(session.variables)) {
+              if (!(key in incoming)) {
+                const serverMod = (session._varServerModified && session._varServerModified[key]) || 0;
+                if (now - serverMod > SERVER_VAR_PROTECT_MS) {
+                  delete session.variables[key];
+                }
+              }
+            }
+          }
+          writeSessionLog(session, 'settings', { what: 'variables', count: Object.keys(session.variables).length });
+          break;
+
+        case 'set_functions':
+          session.functions = data.functions || {};
           break;
 
         case 'set_mip':
@@ -2914,7 +3233,7 @@ wss.on('connection', (ws, req) => {
           // Process text through triggers as if it came from MUD
           // Used by #showme to test trigger patterns
           if (data.line) {
-            const processed = processTriggers(data.line, session.triggers, null, session.variables || {});
+            const processed = processTriggers(data.line, session.triggers, null, session.variables || {}, session.functions || {});
 
             // Send to client (even if gagged, for testing)
             sendToClient(session, {
@@ -2928,26 +3247,27 @@ wss.on('connection', (ws, req) => {
             // Execute any trigger commands (with alias expansion)
             processed.commands.forEach(cmd => {
               if (cmd.startsWith('#')) {
+                serverProcessInlineCommand(cmd, session);
                 sendToClient(session, {
                   type: 'client_command',
                   command: cmd
                 });
               } else if (session.mudSocket && !session.mudSocket.destroyed) {
                 // Expand aliases before sending to MUD
-                const expanded = expandCommandWithAliases(cmd, session.aliases || []);
+                const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
                 expanded.forEach(ec => {
                   const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
                   if (repeatMatch) {
                     const count = Math.min(parseInt(repeatMatch[1]), 100);
-                    const repeatCmd = repeatMatch[2];
+                    const repeatCmd = processEscapes(repeatMatch[2]);
                     for (let i = 0; i < count; i++) {
                       session.mudSocket.write(repeatCmd + '\r\n');
                     }
                   } else if (ec.startsWith('#')) {
-                    // Client-side command from alias expansion - send back to client
+                    // #var/#math already processed during expansion for sequential side effects
                     sendToClient(session, { type: 'client_command', command: ec });
                   } else {
-                    session.mudSocket.write(ec + '\r\n');
+                    session.mudSocket.write(processEscapes(ec) + '\r\n');
                   }
                 });
               }
@@ -2956,7 +3276,7 @@ wss.on('connection', (ws, req) => {
             // Send Discord webhooks (with user variable substitution, routed through IONOS proxy)
             if (processed.discordWebhooks) {
               processed.discordWebhooks.forEach(webhook => {
-                let finalMessage = substituteUserVariables(webhook.message, session.variables || {});
+                let finalMessage = substituteUserVariables(webhook.message, session.variables || {}, session.functions || {});
                 sendToDiscordWebhook(webhook.webhookUrl, finalMessage, session.discordUsername);
               });
             }
@@ -2964,7 +3284,7 @@ wss.on('connection', (ws, req) => {
             // Send ChatMon messages (with user variable substitution)
             if (processed.chatmonMessages) {
               processed.chatmonMessages.forEach(chat => {
-                let finalMessage = substituteUserVariables(chat.message, session.variables || {});
+                let finalMessage = substituteUserVariables(chat.message, session.variables || {}, session.functions || {});
                 sendToClient(session, {
                   type: 'trigger_chatmon',
                   message: finalMessage,
@@ -3248,15 +3568,33 @@ function replaceTinTinVars(command, matches) {
   // Strip ANSI escape codes from captured values to prevent command corruption
   const stripAnsi = (str) => str ? str.replace(/\x1b\[[0-9;]*m/g, '') : '';
 
+  // SUB_SEC: Escape special TinTin++ characters in captured values to prevent injection.
+  // MUD text captured by %1-%99 could contain $, ;, @, \ which would cause
+  // unintended variable substitution, command splitting, or function calls.
+  // (TinTin++ source: trigger.c applies SUB_ARG|SUB_SEC to action body)
+  const secEscape = (str) => str
+    .replace(/\\/g, '\\\\')   // \ → \\ (must be first)
+    .replace(/\$/g, '$$')     // $ → $$ (literal dollar escape)
+    .replace(/;/g, '\\;')     // ; → \; (literal semicolon escape)
+    .replace(/@/g, '\\@');    // @ → \@ (future-proof for @func{})
+
+  // Handle %% literal escape: %% → placeholder, restore after substitution
+  const PCT_PLACEHOLDER = '\x00PCT\x00';
+  result = result.replace(/%%/g, PCT_PLACEHOLDER);
+
   if (matches && matches.length > 0) {
     for (let i = 0; i < matches.length && i < 100; i++) {
       const regex = new RegExp('%' + i + '(?![0-9])', 'g');
-      const cleanValue = stripAnsi(matches[i] || '');
+      const cleanValue = secEscape(stripAnsi(matches[i] || ''));
       result = result.replace(regex, cleanValue);
     }
   }
 
   result = result.replace(/%\d+/g, '');
+
+  // Restore %% escapes → literal %
+  result = result.replace(/\x00PCT\x00/g, '%');
+
   return result;
 }
 
@@ -3269,12 +3607,10 @@ function parseCommands(input) {
   for (let i = 0; i < input.length; i++) {
     const char = input[i];
     if (escaped) {
-      // TinTin++ escape: \; means literal semicolon (backslash consumed)
-      // \\ means literal backslash. Other \X keeps both characters.
-      if (char !== ';' && char !== '\\') {
-        current += '\\';  // Not a recognized escape, keep the backslash
-      }
-      current += char;
+      // TinTin++ tokenizer behavior: keep \X as two chars intact.
+      // The only purpose of \ here is to prevent splitting on ;
+      // processEscapes() handles the actual conversions later (SUB_ESC).
+      current += '\\' + char;
       escaped = false;
     } else if (char === '\\') {
       // Don't add backslash yet - wait to see if next char is ; or \
@@ -3299,7 +3635,52 @@ function parseCommands(input) {
   return commands;
 }
 
-function processAliases(command, aliases) {
+/**
+ * TinTin++ SUB_ESC: Process escape sequences in text before sending to MUD.
+ * Called at write_mud points — NOT during tokenization or alias matching.
+ * Handles: \; \\ \n \t \r \a \b \e \xHH
+ */
+function processEscapes(str) {
+  if (!str || !str.includes('\\')) return str;
+  let result = '';
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '\\' && i + 1 < str.length) {
+      const next = str[i + 1];
+      switch (next) {
+        case ';':  result += ';';    i++; break;
+        case '\\': result += '\\';   i++; break;
+        case 'n':  result += '\n';   i++; break;
+        case 't':  result += '\t';   i++; break;
+        case 'r':  result += '\r';   i++; break;
+        case 'a':  result += '\x07'; i++; break;
+        case 'b':  result += '\x08'; i++; break;
+        case 'e':  result += '\x1b'; i++; break;
+        case 'x':
+          if (i + 3 < str.length) {
+            const hex = str.substring(i + 2, i + 4);
+            const code = parseInt(hex, 16);
+            if (!isNaN(code)) {
+              result += String.fromCharCode(code);
+              i += 3;
+            } else {
+              result += '\\x'; i++;
+            }
+          } else {
+            result += '\\x'; i++;
+          }
+          break;
+        default:
+          result += '\\' + next; i++;
+          break;
+      }
+    } else {
+      result += str[i];
+    }
+  }
+  return result;
+}
+
+function processAliases(command, aliases, variables = {}, functions = {}) {
   // Sort by priority (lower fires first, default 5) — TinTin++ convention
   const sorted = [...aliases].sort((a, b) => (a.priority || 5) - (b.priority || 5));
 
@@ -3309,11 +3690,12 @@ function processAliases(command, aliases) {
     const matchType = alias.matchType || 'exact';
     let matched = false;
     let matches = [];
+    let tintinRemaining = '';
 
     switch (matchType) {
       case 'regex':
         try {
-          const regex = new RegExp(alias.pattern, 'i');
+          const regex = new RegExp(alias.pattern);
           const match = command.match(regex);
           if (match) {
             matched = true;
@@ -3325,11 +3707,23 @@ function processAliases(command, aliases) {
       case 'tintin':
         try {
           const regexPattern = tinTinToRegex(alias.pattern);
-          const regex = new RegExp('^' + regexPattern + '$', 'i');
+          // TinTin++ PCRE2_ANCHORED: match from start only (no end anchor)
+          // Remaining text after match becomes additional args for %N
+          const regex = new RegExp('^' + regexPattern);
           const match = command.match(regex);
           if (match) {
             matched = true;
-            matches = match;
+            // TinTin++ behavior: %0 = full input, captures from regex,
+            // then remaining text parsed as additional space-separated args
+            const remaining = command.substring(match[0].length).trim();
+            matches = [command]; // %0 = full command
+            for (let ci = 1; ci < match.length; ci++) {
+              matches.push(match[ci] || '');
+            }
+            if (remaining) {
+              remaining.split(/\s+/).forEach(w => matches.push(w));
+            }
+            tintinRemaining = remaining;
           }
         } catch (e) {
           console.error('TinTin alias pattern error:', e.message);
@@ -3337,9 +3731,7 @@ function processAliases(command, aliases) {
         break;
 
       case 'startsWith':
-        const startsPattern = alias.pattern.toLowerCase();
-        const cmdLower = command.toLowerCase();
-        if (cmdLower === startsPattern || cmdLower.startsWith(startsPattern + ' ')) {
+        if (command === alias.pattern || command.startsWith(alias.pattern + ' ')) {
           matched = true;
           const parts = command.split(' ');
           matches = [parts[0], ...parts.slice(1)];
@@ -3350,7 +3742,7 @@ function processAliases(command, aliases) {
       default:
         const parts = command.split(' ');
         const cmd = parts[0];
-        if (cmd.toLowerCase() === alias.pattern.toLowerCase()) {
+        if (cmd === alias.pattern) {
           matched = true;
           matches = [cmd, ...parts.slice(1)];
         }
@@ -3361,7 +3753,12 @@ function processAliases(command, aliases) {
       let replacement = alias.replacement;
 
       if (matchType === 'tintin') {
+        // TinTin++ passthrough: if body has no %N tokens and there are extra args, append
+        const hasPercentN = /%\d/.test(alias.replacement);
         replacement = replaceTinTinVars(replacement, matches);
+        if (!hasPercentN && tintinRemaining) {
+          replacement = replacement.trim() + ' ' + tintinRemaining;
+        }
       } else if (matchType === 'regex') {
         matches.forEach((m, i) => {
           replacement = replacement.replace(new RegExp('\\$' + i, 'g'), m || '');
@@ -3395,26 +3792,46 @@ function processAliases(command, aliases) {
  * Recursively expand aliases in a command string
  * Returns an array of fully-expanded commands
  */
-function expandCommandWithAliases(cmd, aliases, depth = 0) {
-  if (depth > 10) return [cmd];  // Prevent infinite loops
+function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, functions = {}, session = null, state = null) {
+  if (depth > 10) return [cmd];
   const trimmed = cmd.trim();
   if (!trimmed) return [];
+  if (!state) state = { hitAsyncRead: false };
 
-  // First split by semicolons/newlines at the top level
+  const ASYNC_READ_RE = /^#(?:class\s+\{[^}]*\}\s+\{read\}|read\b)/i;
   const initialParts = parseCommands(trimmed);
   const results = [];
 
   initialParts.forEach(part => {
-    const expanded = processAliases(part, aliases);
-    if (expanded === part) {
-      // No alias matched, return this part as-is
-      results.push(part);
+    const partTrimmed = part.trim();
+
+    // After a #read/#class read, don't expand — return literal for client
+    if (state.hitAsyncRead) {
+      results.push(partTrimmed);
+      return;
+    }
+
+    // TinTin++ sequential execution: process #var/#math immediately so
+    // later commands in the same chain see updated variables.
+    if (partTrimmed.startsWith('#')) {
+      if (ASYNC_READ_RE.test(partTrimmed)) {
+        state.hitAsyncRead = true;
+      } else if (session) {
+        serverProcessInlineCommand(partTrimmed, session);
+      }
+      results.push(partTrimmed);
+      return;
+    }
+
+    // Substitute $variables BEFORE alias pattern matching
+    const substituted = substituteUserVariables(partTrimmed, variables, functions);
+    const expanded = processAliases(substituted, aliases, variables, functions);
+    if (expanded === substituted) {
+      results.push(substituted);
     } else {
-      // Alias matched - the result might contain more semicolons
-      // Split and recursively expand each part
       const subParts = parseCommands(expanded);
       subParts.forEach(subPart => {
-        results.push(...expandCommandWithAliases(subPart, aliases, depth + 1));
+        results.push(...expandCommandWithAliases(subPart, aliases, depth + 1, variables, functions, session, state));
       });
     }
   });
@@ -3438,7 +3855,7 @@ function isTinTinPattern(pattern) {
   return false;
 }
 
-function processTriggers(line, triggers, loopTracker = null, variables = {}) {
+function processTriggers(line, triggers, loopTracker = null, variables = {}, functions = {}) {
   const result = {
     line: line,
     gag: false,
@@ -3588,7 +4005,7 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}) {
             if (matches.length) {
               replacement = replaceTinTinVars(replacement, matches);
             }
-            replacement = substituteUserVariables(replacement, variables);
+            replacement = substituteUserVariables(replacement, variables, functions);
             // Find and replace the matched portion (case-sensitive)
             if (useTinTin) {
               const regexPattern = tinTinToRegex(pattern);
@@ -3641,12 +4058,50 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}) {
  * Substitute $varname references in a string with user variable values
  * Supports: ${var}, $var[key][subkey], $var
  */
-function substituteUserVariables(message, variables) {
+function substituteUserVariables(message, variables, functions) {
   if (!message || !variables) return message;
 
   // Handle $$ escape → literal $
   const DOLLAR_PLACEHOLDER = '\x00DOLLAR\x00';
   message = message.replace(/\$\$/g, DOLLAR_PLACEHOLDER);
+
+  // Handle @func{args} — resolve function calls (TinTin++ SUB_FUN)
+  if (functions && message.includes('@')) {
+    let maxIter = 10;
+    while (maxIter-- > 0) {
+      const funcMatch = message.match(/@(\w+)\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/);
+      if (!funcMatch) break;
+      const funcName = funcMatch[1].toLowerCase();
+      const funcArgs = funcMatch[2];
+      const func = functions[funcName];
+      if (!func || !func.body) {
+        // Unknown function — leave as-is to prevent infinite loop
+        break;
+      }
+      const result = serverCallFunction(func.body, funcArgs, variables);
+      message = message.replace(funcMatch[0], result);
+    }
+  }
+
+  // Handle &variable[] for size (count of keys/elements)
+  message = message.replace(/&(\w+)\[\]/g, (match, name) => {
+    const val = variables[name];
+    if (val === undefined) return '0';
+    if (typeof val === 'object' && val !== null) {
+      return Object.keys(val).length.toString();
+    }
+    return '1';
+  });
+
+  // Handle *variable[] for listing all keys
+  message = message.replace(/\*(\w+)\[\]/g, (match, name) => {
+    const val = variables[name];
+    if (val === undefined) return '';
+    if (typeof val === 'object' && val !== null) {
+      return Object.keys(val).join(';');
+    }
+    return name;
+  });
 
   // Handle ${var} and ${var[key][subkey]} brace-delimited
   message = message.replace(/\$\{(\w+)((?:\[[^\]]*\])*)\}/g, (match, name, brackets) => {
@@ -3697,6 +4152,244 @@ function substituteUserVariables(message, variables) {
   message = message.replace(/\x00DOLLAR\x00/g, '$');
 
   return message;
+}
+
+/**
+ * Server-side arithmetic evaluator for #math expressions.
+ * Handles: + - * / % ** () and numeric literals.
+ * TinTin++ #math returns integers (truncated).
+ */
+function serverEvalMath(expr) {
+  const tokens = [];
+  let i = 0;
+  const s = expr.trim();
+
+  // Tokenize
+  while (i < s.length) {
+    if (s[i] === ' ' || s[i] === '\t') { i++; continue; }
+    if (s[i] === '(' || s[i] === ')') { tokens.push(s[i]); i++; continue; }
+    if (s[i] === '*' && s[i + 1] === '*') { tokens.push('**'); i += 2; continue; }
+    if ('+-*/%'.includes(s[i])) { tokens.push(s[i]); i++; continue; }
+    if (/[0-9.]/.test(s[i])) {
+      let num = '';
+      while (i < s.length && /[0-9.]/.test(s[i])) { num += s[i]; i++; }
+      const val = parseFloat(num);
+      if (isNaN(val)) return null;
+      tokens.push(val);
+      continue;
+    }
+    // Unknown character — bail out
+    return null;
+  }
+
+  if (tokens.length === 0) return null;
+
+  let pos = 0;
+  function peek() { return pos < tokens.length ? tokens[pos] : null; }
+  function consume() { return tokens[pos++]; }
+
+  function parseExpr() {
+    let left = parseTerm();
+    if (left === null) return null;
+    while (peek() === '+' || peek() === '-') {
+      const op = consume();
+      const right = parseTerm();
+      if (right === null) return null;
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  }
+
+  function parseTerm() {
+    let left = parsePower();
+    if (left === null) return null;
+    while (peek() === '*' || peek() === '/' || peek() === '%') {
+      const op = consume();
+      const right = parsePower();
+      if (right === null) return null;
+      if (op === '*') left *= right;
+      else if (op === '/') left = right !== 0 ? Math.trunc(left / right) : 0;
+      else left = right !== 0 ? left % right : 0;
+    }
+    return left;
+  }
+
+  function parsePower() {
+    let base = parseUnary();
+    if (base === null) return null;
+    if (peek() === '**') {
+      consume();
+      const exp = parsePower(); // right-associative
+      if (exp === null) return null;
+      base = Math.pow(base, exp);
+    }
+    return base;
+  }
+
+  function parseUnary() {
+    if (peek() === '-') { consume(); const v = parseAtom(); return v === null ? null : -v; }
+    if (peek() === '+') { consume(); return parseAtom(); }
+    return parseAtom();
+  }
+
+  function parseAtom() {
+    if (peek() === '(') {
+      consume();
+      const val = parseExpr();
+      if (peek() === ')') consume();
+      return val;
+    }
+    const tok = consume();
+    if (typeof tok === 'number') return tok;
+    return null;
+  }
+
+  try {
+    const result = parseExpr();
+    if (result === null || isNaN(result) || !isFinite(result)) return null;
+    return Math.trunc(result);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Process #math, #var, and #unvar commands server-side for immediate variable updates.
+ * This keeps session.variables in sync during rapid trigger cascades without
+ * waiting for the client round-trip.
+ * The command is STILL sent to the client afterward — this just ensures the
+ * server has the updated value immediately for the next alias/trigger expansion.
+ */
+function serverProcessInlineCommand(cmd, session) {
+  if (!cmd || !session) return false;
+  const trimmed = cmd.trim();
+
+  // #math {varname} {expression}  or  #math varname expression
+  const mathMatch = trimmed.match(/^#math\s+\{?(\w+)\}?\s+(.*)/i);
+  if (mathMatch) {
+    const varName = mathMatch[1];
+    let expression = mathMatch[2].trim();
+    // Strip outer braces if present
+    if (expression.startsWith('{') && expression.endsWith('}')) {
+      expression = expression.slice(1, -1);
+    }
+    // Substitute variables, then evaluate
+    expression = substituteUserVariables(expression, session.variables || {}, session.functions || {});
+    const result = serverEvalMath(expression);
+    if (result !== null) {
+      if (!session.variables) session.variables = {};
+      session.variables[varName] = result;
+      // Track server-side modification time to prevent stale client sync overwrite
+      if (!session._varServerModified) session._varServerModified = {};
+      session._varServerModified[varName] = Date.now();
+    }
+    return true;
+  }
+
+  // #var {varname} {value}  or  #var varname value  or  #variable ...
+  const varMatch = trimmed.match(/^#(?:var|variable)\s+\{?(\w+)\}?\s+(.*)/i);
+  if (varMatch) {
+    const varName = varMatch[1];
+    let value = varMatch[2].trim();
+    // Strip outer braces if present
+    if (value.startsWith('{') && value.endsWith('}')) {
+      value = value.slice(1, -1);
+    }
+    // Substitute variables in value
+    value = substituteUserVariables(value, session.variables || {}, session.functions || {});
+    if (!session.variables) session.variables = {};
+    session.variables[varName] = value;
+    // Track server-side modification time to prevent stale client sync overwrite
+    if (!session._varServerModified) session._varServerModified = {};
+    session._varServerModified[varName] = Date.now();
+    return true;
+  }
+
+  // #unvar {pattern}  or  #unvar pattern  or  #unvariable ...
+  const unvarMatch = trimmed.match(/^#(?:unvar|unvariable)\s+\{?(\w+)\}?\s*$/i);
+  if (unvarMatch) {
+    const varName = unvarMatch[1];
+    if (session.variables) {
+      delete session.variables[varName];
+    }
+    // Track server-side modification time
+    if (!session._varServerModified) session._varServerModified = {};
+    session._varServerModified[varName] = Date.now();
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Server-side function execution for @func{args} substitution.
+ * Handles simple function bodies (#math, #var, #return, semicolons).
+ * Returns the result string (from $result variable or empty).
+ */
+function serverCallFunction(body, argString, variables) {
+  // Create a temporary variable scope
+  const tempVars = Object.assign({}, variables);
+
+  // Parse arguments (semicolon-separated, matching TinTin++)
+  const funcArgs = argString ? argString.split(';').map(a => a.trim()) : [];
+
+  // Build %N replacement map for the body
+  const matches = [argString || ''];  // %0 = full arg string
+  funcArgs.forEach(arg => matches.push(arg));  // %1, %2, etc.
+
+  // Substitute %N in body
+  let processedBody = replaceTinTinVars(body, matches);
+
+  // Split body by semicolons
+  const commands = parseCommands(processedBody);
+
+  // Execute each command in the temp scope
+  for (const cmd of commands) {
+    const trimmed = cmd.trim();
+    if (!trimmed) continue;
+
+    // #return {value}
+    const returnMatch = trimmed.match(/^#return\s+(.*)/i);
+    if (returnMatch) {
+      let val = returnMatch[1].trim();
+      if (val.startsWith('{') && val.endsWith('}')) {
+        val = val.slice(1, -1);
+      }
+      val = substituteUserVariables(val, tempVars);
+      return val;
+    }
+
+    // #math {var} {expr}
+    const mathMatch = trimmed.match(/^#math\s+\{?(\w+)\}?\s+(.*)/i);
+    if (mathMatch) {
+      const varName = mathMatch[1];
+      let expression = mathMatch[2].trim();
+      if (expression.startsWith('{') && expression.endsWith('}')) {
+        expression = expression.slice(1, -1);
+      }
+      expression = substituteUserVariables(expression, tempVars);
+      const result = serverEvalMath(expression);
+      if (result !== null) tempVars[varName] = result;
+      continue;
+    }
+
+    // #var {name} {value}
+    const varMatch = trimmed.match(/^#(?:var|variable)\s+\{?(\w+)\}?\s+(.*)/i);
+    if (varMatch) {
+      let val = varMatch[2].trim();
+      if (val.startsWith('{') && val.endsWith('}')) {
+        val = val.slice(1, -1);
+      }
+      val = substituteUserVariables(val, tempVars);
+      tempVars[varMatch[1]] = val;
+      continue;
+    }
+
+    // Other commands not supported server-side — skip
+  }
+
+  // If no #return was called, check $result variable
+  return tempVars['result'] !== undefined ? String(tempVars['result']) : '';
 }
 
 // Graceful shutdown: persist sessions, then close all MUD connections cleanly

@@ -504,6 +504,7 @@ class WMTClient {
         this.connection.setTickers(this.getFilteredTickers());
         this.sendDiscordPrefsToServer();
         this.syncVariablesToServer();
+        this.syncFunctionsToServer();
     }
 
     // Send Discord preferences to server for server-side notifications (works when browser closed)
@@ -784,10 +785,14 @@ class WMTClient {
                 break;
 
             case 'client_command':
-                // Execute client-side # command from trigger (silent - no confirmation output)
-                if (data.command && data.command.startsWith('#')) {
+                // Execute client-side command(s) from trigger/alias (silent - no confirmation output).
+                // May contain semicolons for bundled commands (e.g., after #class {read}).
+                // Uses executeCommandString for proper sequential async execution.
+                if (data.command) {
                     this._silent = true;
-                    this.processClientCommand(data.command).finally(() => {
+                    this.executeCommandString(data.command).catch((e) => {
+                        console.error('CLIENT_CMD_ERR:', e);
+                    }).finally(() => {
                         this._silent = false;
                     });
                 }
@@ -3273,9 +3278,16 @@ class WMTClient {
 
         if (unassignedTrigs.length > 0 || unassignedAliases.length > 0 || unassignedTickers.length > 0) {
             html += `
-                <div class="unassigned-section">
+                <div class="unassigned-section" data-drop-class="">
                     <div class="unassigned-header">Unassigned (${unassignedTrigs.length + unassignedAliases.length + unassignedTickers.length})</div>
                     ${this.renderClassItems(unassignedTrigs, unassignedAliases, unassignedTickers)}
+                </div>
+            `;
+        } else if (this.classes.length > 0) {
+            // Always show unassigned as a drop target when classes exist
+            html += `
+                <div class="unassigned-section" data-drop-class="">
+                    <div class="unassigned-header">Unassigned</div>
                 </div>
             `;
         }
@@ -3291,6 +3303,7 @@ class WMTClient {
         }
 
         content.innerHTML = html;
+        this.setupSidebarDragDrop(content);
     }
 
     renderClassItems(triggers, aliases, tickers = []) {
@@ -3304,7 +3317,7 @@ class WMTClient {
             const icon = iconMap[triggerType] || 'T';
 
             html += `
-                <div class="script-item ${isEnabled ? '' : 'disabled'}" data-type="trigger" data-id="${t.id}">
+                <div class="script-item ${isEnabled ? '' : 'disabled'}" draggable="true" data-type="trigger" data-id="${t.id}">
                     <span class="script-item-icon ${triggerType}">${icon}</span>
                     <span class="script-item-name" onclick="wmtClient.editTriggerById('${t.id}')" title="${this.escapeHtml(t.pattern)}">${this.escapeHtml(t.name || t.pattern)}</span>
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleTriggerById('${t.id}')"></div>
@@ -3318,7 +3331,7 @@ class WMTClient {
         aliases.forEach(a => {
             const isEnabled = a.enabled !== false;
             html += `
-                <div class="script-item ${isEnabled ? '' : 'disabled'}" data-type="alias" data-id="${a.id}">
+                <div class="script-item ${isEnabled ? '' : 'disabled'}" draggable="true" data-type="alias" data-id="${a.id}">
                     <span class="script-item-icon alias">A</span>
                     <span class="script-item-name" onclick="wmtClient.editAliasById('${a.id}')" title="${this.escapeHtml(a.replacement)}">${this.escapeHtml(a.pattern)}</span>
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleAliasById('${a.id}')"></div>
@@ -3332,7 +3345,7 @@ class WMTClient {
         tickers.forEach(t => {
             const isEnabled = t.enabled !== false;
             html += `
-                <div class="script-item ${isEnabled ? '' : 'disabled'}" data-type="ticker" data-id="${t.id}">
+                <div class="script-item ${isEnabled ? '' : 'disabled'}" draggable="true" data-type="ticker" data-id="${t.id}">
                     <span class="script-item-icon ticker">K</span>
                     <span class="script-item-name" onclick="wmtClient.editTickerById('${t.id}')" title="${this.escapeHtml(t.command)} (${t.interval}s)">${this.escapeHtml(t.name || t.command)}</span>
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleTickerEnabled('${t.id}')"></div>
@@ -3367,6 +3380,119 @@ class WMTClient {
         if (hasSubstitute && !hasGag && !hasHighlight && !hasComplexAction) return 'substitute';
         // Otherwise it's a regular trigger
         return 'trigger';
+    }
+
+    // Set up drag-and-drop for script items → classes (event delegation, attached once)
+    setupSidebarDragDrop(content) {
+        if (content._dragDropSetup) return;
+        content._dragDropSetup = true;
+
+        content.addEventListener('dragstart', (e) => {
+            const item = e.target.closest('.script-item');
+            if (!item) return;
+            const type = item.dataset.type;
+            const id = item.dataset.id;
+            if (!type || !id) return;
+            e.dataTransfer.setData('application/x-script-item', JSON.stringify({ type, id }));
+            e.dataTransfer.effectAllowed = 'move';
+            item.classList.add('dragging');
+        });
+
+        content.addEventListener('dragend', (e) => {
+            const item = e.target.closest('.script-item');
+            if (item) item.classList.remove('dragging');
+            content.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        });
+
+        content.addEventListener('dragover', (e) => {
+            // Only accept script-item drags (not file drags from the settings panel)
+            if (!e.dataTransfer.types.includes('application/x-script-item')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            // Clear previous highlights
+            content.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+
+            // Highlight class header or unassigned section
+            const classHeader = e.target.closest('.class-header');
+            const classItems = e.target.closest('.class-items');
+            const unassigned = e.target.closest('.unassigned-section');
+
+            if (classHeader) {
+                classHeader.classList.add('drag-over');
+            } else if (classItems) {
+                // Highlight the parent class-header when hovering over items area
+                const classSection = classItems.closest('.class-section');
+                const header = classSection?.querySelector('.class-header');
+                if (header) header.classList.add('drag-over');
+            } else if (unassigned) {
+                unassigned.classList.add('drag-over');
+            }
+        });
+
+        content.addEventListener('dragleave', (e) => {
+            if (!content.contains(e.relatedTarget)) {
+                content.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            }
+        });
+
+        content.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            content.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+
+            const raw = e.dataTransfer.getData('application/x-script-item');
+            if (!raw) return;
+
+            let type, id;
+            try { ({ type, id } = JSON.parse(raw)); } catch { return; }
+
+            // Determine target class
+            const classHeader = e.target.closest('.class-header');
+            const classItems = e.target.closest('.class-items');
+            const classSection = classHeader?.closest('.class-section') || classItems?.closest('.class-section');
+            const unassigned = e.target.closest('.unassigned-section');
+
+            let targetClassId = null;
+            if (classSection) {
+                targetClassId = classSection.dataset.classId || null;
+            } else if (unassigned) {
+                targetClassId = null; // Move to unassigned
+            } else {
+                return; // Dropped on empty space, do nothing
+            }
+
+            await this.moveItemToClass(type, id, targetClassId);
+        });
+    }
+
+    // Move a trigger/alias/ticker to a different class (or unassigned)
+    async moveItemToClass(type, id, classId) {
+        let item, saveMethod;
+        if (type === 'trigger') {
+            item = this.triggers.find(t => t.id === id);
+            saveMethod = () => this.saveTriggers();
+        } else if (type === 'alias') {
+            item = this.aliases.find(a => a.id === id);
+            saveMethod = () => this.saveAliases();
+        } else if (type === 'ticker') {
+            item = this.tickers.find(t => t.id === id);
+            saveMethod = () => this.saveTickers();
+        }
+
+        if (!item) return;
+
+        // Don't save if already in the target class
+        const currentClass = item.class || null;
+        if (currentClass === classId) return;
+
+        item.class = classId;
+        await saveMethod();
+        this.sendFilteredTriggersAndAliases();
+
+        const className = classId ? (this.classes.find(c => c.id === classId)?.name || 'Unknown') : 'Unassigned';
+        const itemName = item.name || item.pattern || item.command || id;
+        this.appendOutput(`Moved ${type} "${itemName}" → ${className}`, 'system');
+        this.renderScriptsSidebar();
     }
 
     toggleClassExpand(classId) {
@@ -3876,6 +4002,7 @@ class WMTClient {
     }
 
     async saveTriggers() {
+        if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
             const res = await fetch('api/triggers.php?action=save', {
                 method: 'POST',
@@ -4412,6 +4539,7 @@ class WMTClient {
     }
 
     async saveAliases() {
+        if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
             const res = await fetch('api/aliases.php?action=save', {
                 method: 'POST',
@@ -4434,6 +4562,7 @@ class WMTClient {
     }
 
     async saveTickers() {
+        if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
             const res = await fetch('api/tickers.php?action=save', {
                 method: 'POST',
@@ -5064,7 +5193,7 @@ class WMTClient {
                     const escapedPath = this.escapeHtml(folderPath);
                     const isExpanded = !this._collapsedScriptFolders?.has(folderPath);
                     html += `
-                        <div class="script-folder-item" onclick="wmtClient.toggleScriptFolder('${escapedPath}')">
+                        <div class="script-folder-item" data-drop-folder="${escapedPath}" onclick="wmtClient.toggleScriptFolder('${escapedPath}')">
                             <span class="folder-icon">${isExpanded ? '▼' : '▶'}</span>
                             <span class="folder-name">${this.escapeHtml(name)}/</span>
                             <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); wmtClient.deleteScriptFolder('${escapedPath}')" title="Delete folder">×</button>
@@ -5081,7 +5210,7 @@ class WMTClient {
                     const size = this.formatFileSize(file.size);
                     const escapedFilename = this.escapeHtml(filename);
                     html += `
-                        <div class="script-file-item">
+                        <div class="script-file-item" draggable="true" data-filename="${escapedFilename}">
                             <span class="script-file-name" title="${size}" onclick="wmtClient.openScriptEditor('${escapedFilename}')" style="cursor:pointer;text-decoration:underline">${this.escapeHtml(displayName)}</span>
                             <button class="btn btn-sm" onclick="wmtClient.downloadScriptFile('${escapedFilename}')" title="Download">↓</button>
                             <button class="btn btn-sm btn-danger" onclick="wmtClient.deleteScriptFile('${escapedFilename}')" title="Delete">×</button>
@@ -5095,6 +5224,7 @@ class WMTClient {
             html += renderNode(tree);
 
             container.innerHTML = html;
+            this.setupScriptDragDrop(container);
         } catch (e) {
             container.innerHTML = '<em style="color:#f66">Failed to load files</em>';
         }
@@ -5173,6 +5303,100 @@ class WMTClient {
             }
         } catch (e) {
             alert('Failed to delete folder');
+        }
+    }
+
+    // Set up drag-and-drop for script files (event delegation, attached once)
+    setupScriptDragDrop(container) {
+        if (container._dragDropSetup) return;
+        container._dragDropSetup = true;
+
+        container.addEventListener('dragstart', (e) => {
+            const fileItem = e.target.closest('.script-file-item');
+            if (!fileItem) return;
+            const filename = fileItem.dataset.filename;
+            if (!filename) return;
+            e.dataTransfer.setData('text/plain', filename);
+            e.dataTransfer.effectAllowed = 'move';
+            fileItem.classList.add('dragging');
+            container.classList.add('drag-active');
+        });
+
+        container.addEventListener('dragend', (e) => {
+            const fileItem = e.target.closest('.script-file-item');
+            if (fileItem) fileItem.classList.remove('dragging');
+            container.classList.remove('drag-active');
+            container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        });
+
+        container.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            // Clear previous highlights
+            container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+
+            // Highlight the folder being hovered
+            const folderItem = e.target.closest('.script-folder-item');
+            if (folderItem) {
+                folderItem.classList.add('drag-over');
+            }
+        });
+
+        container.addEventListener('dragleave', (e) => {
+            // Only clear if leaving the container entirely
+            if (!container.contains(e.relatedTarget)) {
+                container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            }
+        });
+
+        container.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            container.classList.remove('drag-active');
+
+            const filename = e.dataTransfer.getData('text/plain');
+            if (!filename) return;
+
+            // Determine target folder
+            const folderItem = e.target.closest('.script-folder-item');
+            const folderContents = e.target.closest('.script-folder-contents');
+
+            let targetFolder = '';
+            if (folderItem) {
+                targetFolder = folderItem.dataset.dropFolder || '';
+            } else if (folderContents) {
+                targetFolder = folderContents.dataset.folder || '';
+            }
+            // else: root (empty string)
+
+            await this.moveScriptFile(filename, targetFolder);
+        });
+    }
+
+    // Move a script file to a different folder (or root)
+    async moveScriptFile(oldPath, targetFolder) {
+        const baseName = oldPath.split('/').pop();
+        const newPath = targetFolder ? targetFolder + '/' + baseName : baseName;
+
+        // Don't move if already in the right place
+        if (oldPath === newPath) return;
+
+        try {
+            const res = await fetch('api/scripts.php?action=rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ oldName: oldPath, newName: newPath })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.appendOutput(`Moved: ${oldPath} → ${newPath}`, 'system');
+                this.loadScriptFilesList();
+            } else {
+                this.appendOutput(`Move failed: ${data.error || 'Unknown error'}`, 'error');
+            }
+        } catch (e) {
+            this.appendOutput('Failed to move file', 'error');
         }
     }
 
@@ -5361,44 +5585,6 @@ class WMTClient {
     async processClientCommand(input) {
         const trimmed = input.trim();
 
-        // Parse {arg} style arguments
-        const parseArgs = (str) => {
-            const args = [];
-            let current = '';
-            let depth = 0;
-            let inBrace = false;
-
-            for (let i = 0; i < str.length; i++) {
-                const char = str[i];
-                if (char === '{') {
-                    if (depth === 0) {
-                        inBrace = true;
-                    } else {
-                        current += char;
-                    }
-                    depth++;
-                } else if (char === '}') {
-                    depth--;
-                    if (depth === 0) {
-                        args.push(current);
-                        current = '';
-                        inBrace = false;
-                    } else {
-                        current += char;
-                    }
-                } else if (inBrace) {
-                    current += char;
-                } else if (char === ' ' && !inBrace && current) {
-                    args.push(current);
-                    current = '';
-                } else if (char !== ' ' || current) {
-                    current += char;
-                }
-            }
-            if (current) args.push(current);
-            return args;
-        };
-
         // #N command - repeat N times
         // Supports: #7 e, #30 {buy dagger;dismantle dagger}
         const repeatMatch = trimmed.match(/^#(\d+)\s+(.+)$/s);
@@ -5416,16 +5602,16 @@ class WMTClient {
             return;
         }
 
-        // Extract command name and rest (dotAll so multi-line braced args work)
-        const cmdMatch = trimmed.match(/^#(\w+)\s*(.*)$/s);
-        if (!cmdMatch) {
+        // Use unified parser with GET_ONE/GET_ALL command-aware arg splitting
+        const parsed = this.parseTinTinCommand(trimmed);
+        if (!parsed) {
             this.appendOutput('Invalid # command syntax', 'error');
             return;
         }
 
-        const cmdName = cmdMatch[1].toLowerCase();
-        const rest = cmdMatch[2];
-        const args = parseArgs(rest);
+        const cmdName = parsed.command;
+        const args = parsed.args;
+        const rest = parsed.rest;
 
         switch (cmdName) {
             // Alias commands
@@ -5737,11 +5923,15 @@ class WMTClient {
         const matchType = isTinTin ? 'tintin' : 'exact';
 
         // Check if alias already exists
-        const existing = this.aliases.findIndex(a => a.pattern.toLowerCase() === pattern.toLowerCase());
+        const existing = this.aliases.findIndex(a => a.pattern === pattern);
         if (existing >= 0) {
             this.aliases[existing].replacement = replacement;
             this.aliases[existing].matchType = matchType;
             this.aliases[existing].priority = priority;
+            // Reassign class when inside #class {read} context
+            if (this.currentScriptClass) {
+                this.aliases[existing].class = this.currentScriptClass;
+            }
             this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
         } else {
             this.aliases.push({
@@ -5917,6 +6107,9 @@ class WMTClient {
             existing.command = command;
             existing.interval = interval;
             existing.enabled = true;
+            if (this.currentScriptClass) {
+                existing.class = this.currentScriptClass;
+            }
             this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
         } else {
             // Create new
@@ -6157,6 +6350,24 @@ class WMTClient {
             }
 
             case 'clear': {
+                // Special case: empty class name targets all unassigned items
+                if (!className) {
+                    const isUnassigned = (item) => !item.class;
+                    const removedTriggers = this.triggers.filter(isUnassigned).length;
+                    const removedAliases = this.aliases.filter(isUnassigned).length;
+                    const removedTickers = this.tickers.filter(isUnassigned).length;
+                    this.triggers = this.triggers.filter(t => t.class);
+                    this.aliases = this.aliases.filter(a => a.class);
+                    this.tickers = this.tickers.filter(t => t.class);
+                    const total = removedTriggers + removedAliases + removedTickers;
+                    await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
+                    this.sendFilteredTriggersAndAliases();
+                    this.appendOutput(`#CLASS: ${total} UNASSIGNED ITEM(S) REMOVED (${removedAliases} aliases, ${removedTriggers} triggers, ${removedTickers} tickers).`, 'system');
+                    if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                        this.renderScriptsSidebar();
+                    }
+                    break;
+                }
                 // Delete all items in the class, but keep the class itself
                 if (!existing) {
                     this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
@@ -6170,7 +6381,7 @@ class WMTClient {
                 this.aliases = this.aliases.filter(a => a.class !== classId);
                 this.tickers = this.tickers.filter(t => t.class !== classId);
                 const total = removedTriggers + removedAliases + removedTickers;
-                await this.saveTriggers();
+                await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
                 this.sendFilteredTriggersAndAliases();
                 this.appendOutput(`#CLASS {${className}} CLEARED: ${total} ITEM(S) REMOVED.`, 'system');
                 if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -6744,6 +6955,7 @@ class WMTClient {
         const body = args[1];
 
         this.functions[name] = { body };
+        this.syncFunctionsToServer();
         this.appendOutput(`Function @${name}{} defined.`, 'system');
     }
 
@@ -6757,6 +6969,7 @@ class WMTClient {
         const name = args[0].toLowerCase();
         if (this.functions[name]) {
             delete this.functions[name];
+            this.syncFunctionsToServer();
             this.appendOutput(`Function @${name}{} removed.`, 'system');
         } else {
             this.appendOutput(`Function @${name}{} not found.`, 'error');
@@ -6988,6 +7201,115 @@ class WMTClient {
         this.localScopes.pop();
     }
 
+    // Preprocess a .tin script file matching TinTin++ read_file() from files.c.
+    // Two key behaviors:
+    //   1. Inside braces (depth > 0): newlines collapse into spaces, whitespace is normalized.
+    //      This turns multi-line commands into single lines before execution.
+    //   2. At depth 0: newlines are preserved as command boundaries.
+    // Also strips /* */ block comments and // line comments.
+    preprocessScript(content) {
+        let out = '';
+        let depth = 0;     // Brace nesting depth
+        let inComment = false; // Inside /* */ block comment
+        let i = 0;
+
+        while (i < content.length) {
+            const ch = content[i];
+            const next = content[i + 1] || '';
+
+            // Block comment start
+            if (!inComment && ch === '/' && next === '*') {
+                inComment = true;
+                i += 2;
+                continue;
+            }
+
+            // Block comment end
+            if (inComment && ch === '*' && next === '/') {
+                inComment = false;
+                i += 2;
+                continue;
+            }
+
+            // Skip everything inside block comments
+            if (inComment) {
+                i++;
+                continue;
+            }
+
+            // Line comment: skip to end of line (only at depth 0)
+            if (depth === 0 && ch === '/' && next === '/') {
+                while (i < content.length && content[i] !== '\n') i++;
+                continue;
+            }
+
+            // Track brace depth
+            if (ch === '{') {
+                depth++;
+                out += ch;
+                i++;
+                continue;
+            }
+
+            if (ch === '}') {
+                depth = Math.max(0, depth - 1);
+                out += ch;
+                i++;
+                continue;
+            }
+
+            // Newline handling — matching read_file() from files.c
+            if (ch === '\n' || ch === '\r') {
+                if (ch === '\r' && next === '\n') i++; // Skip \r\n pair
+                i++;
+
+                // Strip trailing whitespace from output (both depth 0 and depth > 0)
+                while (out.length > 0 && (out[out.length - 1] === ' ' || out[out.length - 1] === '\t')) {
+                    out = out.slice(0, -1);
+                }
+
+                if (depth > 0) {
+                    // Inside braces: skip leading whitespace on next line, insert single space.
+                    // This collapses multi-line brace blocks into one line.
+                    while (i < content.length && (content[i] === ' ' || content[i] === '\t')) {
+                        i++;
+                    }
+                    // Don't add space right after { or right before }
+                    const lastCh = out.length > 0 ? out[out.length - 1] : '';
+                    const nextCh = i < content.length ? content[i] : '';
+                    if (lastCh !== '{' && nextCh !== '}' && nextCh !== '\n' && nextCh !== '\r') {
+                        out += ' ';
+                    }
+                } else {
+                    // At depth 0: look ahead past whitespace (matching TinTin++ read_file).
+                    // If the next non-whitespace char is '{', replace newline with space
+                    // to join lines (e.g. #ALIAS {name}\n{ body } → single line).
+                    // Otherwise keep the newline as a command boundary.
+                    let peek = i;
+                    while (peek < content.length && (content[peek] === ' ' || content[peek] === '\t' || content[peek] === '\r' || content[peek] === '\n')) {
+                        peek++;
+                    }
+                    if (peek < content.length && content[peek] === '{') {
+                        // Next meaningful char is '{' — join to previous line.
+                        // Skip all whitespace up to the '{' so main loop sees it next.
+                        i = peek;
+                        out += ' ';
+                    } else {
+                        // Normal command boundary
+                        out += '\n';
+                    }
+                }
+                continue;
+            }
+
+            // Regular character
+            out += ch;
+            i++;
+        }
+
+        return out;
+    }
+
     // #read {filename} - Load and execute TinTin++ script file
     async cmdRead(args) {
         if (args.length < 1) {
@@ -6996,88 +7318,78 @@ class WMTClient {
         }
 
         let filename = args[0];
+        // Strip leading slashes (paths are relative to scripts dir)
+        filename = filename.replace(/^\/+/, '');
         // Add extension if not present
         if (!filename.match(/\.(txt|tin)$/i)) {
             filename += '.tin';
         }
+
+        // Track read chain for debugging nested #read calls
+        if (!this._readStack) this._readStack = [];
+        const calledFrom = this._readStack.length ? this._readStack[this._readStack.length - 1] : null;
 
         try {
             const res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
             const data = await res.json();
 
             if (!data.success) {
-                this.appendOutput(`Failed to read script: ${data.error}`, 'error');
+                const fromMsg = calledFrom ? ` (from ${calledFrom})` : '';
+                this.appendOutput(`Failed to read script "${filename}"${fromMsg}: ${data.error}`, 'error');
                 return;
             }
 
-            // Suppress confirmation messages during #read (TinTin++ behavior)
+            // Suppress confirmation messages and defer saves during #read.
+            // Individual cmdAlias/cmdAction calls would fire 450+ HTTP save requests
+            // for a large script — instead, defer and do one save at the end.
             this.readingSilent = true;
+            this._bulkLoading = true;
+            this._readStack.push(filename);
 
-            // Parse and execute the script, handling multi-line brace blocks
-            const lines = data.content.split('\n');
+            // Two-pass parsing matching TinTin++ read_file() in files.c:
+            //   Pass 1: Preprocess — collapse newlines inside braces into spaces,
+            //           strip comments, normalize whitespace. This converts multi-line
+            //           commands into single lines (e.g. #ALIAS {name}\n{\n body\n} → one line).
+            //   Pass 2: Execute — split on remaining newlines, run each command.
+            const preprocessed = this.preprocessScript(data.content);
+            const lines = preprocessed.split('\n');
             let lineCount = 0;
             let errorCount = 0;
-            let multiLineBuffer = '';
-            let braceDepth = 0;
 
             for (const line of lines) {
-                const trimmed = line.trim();
+                // Strip trailing semicolons — they're command separators at line end,
+                // not arguments (TinTin++ read_file treats them as separators)
+                const cmd = line.trim().replace(/;+$/, '');
+                if (!cmd || !cmd.startsWith('#')) continue;
 
-                // When not inside a multi-line block, skip empty/comment/non-# lines
-                if (braceDepth === 0 && !multiLineBuffer) {
-                    if (!trimmed || trimmed.startsWith('/*') || trimmed.startsWith('//')) {
-                        continue;
-                    }
-                    if (!trimmed.startsWith('#')) {
-                        continue;
-                    }
-                }
-
-                // Count braces to track multi-line blocks
-                for (const ch of trimmed) {
-                    if (ch === '{') braceDepth++;
-                    else if (ch === '}') braceDepth--;
-                }
-
-                // Accumulate into buffer
-                multiLineBuffer = multiLineBuffer ? multiLineBuffer + ' ' + trimmed : trimmed;
-
-                // When braces are balanced, execute the accumulated command
-                if (braceDepth <= 0) {
-                    braceDepth = 0;
-                    const cmd = multiLineBuffer.trim();
-                    if (cmd.startsWith('#')) {
-                        try {
-                            await this.executeTinTinLine(cmd);
-                            lineCount++;
-                        } catch (e) {
-                            errorCount++;
-                            console.error('Script line error:', cmd.substring(0, 100), e);
-                        }
-                    }
-                    multiLineBuffer = '';
-                }
-            }
-
-            // Handle any remaining buffer (unclosed braces)
-            if (multiLineBuffer.trim()) {
                 try {
-                    await this.executeTinTinLine(multiLineBuffer.trim());
+                    await this.executeTinTinLine(cmd);
                     lineCount++;
                 } catch (e) {
                     errorCount++;
+                    console.error('Script line error:', cmd.substring(0, 100), e);
                 }
             }
 
-            this.readingSilent = false;
+            this._readStack.pop();
+            this.readingSilent = this._readStack.length > 0; // Stay silent if nested reads remain
+            this._bulkLoading = this._readStack.length > 0; // Stay in bulk mode if nested reads remain
+
+            // Save all changes in one batch (instead of 450+ individual saves)
+            await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
+
+            // Sync triggers/aliases/tickers to server for server-side alias expansion.
+            this.sendFilteredTriggersAndAliases();
 
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
                 this.renderScriptsSidebar();
             }
         } catch (e) {
-            this.readingSilent = false;
-            this.appendOutput('Failed to read script file', 'error');
+            this._readStack.pop();
+            this.readingSilent = this._readStack.length > 0;
+            const fromMsg = calledFrom ? ` (from ${calledFrom})` : '';
+            this.appendOutput(`Failed to read script "${filename}"${fromMsg}`, 'error');
             console.error(e);
         }
     }
@@ -7279,15 +7591,48 @@ class WMTClient {
         const cmdMatch = line.match(/^(\w+)\s*/);
         if (!cmdMatch) return null;
 
-        const command = cmdMatch[1];
+        const command = cmdMatch[1].toLowerCase();
         let rest = line.substring(cmdMatch[0].length);
 
-        // Parse {arg} style arguments
+        // TinTin++ argument parsing modes (from tokenize.c/parse.c source):
+        // GET_ONE: stop at whitespace (for unbraced args)
+        // GET_ALL: take rest of line up to semicolon (for unbraced args)
+        // If arg starts with {, both modes behave the same: read to matching }
+        //
+        // Number of GET_ONE args before GET_ALL kicks in for the remaining text.
+        // Commands not listed here: all args are GET_ONE (default behavior).
+        const GET_ALL_AFTER = {
+            'math': 1,                    // #math {var} {expression}
+            'variable': 1, 'var': 1,     // #var {name} {value}
+            'local': 1,                   // #local {name} {value}
+            'cat': 1,                     // #cat {var} {value}
+            'showme': 0, 'show': 0,      // #showme {text} [row] [col]
+            'echo': 0,                    // #echo {text} [row]
+            'send': 0,                    // #send {text}
+            'action': 1, 'act': 1,       // #action {pattern} {body} [priority]
+            'alias': 1,                   // #alias {pattern} {body} [priority]
+            'gag': 0,                     // #gag {pattern}
+            'highlight': 1, 'hi': 1,     // #highlight {pattern} {color} [priority]
+            'substitute': 1, 'sub': 1,   // #sub {pattern} {replacement} [priority]
+            'ticker': 1, 'tick': 1,      // #ticker {name} {command} {interval}
+            'delay': 1, 'del': 1,        // #delay {name} {command} {seconds}
+            'class': 2,                   // #class {name} {option} {body}
+            'replace': 2,                 // #replace {var} {old} {new}
+            'unaction': 0, 'unact': 0,   // #unaction {pattern}
+            'unalias': 0,                 // #unalias {pattern}
+            'ungag': 0,                   // #ungag {pattern}
+        };
+        const getAllAfter = GET_ALL_AFTER[command];
+
+        // Parse arguments respecting braces and GET_ONE/GET_ALL modes
         const args = [];
         while (rest.length > 0) {
             rest = rest.trim();
+            if (!rest) break;
+
             if (rest.startsWith('{')) {
-                // Find matching closing brace
+                // Braced arg: read to matching }, strip outer braces
+                // (same behavior for both GET_ONE and GET_ALL)
                 let depth = 0;
                 let end = -1;
                 for (let i = 0; i < rest.length; i++) {
@@ -7307,15 +7652,22 @@ class WMTClient {
                 }
                 args.push(rest.substring(1, end));
                 rest = rest.substring(end + 1);
-            } else if (rest.length > 0) {
-                // Non-brace argument (space-separated)
-                const spaceIdx = rest.indexOf(' ');
-                if (spaceIdx === -1) {
+            } else {
+                // Unbraced arg: behavior depends on GET_ONE vs GET_ALL
+                if (getAllAfter !== undefined && args.length >= getAllAfter) {
+                    // GET_ALL: take entire remaining text as one argument
                     args.push(rest);
                     break;
                 } else {
-                    args.push(rest.substring(0, spaceIdx));
-                    rest = rest.substring(spaceIdx + 1);
+                    // GET_ONE: stop at whitespace
+                    const spaceIdx = rest.indexOf(' ');
+                    if (spaceIdx === -1) {
+                        args.push(rest);
+                        break;
+                    } else {
+                        args.push(rest.substring(0, spaceIdx));
+                        rest = rest.substring(spaceIdx + 1);
+                    }
                 }
             }
         }
@@ -7483,32 +7835,11 @@ class WMTClient {
             if (data.success) {
                 this.appendOutput(`Script uploaded: ${data.filename}`, 'system');
 
-                // Ask if user wants to execute the script now
-                if (confirm(`Script "${data.filename}" uploaded. Execute it now?`)) {
-                    // Parse and execute the content
-                    const lines = data.content.split('\n');
-                    let lineCount = 0;
-
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (!trimmed || trimmed.startsWith('/*') || trimmed.startsWith('//')) continue;
-                        if (trimmed.startsWith('#')) {
-                            try {
-                                await this.executeTinTinLine(trimmed);
-                                lineCount++;
-                            } catch (e) {
-                                console.error('Script line error:', trimmed, e);
-                            }
-                        }
-                    }
-
-                    this.appendOutput(`Script executed: ${lineCount} commands`, 'system');
-
-                    // Refresh sidebar
-                    if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
-                        this.renderScriptsSidebar();
-                    }
+                // Refresh script list in sidebar
+                if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                    this.renderScriptsSidebar();
                 }
+                this.loadScriptFiles();
             } else {
                 this.appendOutput(`Upload failed: ${data.error}`, 'error');
             }
@@ -7613,6 +7944,9 @@ class WMTClient {
 
         if (existing >= 0) {
             this.triggers[existing].priority = priority;
+            if (this.currentScriptClass) {
+                this.triggers[existing].class = this.currentScriptClass;
+            }
             this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
         } else {
             this.triggers.push({
@@ -7785,6 +8119,9 @@ class WMTClient {
             if (actionIdx >= 0) this.triggers[existing].actions[actionIdx] = highlightAction;
             this.triggers[existing].matchType = 'tintin';
             this.triggers[existing].priority = priority;
+            if (this.currentScriptClass) {
+                this.triggers[existing].class = this.currentScriptClass;
+            }
             this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
         } else {
             // Create new with TinTin++ pattern matching
@@ -7878,6 +8215,9 @@ class WMTClient {
             if (action) action.replacement = replacement;
             this.triggers[existing].matchType = 'tintin';
             this.triggers[existing].priority = priority;
+            if (this.currentScriptClass) {
+                this.triggers[existing].class = this.currentScriptClass;
+            }
             this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
         } else {
             // Create new with TinTin++ pattern matching
@@ -8160,7 +8500,9 @@ class WMTClient {
         }
 
         const { name, keys } = this.parseVariableName(args[0]);
-        let expression = args[1];
+        // TinTin++ uses GET_ALL for expression arg — join remaining args
+        // so "#math var $var +1" works the same as "#math {var} {$var +1}"
+        let expression = args.slice(1).join(' ');
 
         // Substitute variables in expression
         expression = this.substituteVariables(expression);
@@ -9380,6 +9722,13 @@ class WMTClient {
         }, 100);
     }
 
+    // Sync functions to server for @func{} resolution in triggers/aliases/tickers
+    syncFunctionsToServer() {
+        if (this.connection) {
+            this.connection.setFunctions(this.functions);
+        }
+    }
+
     // Parse variable name with optional bracket keys
     // Returns { name: string, keys: string[] }
     parseVariableName(fullName) {
@@ -9505,38 +9854,8 @@ class WMTClient {
         // Substitute variables first
         cmdStr = this.substituteVariables(cmdStr);
 
-        // Split by semicolons, respecting braces and \; escapes
-        const commands = [];
-        let current = '';
-        let depth = 0;
-        let escaped = false;
-
-        for (let i = 0; i < cmdStr.length; i++) {
-            const char = cmdStr[i];
-            if (escaped) {
-                // TinTin++ escape: \; means literal semicolon, \\ means literal backslash
-                if (char !== ';' && char !== '\\') {
-                    current += '\\';  // Not a recognized escape, keep the backslash
-                }
-                current += char;
-                escaped = false;
-            } else if (char === '\\' && depth === 0) {
-                escaped = true;
-            } else if (char === '{') {
-                depth++;
-                current += char;
-            } else if (char === '}') {
-                depth--;
-                current += char;
-            } else if (char === ';' && depth === 0) {
-                if (current.trim()) commands.push(current.trim());
-                current = '';
-            } else {
-                current += char;
-            }
-        }
-        if (escaped) current += '\\';  // Trailing backslash
-        if (current.trim()) commands.push(current.trim());
+        // Split by semicolons, respecting braces and \ escapes
+        const commands = this.parseCommands(cmdStr);
 
         // Execute each command sequentially (await async commands like #class)
         for (const cmd of commands) {
@@ -10813,10 +11132,19 @@ class WMTClient {
         const commands = [];
         let current = '';
         let braceDepth = 0;
+        let escaped = false;
 
         for (let i = 0; i < str.length; i++) {
             const char = str[i];
-            if (char === '{') {
+            if (escaped) {
+                // TinTin++ tokenizer behavior: keep \X as two chars intact.
+                // The only purpose of \ here is to prevent splitting on ;
+                // processTinTinEscapes() handles actual conversions later.
+                current += '\\' + char;
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '{') {
                 braceDepth++;
                 current += char;
             } else if (char === '}') {
@@ -10830,6 +11158,7 @@ class WMTClient {
                 current += char;
             }
         }
+        if (escaped) current += '\\';
         if (current.trim()) commands.push(current.trim());
         return commands;
     }

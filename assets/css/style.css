@@ -1200,6 +1200,12 @@ body {
     background: rgba(0, 0, 0, 0.3);
 }
 
+.class-header.drag-over {
+    background: rgba(100, 200, 255, 0.15);
+    outline: 1px dashed #8cf;
+    outline-offset: -1px;
+}
+
 .class-expand {
     width: 20px;
     color: var(--text-muted);
@@ -1299,6 +1305,14 @@ body {
 
 .script-item:hover {
     background: rgba(255, 255, 255, 0.08);
+}
+
+.script-item[draggable="true"] {
+    cursor: grab;
+}
+
+.script-item.dragging {
+    opacity: 0.35;
 }
 
 .script-item.disabled {
@@ -1407,6 +1421,13 @@ body {
     color: var(--text-muted);
     margin-bottom: 5px;
     padding: 0 5px;
+}
+
+.unassigned-section.drag-over {
+    background: rgba(100, 200, 255, 0.1);
+    outline: 1px dashed #8cf;
+    outline-offset: -1px;
+    border-radius: 4px;
 }
 
 /* Add buttons in sidebar */
@@ -1842,6 +1863,26 @@ body {
 .script-files-list .folder-actions-bar .btn {
     font-size: 0.8em;
     padding: 4px 10px;
+}
+
+/* Drag-and-drop states */
+.script-file-item.dragging {
+    opacity: 0.35;
+}
+
+.script-file-item[draggable="true"] {
+    cursor: grab;
+}
+
+.script-file-item[draggable="true"]:active {
+    cursor: grabbing;
+}
+
+.script-folder-item.drag-over {
+    background: rgba(100, 200, 255, 0.15);
+    outline: 1px dashed #8cf;
+    outline-offset: -1px;
+    border-radius: 4px;
 }
 
 .btn-danger {

@@ -184,11 +184,12 @@ switch ($action) {
         saveClasses($classesPath, $classes);
 
         // Handle items in this class
-        if ($deleteItems) {
-            // Delete all triggers and aliases in this class
-            $triggersPath = $characterPath . '/triggers.json';
-            $aliasesPath = $characterPath . '/aliases.json';
+        $triggersPath = $characterPath . '/triggers.json';
+        $aliasesPath = $characterPath . '/aliases.json';
+        $tickersPath = $characterPath . '/tickers.json';
 
+        if ($deleteItems) {
+            // Delete all triggers, aliases, and tickers in this class
             $triggers = loadJsonFile($triggersPath);
             $triggers = array_values(array_filter($triggers, function($t) use ($classId) {
                 return ($t['class'] ?? null) !== $classId;
@@ -200,11 +201,14 @@ switch ($action) {
                 return ($a['class'] ?? null) !== $classId;
             }));
             saveJsonFile($aliasesPath, $aliases);
+
+            $tickers = loadJsonFile($tickersPath);
+            $tickers = array_values(array_filter($tickers, function($t) use ($classId) {
+                return ($t['class'] ?? null) !== $classId;
+            }));
+            saveJsonFile($tickersPath, $tickers);
         } else {
             // Just remove class reference from items (make them classless)
-            $triggersPath = $characterPath . '/triggers.json';
-            $aliasesPath = $characterPath . '/aliases.json';
-
             $triggers = loadJsonFile($triggersPath);
             foreach ($triggers as &$t) {
                 if (($t['class'] ?? null) === $classId) {
@@ -220,6 +224,14 @@ switch ($action) {
                 }
             }
             saveJsonFile($aliasesPath, $aliases);
+
+            $tickers = loadJsonFile($tickersPath);
+            foreach ($tickers as &$t) {
+                if (($t['class'] ?? null) === $classId) {
+                    $t['class'] = null;
+                }
+            }
+            saveJsonFile($tickersPath, $tickers);
         }
 
         successResponse(['message' => 'Class deleted']);

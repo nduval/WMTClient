@@ -4,6 +4,8 @@
 
 **After making ANY code changes, run `python deploy.py all` immediately.** Do not wait for the user to ask. This deploys to both IONOS (PHP/JS/CSS) and Lightsail (WebSocket proxy). It's safe to run even if only one side changed.
 
+The deploy script **auto-commits tracked changes** before deploying (for easy rollback). Use `--no-commit` to skip. Only tracked files are staged (`git add -u`) — untracked files are never committed automatically.
+
 ---
 
 ## IMPORTANT: Git Security

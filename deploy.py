@@ -235,11 +235,75 @@ def deploy_ionos():
         print(f"SFTP Error: {e}")
         return False
 
+def git_commit_before_deploy():
+    """Auto-commit tracked changes before deploying (for easy rollback)"""
+    # Check for any staged or unstaged changes to tracked files
+    result = subprocess.run(
+        'git status --porcelain',
+        shell=True, capture_output=True, text=True, cwd=str(BASE_DIR)
+    )
+    if result.returncode != 0:
+        print("WARNING: git status failed, skipping auto-commit")
+        return
+
+    lines = result.stdout.strip().splitlines() if result.stdout.strip() else []
+    # Filter to only tracked changes (M, D, R, etc. — skip ?? untracked)
+    tracked_changes = [l for l in lines if not l.startswith('??')]
+    if not tracked_changes:
+        print("No tracked changes to commit.")
+        return
+
+    # Build a summary of what changed
+    changed_files = []
+    for line in tracked_changes:
+        # Format: "XY filename" — X=staged, Y=unstaged
+        filepath = line[3:].strip().strip('"')
+        changed_files.append(filepath)
+
+    # Summarize by area
+    areas = set()
+    for f in changed_files:
+        if 'server.js' in f or 'bridge.js' in f:
+            areas.add('server')
+        elif f.startswith('assets/js/'):
+            areas.add('client JS')
+        elif f.startswith('assets/css/'):
+            areas.add('CSS')
+        elif f.startswith('api/'):
+            areas.add('API')
+        elif f.startswith('includes/'):
+            areas.add('includes')
+        elif f.endswith('.php'):
+            areas.add('PHP')
+        else:
+            areas.add('other')
+
+    area_str = ', '.join(sorted(areas))
+    msg = f"Deploy: update {area_str}"
+
+    print(f"\n=== Auto-commit before deploy ===")
+    print(f"  Changed files: {', '.join(changed_files)}")
+    print(f"  Commit message: {msg}")
+
+    # Stage tracked changes only (no untracked files)
+    subprocess.run('git add -u', shell=True, cwd=str(BASE_DIR))
+    # Commit
+    result = subprocess.run(
+        ['git', 'commit', '-m', msg],
+        capture_output=True, text=True, cwd=str(BASE_DIR)
+    )
+    if result.returncode == 0:
+        print(f"  Committed successfully.")
+    else:
+        print(f"  Commit failed: {result.stderr.strip()}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Deploy WMT Client')
     parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'all'],
                        default='all', help='Deployment target (default: all)')
     parser.add_argument('--list', action='store_true', help='List files that would be deployed')
+    parser.add_argument('--no-commit', action='store_true', help='Skip auto-commit before deploy')
 
     args = parser.parse_args()
 
@@ -251,6 +315,10 @@ def main():
         print("  server.js (lightsail target)")
         print("  bridge.js (bridge target)")
         return
+
+    # Auto-commit tracked changes before deploying
+    if not args.no_commit:
+        git_commit_before_deploy()
 
     success = True
 

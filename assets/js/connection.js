@@ -194,6 +194,10 @@ class MudConnection {
         return this.send('set_variables', { variables });
     }
 
+    setFunctions(functions) {
+        return this.send('set_functions', { functions });
+    }
+
     setMip(enabled, mipId, debug = false) {
         return this.send('set_mip', { enabled, mipId, debug });
     }

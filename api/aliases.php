@@ -82,7 +82,7 @@ switch ($action) {
         // Check for duplicate pattern
         $pattern = trim($data['pattern']);
         foreach ($aliases as $existing) {
-            if (strtolower($existing['pattern']) === strtolower($pattern)) {
+            if ($existing['pattern'] === $pattern) {
                 errorResponse('An alias with this pattern already exists');
             }
         }
