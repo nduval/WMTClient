@@ -3848,6 +3848,14 @@ function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, funct
     if (expanded === substituted) {
       results.push(substituted);
     } else {
+      // Log alias expansion for debugging bot/trigger issues
+      if (session) {
+        writeSessionLog(session, 'alias_expand', {
+          raw: partTrimmed.substring(0, 80),
+          sub: substituted.substring(0, 80),
+          exp: expanded.substring(0, 200)
+        });
+      }
       const subParts = parseCommands(expanded);
       subParts.forEach(subPart => {
         results.push(...expandCommandWithAliases(subPart, aliases, depth + 1, variables, functions, session, state));
