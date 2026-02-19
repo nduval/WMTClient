@@ -18,6 +18,24 @@ Before running `git add -A` or committing, verify no secrets are being staged.
 
 ---
 
+## IMPORTANT: Protected Functionality (DO NOT BREAK)
+
+**Before modifying `server.js` or `app.js`, read `memory/regression-checklist.md` for the full list.** These behaviors have been tested and confirmed working. Any change that touches these areas MUST be verified against the checklist.
+
+**Stable baseline tag: `stable-secbot-v1`** — Use `git diff stable-secbot-v1` to review what changed since last known-good state.
+
+Critical behaviors (summary — see checklist for details):
+1. **Sequential #var/#math in alias chains** — `serverProcessInlineCommand()` runs DURING `expandCommandWithAliases`, not after. `#var x 1;dostep$x` must see updated `$x`.
+2. **Variable sync race protection** — `set_variables` handler merges with 2s timestamp window. Server-modified vars (`_varServerModified`) are NOT overwritten by stale client sync.
+3. **#class {name} {read}** loads ALL items — update paths in `cmdAlias`/`cmdGag`/`cmdHighlight`/`cmdSubstitute`/`cmdTicker` reassign `class` when `currentScriptClass` is set.
+4. **Bulk loading defers saves** — `_bulkLoading` flag prevents 450+ HTTP requests during `#read`.
+5. **`!command` passes through to MUD** — NOT intercepted. 3K uses `!` for background execution.
+6. **Trigger execution sends movement** — `expandCommandWithAliases` in trigger forEach fully expands alias chains (secwalk→secstepN→direction+kill) in one synchronous pass.
+
+**When in doubt, deploy and test `secon` on Beowulf. If the bot steps through rooms correctly, the core pipeline is intact.**
+
+---
+
 ## IMPORTANT: Maintaining Documentation
 
 **After solving any significant bug or discovering important technical details, update the appropriate file:**
