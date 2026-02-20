@@ -3345,10 +3345,12 @@ class WMTClient {
             `;
         });
 
-        // Render unassigned items
-        const unassignedTrigs = this.triggers.filter(t => !t.class);
-        const unassignedAliases = this.aliases.filter(a => !a.class);
-        const unassignedTickers = this.tickers.filter(t => !t.class);
+        // Render unassigned items (including orphans whose class was deleted)
+        const classIds = new Set(this.classes.map(c => c.id));
+        const isUnassigned = item => !item.class || !classIds.has(item.class);
+        const unassignedTrigs = this.triggers.filter(isUnassigned);
+        const unassignedAliases = this.aliases.filter(isUnassigned);
+        const unassignedTickers = this.tickers.filter(isUnassigned);
 
         if (unassignedTrigs.length > 0 || unassignedAliases.length > 0 || unassignedTickers.length > 0) {
             html += `
@@ -3624,12 +3626,12 @@ class WMTClient {
         }
     }
 
-    confirmDeleteClass(classId) {
+    async confirmDeleteClass(classId) {
         const cls = this.classes.find(c => c.id === classId);
         if (!cls) return;
 
         if (confirm(`Delete class "${cls.name}"? Items in this class will become unassigned.`)) {
-            this.deleteClass(classId, false);
+            await this.deleteClass(classId, false);
         }
     }
 
