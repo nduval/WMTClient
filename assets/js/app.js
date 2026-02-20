@@ -137,6 +137,9 @@ class WMTClient {
 
     async init() {
         try {
+            // Ensure PHP session points to the correct character before any API calls.
+            // Prevents stale session after switching characters on the characters page.
+            await this.syncCharacterSession();
             await this.loadSettings();
             this.applyPreferences();
             this.setupConnection();
@@ -144,6 +147,21 @@ class WMTClient {
             this.initPanels();
         } catch (e) {
             console.error('Init failed:', e);
+        }
+    }
+
+    async syncCharacterSession() {
+        const charId = window.WMT_CONFIG?.characterId;
+        const csrfToken = window.WMT_CONFIG?.csrfToken;
+        if (!charId || !csrfToken) return;
+        try {
+            await fetch('api/characters.php?action=select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ character_id: charId, csrf_token: csrfToken })
+            });
+        } catch (e) {
+            // Non-fatal — session may already be correct
         }
     }
 
@@ -7426,7 +7444,12 @@ class WMTClient {
         const calledFrom = this._readStack.length ? this._readStack[this._readStack.length - 1] : null;
 
         try {
-            const res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+            let res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+            // If session lost character selection, re-sync and retry once
+            if (res.status === 401) {
+                await this.syncCharacterSession();
+                res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+            }
             const data = await res.json();
 
             if (!data.success) {

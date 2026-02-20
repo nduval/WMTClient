@@ -709,10 +709,17 @@ function hasCharacterSelected(): bool {
 }
 
 /**
- * Require a character to be selected (for app.php)
+ * Require a character to be selected.
+ * API endpoints get a JSON error; page loads get a redirect.
  */
 function requireCharacter(): void {
     if (!hasCharacterSelected()) {
+        if (strpos($_SERVER['REQUEST_URI'] ?? '', '/api/') !== false) {
+            header('Content-Type: application/json');
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'No character selected']);
+            exit;
+        }
         header('Location: characters.php');
         exit;
     }
