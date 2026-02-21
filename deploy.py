@@ -64,7 +64,7 @@ def load_credentials():
 
     return creds
 
-def deploy_lightsail(target='server'):
+def deploy_lightsail(target='server', force_bridge=False):
     """Deploy to Lightsail via SSH"""
     ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
     host = '3.14.128.194'
@@ -72,6 +72,23 @@ def deploy_lightsail(target='server'):
 
     if target == 'bridge':
         print("\n=== Deploying bridge.js to Lightsail (SSH) ===")
+        print("*** WARNING: Restarting bridge.js KILLS ALL active MUD connections! ***")
+        print("*** Every connected user will experience linkdeath. ***")
+
+        # Check how many active sessions bridge is holding
+        check = subprocess.run(
+            f'{ssh_cmd} "sudo journalctl -u wmt-bridge -n 1 --no-pager -o cat"',
+            shell=True, capture_output=True, text=True
+        )
+        last_line = check.stdout.strip()
+        if 'Sessions:' in last_line:
+            print(f"*** Bridge status: {last_line.strip()} ***")
+
+        # Require explicit --yes flag, no interactive prompt (Claude can't do interactive)
+        if not force_bridge:
+            print("\nAborted. To confirm, run:  python deploy.py bridge --yes")
+            return False
+
         local_file = BASE_DIR / 'glitch' / 'bridge.js'
         if not local_file.exists():
             print("ERROR: glitch/bridge.js not found")
@@ -311,6 +328,7 @@ def main():
                        default='all', help='Deployment target (default: all)')
     parser.add_argument('--list', action='store_true', help='List files that would be deployed')
     parser.add_argument('--no-commit', action='store_true', help='Skip auto-commit before deploy')
+    parser.add_argument('--yes', action='store_true', help='Confirm bridge deploy (required — bridge restart kills ALL MUD connections)')
 
     args = parser.parse_args()
 
@@ -334,7 +352,7 @@ def main():
             success = False
 
     if args.target == 'bridge':
-        if not deploy_lightsail('bridge'):
+        if not deploy_lightsail('bridge', force_bridge=args.yes):
             success = False
 
     if args.target in ['ionos', 'all']:
