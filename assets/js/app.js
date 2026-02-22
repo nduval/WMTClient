@@ -9,85 +9,145 @@
 // ==========================================
 const COMMAND_REGISTRY = [
     // --- Aliases ---
-    { name: 'alias',        abbrevs: ['ali'],              handler: 'cmdAlias',        async: true,  getAllAfter: 1, description: 'Create alias pattern → replacement' },
-    { name: 'unalias',      abbrevs: ['unali'],            handler: 'cmdUnalias',      async: true,  getAllAfter: 0, description: 'Remove alias by pattern' },
+    { name: 'alias',        abbrevs: ['ali'],              handler: 'cmdAlias',        async: true,  getAllAfter: 1,
+      category: 'Aliases', syntax: '#alias {pattern} {replacement} [priority]', description: 'Create alias pattern -> replacement' },
+    { name: 'unalias',      abbrevs: ['unali'],            handler: 'cmdUnalias',      async: true,  getAllAfter: 0,
+      category: 'Aliases', syntax: '#unalias {pattern}', description: 'Remove alias by pattern' },
     // --- Actions/Triggers ---
-    { name: 'action',       abbrevs: ['act'],              handler: 'cmdAction',       async: true,  getAllAfter: 1, description: 'Create trigger on MUD output' },
-    { name: 'unaction',     abbrevs: ['unact'],            handler: 'cmdUnaction',     async: true,  getAllAfter: 0, description: 'Remove trigger' },
+    { name: 'action',       abbrevs: ['act'],              handler: 'cmdAction',       async: true,  getAllAfter: 1,
+      category: 'Triggers', syntax: '#action {pattern} {commands} [priority]', description: 'Create trigger on MUD output' },
+    { name: 'unaction',     abbrevs: ['unact'],            handler: 'cmdUnaction',     async: true,  getAllAfter: 0,
+      category: 'Triggers', syntax: '#unaction {pattern}', description: 'Remove trigger' },
     // --- Tickers/Delays ---
-    { name: 'ticker',       abbrevs: ['tick'],             handler: 'cmdTicker',       async: true,  getAllAfter: 1, description: 'Create repeating timer' },
-    { name: 'unticker',     abbrevs: ['untick'],           handler: 'cmdUnticker',     async: true,                  description: 'Remove ticker' },
-    { name: 'delay',        abbrevs: ['del'],              handler: 'cmdDelay',        async: false, getAllAfter: 1, description: 'One-shot delayed command' },
-    { name: 'undelay',      abbrevs: ['undel'],            handler: 'cmdUndelay',      async: false,                 description: 'Cancel delay' },
+    { name: 'ticker',       abbrevs: ['tick'],             handler: 'cmdTicker',       async: true,  getAllAfter: 1,
+      category: 'Timing', syntax: '#ticker {name} {commands} {seconds}', description: 'Create repeating timer' },
+    { name: 'unticker',     abbrevs: ['untick'],           handler: 'cmdUnticker',     async: true,
+      category: 'Timing', syntax: '#unticker {name}', description: 'Remove ticker' },
+    { name: 'delay',        abbrevs: ['del'],              handler: 'cmdDelay',        async: false, getAllAfter: 1,
+      category: 'Timing', syntax: '#delay {seconds|name} {commands}', description: 'One-shot delayed command' },
+    { name: 'undelay',      abbrevs: ['undel'],            handler: 'cmdUndelay',      async: false,
+      category: 'Timing', syntax: '#undelay {name}', description: 'Cancel delay' },
     // --- Info/Class ---
-    { name: 'info',         abbrevs: [],                   handler: 'cmdInfo',         async: false,                 description: 'Show system info' },
-    { name: 'class',        abbrevs: ['cls'],              handler: 'cmdClass',        async: true,  getAllAfter: 2, description: 'Manage script classes' },
+    { name: 'info',         abbrevs: [],                   handler: 'cmdInfo',         async: false,
+      category: 'Info', syntax: '#info [type]', description: 'Show system info' },
+    { name: 'class',        abbrevs: ['cls'],              handler: 'cmdClass',        async: true,  getAllAfter: 2,
+      category: 'Info', syntax: '#class {name} [open|close|kill|read|write]', description: 'Manage script classes' },
     // --- File commands ---
-    { name: 'read',         abbrevs: [],                   handler: 'cmdRead',         async: true,                  description: 'Load script file' },
-    { name: 'write',        abbrevs: [],                   handler: 'cmdWrite',        async: true,                  description: 'Save script file' },
-    { name: 'scripts',      abbrevs: ['script', 'files'],  handler: 'cmdScripts',      async: true,                  description: 'List script files' },
+    { name: 'read',         abbrevs: [],                   handler: 'cmdRead',         async: true,
+      category: 'Files', syntax: '#read {filename}', description: 'Load script file' },
+    { name: 'write',        abbrevs: [],                   handler: 'cmdWrite',        async: true,
+      category: 'Files', syntax: '#write {filename} {class}', description: 'Save script file' },
+    { name: 'scripts',      abbrevs: ['script', 'files'],  handler: 'cmdScripts',      async: true,
+      category: 'Files', syntax: '#scripts', description: 'List script files' },
     // --- Gag/Highlight/Substitute ---
-    { name: 'gag',          abbrevs: [],                   handler: 'cmdGag',          async: true,  getAllAfter: 0, description: 'Suppress matching lines' },
-    { name: 'ungag',        abbrevs: [],                   handler: 'cmdUngag',        async: true,  getAllAfter: 0, description: 'Remove gag' },
-    { name: 'highlight',    abbrevs: ['high', 'hi'],       handler: 'cmdHighlight',    async: true,  getAllAfter: 1, description: 'Color matching text' },
-    { name: 'unhighlight',  abbrevs: ['unhigh'],           handler: 'cmdUnhighlight',  async: true,                  description: 'Remove highlight' },
-    { name: 'substitute',   abbrevs: ['sub'],              handler: 'cmdSubstitute',   async: true,  getAllAfter: 1, description: 'Replace matching text' },
-    { name: 'unsubstitute', abbrevs: ['unsub'],            handler: 'cmdUnsubstitute', async: true,                  description: 'Remove substitute' },
+    { name: 'gag',          abbrevs: [],                   handler: 'cmdGag',          async: true,  getAllAfter: 0,
+      category: 'Filters', syntax: '#gag {pattern} [priority]', description: 'Suppress matching lines' },
+    { name: 'ungag',        abbrevs: [],                   handler: 'cmdUngag',        async: true,  getAllAfter: 0,
+      category: 'Filters', syntax: '#ungag {pattern}', description: 'Remove gag' },
+    { name: 'highlight',    abbrevs: ['high', 'hi'],       handler: 'cmdHighlight',    async: true,  getAllAfter: 1,
+      category: 'Filters', syntax: '#highlight {color} {pattern} [priority]', description: 'Color matching text' },
+    { name: 'unhighlight',  abbrevs: ['unhigh'],           handler: 'cmdUnhighlight',  async: true,
+      category: 'Filters', syntax: '#unhighlight {pattern}', description: 'Remove highlight' },
+    { name: 'substitute',   abbrevs: ['sub'],              handler: 'cmdSubstitute',   async: true,  getAllAfter: 1,
+      category: 'Filters', syntax: '#substitute {pattern} {replacement} [priority]', description: 'Replace matching text' },
+    { name: 'unsubstitute', abbrevs: ['unsub'],            handler: 'cmdUnsubstitute', async: true,
+      category: 'Filters', syntax: '#unsubstitute {pattern}', description: 'Remove substitute' },
     // --- Variables ---
-    { name: 'variable',     abbrevs: ['var'],              handler: 'cmdVar',          async: false, getAllAfter: 1, serverInline: true, description: 'Set variable' },
-    { name: 'unvariable',   abbrevs: ['unvar'],            handler: 'cmdUnvar',        async: false,                 serverInline: true, description: 'Remove variable' },
-    { name: 'local',        abbrevs: [],                   handler: 'cmdLocal',        async: false, getAllAfter: 1, description: 'Set local variable' },
-    { name: 'unlocal',      abbrevs: [],                   handler: 'cmdUnlocal',      async: false,                 description: 'Remove local variable' },
-    { name: 'math',         abbrevs: [],                   handler: 'cmdMath',         async: false, getAllAfter: 1, serverInline: true, description: 'Evaluate math expression' },
+    { name: 'variable',     abbrevs: ['var'],              handler: 'cmdVar',          async: false, getAllAfter: 1, serverInline: true,
+      category: 'Variables', syntax: '#variable {name} {value}', description: 'Set variable' },
+    { name: 'unvariable',   abbrevs: ['unvar'],            handler: 'cmdUnvar',        async: false,                 serverInline: true,
+      category: 'Variables', syntax: '#unvariable {name}', description: 'Remove variable' },
+    { name: 'local',        abbrevs: [],                   handler: 'cmdLocal',        async: false, getAllAfter: 1,
+      category: 'Variables', syntax: '#local {name} {value}', description: 'Set local variable' },
+    { name: 'unlocal',      abbrevs: [],                   handler: 'cmdUnlocal',      async: false,
+      category: 'Variables', syntax: '#unlocal {name}', description: 'Remove local variable' },
+    { name: 'math',         abbrevs: [],                   handler: 'cmdMath',         async: false, getAllAfter: 1, serverInline: true,
+      category: 'Variables', syntax: '#math {variable} {expression}', description: 'Evaluate math expression' },
     // --- Control flow ---
-    { name: 'if',           abbrevs: [],                   handler: 'cmdIf',           async: true,                  description: 'Conditional execution' },
-    { name: 'switch',       abbrevs: [],                   handler: 'cmdSwitch',       async: false,                 description: 'Multi-branch conditional' },
-    { name: 'loop',         abbrevs: [],                   handler: 'cmdLoop',         async: false,                 description: 'Numeric loop' },
-    { name: 'foreach',      abbrevs: [],                   handler: 'cmdForeach',      async: false,                 description: 'Iterate over list' },
-    { name: 'break',        abbrevs: [],                   handler: null,              async: false, special: 'break',    description: 'Exit loop early' },
-    { name: 'continue',     abbrevs: [],                   handler: null,              async: false, special: 'continue', description: 'Skip to next iteration' },
-    { name: 'return',       abbrevs: [],                   handler: 'cmdReturn',       async: false,                 description: 'Return from function' },
+    { name: 'if',           abbrevs: [],                   handler: 'cmdIf',           async: true,
+      category: 'Control Flow', syntax: '#if {condition} {true} [#elseif {cond} {cmd}] [#else {false}]', description: 'Conditional execution' },
+    { name: 'switch',       abbrevs: [],                   handler: 'cmdSwitch',       async: false,
+      category: 'Control Flow', syntax: '#switch {value} {#case {val} {cmd};#default {cmd}}', description: 'Multi-branch conditional' },
+    { name: 'loop',         abbrevs: [],                   handler: 'cmdLoop',         async: false,
+      category: 'Control Flow', syntax: '#loop {start} {end} {variable} {commands}', description: 'Numeric loop' },
+    { name: 'foreach',      abbrevs: [],                   handler: 'cmdForeach',      async: false,
+      category: 'Control Flow', syntax: '#foreach {list} {variable} {commands}', description: 'Iterate over list' },
+    { name: 'break',        abbrevs: [],                   handler: null,              async: false, special: 'break',
+      category: 'Control Flow', syntax: '#break', description: 'Exit loop early' },
+    { name: 'continue',     abbrevs: [],                   handler: null,              async: false, special: 'continue',
+      category: 'Control Flow', syntax: '#continue', description: 'Skip to next iteration' },
+    { name: 'return',       abbrevs: [],                   handler: 'cmdReturn',       async: false,
+      category: 'Functions', syntax: '#return {value}', description: 'Return from function' },
     // --- Regexp ---
-    { name: 'regexp',       abbrevs: ['regex'],            handler: 'cmdRegexp',       async: true,                  description: 'Regex match and execute' },
+    { name: 'regexp',       abbrevs: ['regex'],            handler: 'cmdRegexp',       async: true,
+      category: 'Regexp', syntax: '#regexp {text} {pattern} {true} [#else {false}]', description: 'Regex match and execute' },
     // --- Display ---
-    { name: 'showme',       abbrevs: ['show'],             handler: 'cmdShowme',       async: false, getAllAfter: 0, description: 'Display text locally' },
-    { name: 'echo',         abbrevs: [],                   handler: 'cmdEcho',         async: false, getAllAfter: 0, description: 'Display text with formatting' },
-    { name: 'bell',         abbrevs: [],                   handler: 'cmdBell',         async: false,                 description: 'Play alert sound' },
+    { name: 'showme',       abbrevs: ['show'],             handler: 'cmdShowme',       async: false, getAllAfter: 0,
+      category: 'Display', syntax: '#showme {message} [row]', description: 'Display text locally' },
+    { name: 'echo',         abbrevs: [],                   handler: 'cmdEcho',         async: false, getAllAfter: 0,
+      category: 'Display', syntax: '#echo {message}', description: 'Display text with formatting' },
+    { name: 'bell',         abbrevs: [],                   handler: 'cmdBell',         async: false,
+      category: 'Display', syntax: '#bell', description: 'Play alert sound' },
     // --- Send ---
-    { name: 'send',         abbrevs: [],                   handler: 'cmdSend',         async: false, getAllAfter: 0, description: 'Send raw text to MUD' },
+    { name: 'send',         abbrevs: [],                   handler: 'cmdSend',         async: false, getAllAfter: 0,
+      category: 'Send', syntax: '#send {text}', description: 'Send raw text to MUD' },
     // --- Prompt ---
-    { name: 'prompt',       abbrevs: [],                   handler: 'cmdPrompt',       async: false,                 description: 'Capture to status bar' },
-    { name: 'unprompt',     abbrevs: [],                   handler: 'cmdUnprompt',     async: false,                 description: 'Remove prompt capture' },
+    { name: 'prompt',       abbrevs: [],                   handler: 'cmdPrompt',       async: false,
+      category: 'Prompt', syntax: '#prompt {pattern} {text} [row]', description: 'Capture to status bar' },
+    { name: 'unprompt',     abbrevs: [],                   handler: 'cmdUnprompt',     async: false,
+      category: 'Prompt', syntax: '#unprompt {pattern}', description: 'Remove prompt capture' },
     // --- Pathdir ---
-    { name: 'pathdir',      abbrevs: [],                   handler: 'cmdPathdir',      async: false,                 description: 'Set speedwalk direction' },
-    { name: 'unpathdir',    abbrevs: [],                   handler: 'cmdUnpathdir',    async: false,                 description: 'Remove speedwalk direction' },
+    { name: 'pathdir',      abbrevs: [],                   handler: 'cmdPathdir',      async: false,
+      category: 'Speedwalk', syntax: '#pathdir {dir} {reverse} {coord}', description: 'Set speedwalk direction' },
+    { name: 'unpathdir',    abbrevs: [],                   handler: 'cmdUnpathdir',    async: false,
+      category: 'Speedwalk', syntax: '#unpathdir {dir}', description: 'Remove speedwalk direction' },
     // --- Config ---
-    { name: 'config',       abbrevs: [],                   handler: 'cmdConfig',       async: false,                 description: 'Toggle settings' },
+    { name: 'config',       abbrevs: [],                   handler: 'cmdConfig',       async: false,
+      category: 'Config', syntax: '#config {option} {value}', description: 'Toggle settings' },
     // --- Format/String ---
-    { name: 'format',       abbrevs: [],                   handler: 'cmdFormat',       async: false, getAllAfter: 1, serverInline: true, description: 'Format string into variable' },
-    { name: 'replace',      abbrevs: [],                   handler: 'cmdReplace',      async: false, getAllAfter: 2, serverInline: true, description: 'Replace text in variable' },
-    { name: 'cat',          abbrevs: [],                   handler: 'cmdCat',          async: false, getAllAfter: 1, serverInline: true, description: 'Append to variable' },
+    { name: 'format',       abbrevs: [],                   handler: 'cmdFormat',       async: false, getAllAfter: 1, serverInline: true,
+      category: 'Strings', syntax: '#format {variable} {format} [args]', description: 'Format string into variable' },
+    { name: 'replace',      abbrevs: [],                   handler: 'cmdReplace',      async: false, getAllAfter: 2, serverInline: true,
+      category: 'Strings', syntax: '#replace {variable} {old} {new}', description: 'Replace text in variable' },
+    { name: 'cat',          abbrevs: [],                   handler: 'cmdCat',          async: false, getAllAfter: 1, serverInline: true,
+      category: 'Strings', syntax: '#cat {variable} {text}', description: 'Append to variable' },
     // --- Split screen ---
-    { name: 'split',        abbrevs: [],                   handler: 'cmdSplit',        async: false,                 description: 'Enable split screen' },
-    { name: 'unsplit',      abbrevs: [],                   handler: 'cmdUnsplit',      async: false,                 description: 'Disable split screen' },
+    { name: 'split',        abbrevs: [],                   handler: 'cmdSplit',        async: false,
+      category: 'Split Screen', syntax: '#split {top} [bottom]', description: 'Enable split screen' },
+    { name: 'unsplit',      abbrevs: [],                   handler: 'cmdUnsplit',      async: false,
+      category: 'Split Screen', syntax: '#unsplit', description: 'Disable split screen' },
     // --- Line modifiers ---
-    { name: 'line',         abbrevs: [],                   handler: 'cmdLine',         async: true,                  serverInline: true, description: 'Line modifier subcommands' },
+    { name: 'line',         abbrevs: [],                   handler: 'cmdLine',         async: true,                  serverInline: true,
+      category: 'Line Modifiers', syntax: '#line {modifier} {commands}', description: 'Line modifier subcommands' },
     // --- List ---
-    { name: 'list',         abbrevs: [],                   handler: 'cmdList',         async: false,                 description: 'List manipulation' },
+    { name: 'list',         abbrevs: [],                   handler: 'cmdList',         async: false,
+      category: 'Lists', syntax: '#list {variable} {subcommand} [args]', description: 'List manipulation' },
     // --- Misc ---
-    { name: 'nop',          abbrevs: [],                   handler: null,              async: false, special: 'nop',      description: 'No operation (comment)' },
-    { name: 'mip',          abbrevs: [],                   handler: 'cmdMip',          async: false,                 description: 'MIP protocol control' },
-    { name: 'grep',         abbrevs: ['buffer'],           handler: 'cmdGrep',         async: false,                 description: 'Search scrollback buffer' },
-    { name: 'help',         abbrevs: [],                   handler: 'cmdHelp',         async: false,                 description: 'Show command help' },
+    { name: 'nop',          abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#nop {comment}', description: 'No operation (comment)' },
+    { name: 'mip',          abbrevs: [],                   handler: 'cmdMip',          async: false,
+      category: 'Misc', syntax: '#mip [reload|on|off]', description: 'MIP protocol control' },
+    { name: 'grep',         abbrevs: ['buffer'],           handler: 'cmdGrep',         async: false,
+      category: 'Misc', syntax: '#grep [page] {pattern}', description: 'Search scrollback buffer' },
+    { name: 'help',         abbrevs: [],                   handler: 'cmdHelp',         async: false, getAllAfter: 0,
+      category: 'Misc', syntax: '#help [command]', description: 'Show command help' },
+    { name: 'commands',     abbrevs: ['cmds'],             handler: 'cmdCommands',     async: false, getAllAfter: 0,
+      category: 'Misc', syntax: '#commands [filter]', description: 'List all commands' },
     // --- Functions ---
-    { name: 'function',     abbrevs: ['func'],             handler: 'cmdFunction',     async: false,                 description: 'Define @function' },
-    { name: 'unfunction',   abbrevs: ['unfunc'],           handler: 'cmdUnfunction',   async: false,                 description: 'Remove @function' },
+    { name: 'function',     abbrevs: ['func'],             handler: 'cmdFunction',     async: false,
+      category: 'Functions', syntax: '#function {name} {body}', description: 'Define @function' },
+    { name: 'unfunction',   abbrevs: ['unfunc'],           handler: 'cmdUnfunction',   async: false,
+      category: 'Functions', syntax: '#unfunction {name}', description: 'Remove @function' },
     // --- Events ---
-    { name: 'event',        abbrevs: [],                   handler: 'cmdEvent',        async: false,                 description: 'Bind event handler' },
-    { name: 'unevent',      abbrevs: [],                   handler: 'cmdUnevent',      async: false,                 description: 'Remove event handler' },
+    { name: 'event',        abbrevs: [],                   handler: 'cmdEvent',        async: false,
+      category: 'Events', syntax: '#event {name} {commands}', description: 'Bind event handler' },
+    { name: 'unevent',      abbrevs: [],                   handler: 'cmdUnevent',      async: false,
+      category: 'Events', syntax: '#unevent {name}', description: 'Remove event handler' },
     // --- Session ---
-    { name: 'end',          abbrevs: [],                   handler: 'cmdEnd',          async: false,                 description: 'End session' },
-    { name: 'zap',          abbrevs: [],                   handler: 'cmdZap',          async: false,                 description: 'Disconnect from MUD' },
+    { name: 'end',          abbrevs: [],                   handler: 'cmdEnd',          async: false,
+      category: 'Session', syntax: '#end', description: 'End session' },
+    { name: 'zap',          abbrevs: [],                   handler: 'cmdZap',          async: false,
+      category: 'Session', syntax: '#zap', description: 'Disconnect from MUD' },
 ];
 
 // Build dispatch and GET_ALL_AFTER maps from registry
@@ -6782,7 +6842,27 @@ class WMTClient {
     }
 
     // #help - show available commands
-    cmdHelp() {
+    cmdHelp(args) {
+        // Per-command help: #help {command}
+        if (args && args.length > 0) {
+            const lookup = args[0].replace(/^#/, '').toLowerCase();
+            const entry = CMD_DISPATCH[lookup];
+            if (!entry) {
+                this.appendOutput(`#HELP: Unknown command '#${lookup}'. Type #commands to list all.`, 'system');
+                return;
+            }
+            this.appendOutput(`#${entry.name.toUpperCase()}`, 'system');
+            if (entry.syntax) this.appendOutput(`  Syntax: ${entry.syntax}`, 'system');
+            this.appendOutput(`  ${entry.description}`, 'system');
+            if (entry.abbrevs && entry.abbrevs.length > 0) {
+                this.appendOutput(`  Abbreviations: ${entry.abbrevs.map(a => '#' + a).join(', ')}`, 'system');
+            }
+            if (entry.category) this.appendOutput(`  Category: ${entry.category}`, 'system');
+            if (entry.serverInline) this.appendOutput(`  Runs server-side in trigger/alias chains`, 'system');
+            return;
+        }
+
+        // No args: show curated help (unchanged)
         this.appendOutput('Available # commands:', 'system');
         this.appendOutput('  #N command          - Repeat command N times', 'system');
         this.appendOutput('', 'system');
@@ -6862,6 +6942,7 @@ class WMTClient {
         this.appendOutput('  #info [type]        - Show counts', 'system');
         this.appendOutput('  #nop {comment}      - Comment (ignored)', 'system');
         this.appendOutput('  #help               - Show this help', 'system');
+        this.appendOutput('  #commands           - List all commands', 'system');
         this.appendOutput('', 'system');
         this.appendOutput('Functions:', 'system');
         this.appendOutput('  #function {name} {body} - Define function (call with @name{})', 'system');
@@ -6878,6 +6959,44 @@ class WMTClient {
         this.appendOutput('  #unevent {name}     - Remove event handler', 'system');
         this.appendOutput('  Events: SESSION_CONNECTED, SESSION_DISCONNECTED,', 'system');
         this.appendOutput('          VARIABLE_UPDATE, CLASS_ACTIVATED, CLASS_DEACTIVATED', 'system');
+    }
+
+    cmdCommands(args) {
+        const filter = (args && args.length > 0) ? args[0].toLowerCase() : null;
+        // Deduplicate: only show canonical entries (skip abbreviation aliases)
+        const seen = new Set();
+        const entries = [];
+        for (const entry of COMMAND_REGISTRY) {
+            if (seen.has(entry.name)) continue;
+            seen.add(entry.name);
+            if (filter) {
+                const haystack = entry.name + ' ' + entry.abbrevs.join(' ') + ' ' + entry.description;
+                if (!haystack.toLowerCase().includes(filter)) continue;
+            }
+            entries.push(entry);
+        }
+        entries.sort((a, b) => a.name.localeCompare(b.name));
+
+        this.appendOutput(`#COMMANDS: Available commands (${entries.length}):`, 'system');
+
+        // Build 4-column layout
+        const cols = 4;
+        const labels = entries.map(e => {
+            const abbr = e.abbrevs.length > 0 ? ` (${e.abbrevs[0]})` : '';
+            return `#${e.name}${abbr}`;
+        });
+        const maxLen = Math.max(...labels.map(l => l.length)) + 2;
+        const padTo = Math.min(maxLen, 24);
+
+        for (let i = 0; i < labels.length; i += cols) {
+            const row = labels.slice(i, i + cols).map(l => ('  ' + l).padEnd(padTo + 2)).join('');
+            this.appendOutput(row, 'system');
+        }
+
+        if (filter) {
+            this.appendOutput(`  (filtered by '${filter}')`, 'system');
+        }
+        this.appendOutput('  Type #help {command} for details.', 'system');
     }
 
     // ==========================================

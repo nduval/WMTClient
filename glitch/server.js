@@ -4462,6 +4462,11 @@ function serverSimpleHash(str) {
   return Math.abs(hash);
 }
 
+// Server-side inline command processing
+// Canonical command registry: assets/js/app.js COMMAND_REGISTRY
+// Commands with serverInline: true are handled here:
+//   #math, #var/#variable, #unvar/#unvariable, #format, #cat, #replace,
+//   #line oneshot, #line gag
 function serverProcessInlineCommand(cmd, session) {
   if (!cmd || !session) return false;
   const trimmed = cmd.trim();
