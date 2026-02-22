@@ -349,7 +349,7 @@ class WMTClient {
                         migrated = true;
                     }
                 }
-                if (migrated) this.saveAliases();
+                if (migrated) this._pendingAliasMigration = true;
             }
 
             // Load tickers
@@ -764,6 +764,12 @@ class WMTClient {
         const mudHost = window.WMT_CONFIG.mudHost || '3k.org';
         const mudPort = window.WMT_CONFIG.mudPort || 3000;
         this.connection.setServer(mudHost, mudPort);
+
+        // Save any pending alias migration (matchType fix from load)
+        if (this._pendingAliasMigration) {
+            this._pendingAliasMigration = false;
+            this.saveAliases();
+        }
 
         // Send triggers and aliases to server (filtered by enabled classes)
         this.sendFilteredTriggersAndAliases();
