@@ -146,6 +146,38 @@ def deploy_lightsail(target='server', force_bridge=False):
         print(f"WARNING: Service status is '{status}' — check journalctl -u wmt-server")
     return True
 
+def sync_test_server():
+    """Sync server.js to the test sandbox (non-fatal if it fails)"""
+    print("\n=== Syncing server.js to test sandbox ===")
+    ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
+    host = '18.225.235.28'
+
+    if not ssh_key.exists():
+        print("  SKIP: test-mud.pem not found, cannot sync test server")
+        return
+
+    local_file = BASE_DIR / 'glitch' / 'server.js'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@{host}'
+
+    result = subprocess.run(
+        f'scp -i "{ssh_key}" -o ConnectTimeout=5 "{local_file}" ubuntu@{host}:/tmp/server.js',
+        shell=True, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"  WARN: SCP to test server failed: {result.stderr.strip()}")
+        return
+
+    result = subprocess.run(
+        f'{ssh_cmd} "sudo cp /tmp/server.js /opt/wmt/server.js && sudo chown wmt:wmt /opt/wmt/server.js && sudo systemctl restart wmt-server"',
+        shell=True, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"  WARN: Test server deploy failed: {result.stderr.strip()}")
+        return
+
+    print("  Test server synced and restarted.")
+
+
 def deploy_ionos():
     """Deploy PHP client to IONOS via SFTP"""
     print("\n=== Deploying to IONOS (SFTP) ===")
@@ -373,6 +405,7 @@ def main():
     if args.target in ['lightsail', 'all']:
         if not deploy_lightsail('server'):
             success = False
+        sync_test_server()
 
     if args.target == 'bridge':
         if not deploy_lightsail('bridge', force_bridge=args.yes):
