@@ -2,6 +2,106 @@
  * WMT Client - Main Application
  */
 
+// ==========================================
+// TinTin++ Command Registry — single source of truth
+// Drives dispatch, argument parsing (GET_ALL_AFTER), and documentation.
+// If a command isn't here, it doesn't exist.
+// ==========================================
+const COMMAND_REGISTRY = [
+    // --- Aliases ---
+    { name: 'alias',        abbrevs: ['ali'],              handler: 'cmdAlias',        async: true,  getAllAfter: 1, description: 'Create alias pattern → replacement' },
+    { name: 'unalias',      abbrevs: ['unali'],            handler: 'cmdUnalias',      async: true,  getAllAfter: 0, description: 'Remove alias by pattern' },
+    // --- Actions/Triggers ---
+    { name: 'action',       abbrevs: ['act'],              handler: 'cmdAction',       async: true,  getAllAfter: 1, description: 'Create trigger on MUD output' },
+    { name: 'unaction',     abbrevs: ['unact'],            handler: 'cmdUnaction',     async: true,  getAllAfter: 0, description: 'Remove trigger' },
+    // --- Tickers/Delays ---
+    { name: 'ticker',       abbrevs: ['tick'],             handler: 'cmdTicker',       async: true,  getAllAfter: 1, description: 'Create repeating timer' },
+    { name: 'unticker',     abbrevs: ['untick'],           handler: 'cmdUnticker',     async: true,                  description: 'Remove ticker' },
+    { name: 'delay',        abbrevs: ['del'],              handler: 'cmdDelay',        async: false, getAllAfter: 1, description: 'One-shot delayed command' },
+    { name: 'undelay',      abbrevs: ['undel'],            handler: 'cmdUndelay',      async: false,                 description: 'Cancel delay' },
+    // --- Info/Class ---
+    { name: 'info',         abbrevs: [],                   handler: 'cmdInfo',         async: false,                 description: 'Show system info' },
+    { name: 'class',        abbrevs: ['cls'],              handler: 'cmdClass',        async: true,  getAllAfter: 2, description: 'Manage script classes' },
+    // --- File commands ---
+    { name: 'read',         abbrevs: [],                   handler: 'cmdRead',         async: true,                  description: 'Load script file' },
+    { name: 'write',        abbrevs: [],                   handler: 'cmdWrite',        async: true,                  description: 'Save script file' },
+    { name: 'scripts',      abbrevs: ['script', 'files'],  handler: 'cmdScripts',      async: true,                  description: 'List script files' },
+    // --- Gag/Highlight/Substitute ---
+    { name: 'gag',          abbrevs: [],                   handler: 'cmdGag',          async: true,  getAllAfter: 0, description: 'Suppress matching lines' },
+    { name: 'ungag',        abbrevs: [],                   handler: 'cmdUngag',        async: true,  getAllAfter: 0, description: 'Remove gag' },
+    { name: 'highlight',    abbrevs: ['high', 'hi'],       handler: 'cmdHighlight',    async: true,  getAllAfter: 1, description: 'Color matching text' },
+    { name: 'unhighlight',  abbrevs: ['unhigh'],           handler: 'cmdUnhighlight',  async: true,                  description: 'Remove highlight' },
+    { name: 'substitute',   abbrevs: ['sub'],              handler: 'cmdSubstitute',   async: true,  getAllAfter: 1, description: 'Replace matching text' },
+    { name: 'unsubstitute', abbrevs: ['unsub'],            handler: 'cmdUnsubstitute', async: true,                  description: 'Remove substitute' },
+    // --- Variables ---
+    { name: 'variable',     abbrevs: ['var'],              handler: 'cmdVar',          async: false, getAllAfter: 1, serverInline: true, description: 'Set variable' },
+    { name: 'unvariable',   abbrevs: ['unvar'],            handler: 'cmdUnvar',        async: false,                 serverInline: true, description: 'Remove variable' },
+    { name: 'local',        abbrevs: [],                   handler: 'cmdLocal',        async: false, getAllAfter: 1, description: 'Set local variable' },
+    { name: 'unlocal',      abbrevs: [],                   handler: 'cmdUnlocal',      async: false,                 description: 'Remove local variable' },
+    { name: 'math',         abbrevs: [],                   handler: 'cmdMath',         async: false, getAllAfter: 1, serverInline: true, description: 'Evaluate math expression' },
+    // --- Control flow ---
+    { name: 'if',           abbrevs: [],                   handler: 'cmdIf',           async: true,                  description: 'Conditional execution' },
+    { name: 'switch',       abbrevs: [],                   handler: 'cmdSwitch',       async: false,                 description: 'Multi-branch conditional' },
+    { name: 'loop',         abbrevs: [],                   handler: 'cmdLoop',         async: false,                 description: 'Numeric loop' },
+    { name: 'foreach',      abbrevs: [],                   handler: 'cmdForeach',      async: false,                 description: 'Iterate over list' },
+    { name: 'break',        abbrevs: [],                   handler: null,              async: false, special: 'break',    description: 'Exit loop early' },
+    { name: 'continue',     abbrevs: [],                   handler: null,              async: false, special: 'continue', description: 'Skip to next iteration' },
+    { name: 'return',       abbrevs: [],                   handler: 'cmdReturn',       async: false,                 description: 'Return from function' },
+    // --- Regexp ---
+    { name: 'regexp',       abbrevs: ['regex'],            handler: 'cmdRegexp',       async: true,                  description: 'Regex match and execute' },
+    // --- Display ---
+    { name: 'showme',       abbrevs: ['show'],             handler: 'cmdShowme',       async: false, getAllAfter: 0, description: 'Display text locally' },
+    { name: 'echo',         abbrevs: [],                   handler: 'cmdEcho',         async: false, getAllAfter: 0, description: 'Display text with formatting' },
+    { name: 'bell',         abbrevs: [],                   handler: 'cmdBell',         async: false,                 description: 'Play alert sound' },
+    // --- Send ---
+    { name: 'send',         abbrevs: [],                   handler: 'cmdSend',         async: false, getAllAfter: 0, description: 'Send raw text to MUD' },
+    // --- Prompt ---
+    { name: 'prompt',       abbrevs: [],                   handler: 'cmdPrompt',       async: false,                 description: 'Capture to status bar' },
+    { name: 'unprompt',     abbrevs: [],                   handler: 'cmdUnprompt',     async: false,                 description: 'Remove prompt capture' },
+    // --- Pathdir ---
+    { name: 'pathdir',      abbrevs: [],                   handler: 'cmdPathdir',      async: false,                 description: 'Set speedwalk direction' },
+    { name: 'unpathdir',    abbrevs: [],                   handler: 'cmdUnpathdir',    async: false,                 description: 'Remove speedwalk direction' },
+    // --- Config ---
+    { name: 'config',       abbrevs: [],                   handler: 'cmdConfig',       async: false,                 description: 'Toggle settings' },
+    // --- Format/String ---
+    { name: 'format',       abbrevs: [],                   handler: 'cmdFormat',       async: false, getAllAfter: 1, serverInline: true, description: 'Format string into variable' },
+    { name: 'replace',      abbrevs: [],                   handler: 'cmdReplace',      async: false, getAllAfter: 2, serverInline: true, description: 'Replace text in variable' },
+    { name: 'cat',          abbrevs: [],                   handler: 'cmdCat',          async: false, getAllAfter: 1, serverInline: true, description: 'Append to variable' },
+    // --- Split screen ---
+    { name: 'split',        abbrevs: [],                   handler: 'cmdSplit',        async: false,                 description: 'Enable split screen' },
+    { name: 'unsplit',      abbrevs: [],                   handler: 'cmdUnsplit',      async: false,                 description: 'Disable split screen' },
+    // --- Line modifiers ---
+    { name: 'line',         abbrevs: [],                   handler: 'cmdLine',         async: true,                  serverInline: true, description: 'Line modifier subcommands' },
+    // --- List ---
+    { name: 'list',         abbrevs: [],                   handler: 'cmdList',         async: false,                 description: 'List manipulation' },
+    // --- Misc ---
+    { name: 'nop',          abbrevs: [],                   handler: null,              async: false, special: 'nop',      description: 'No operation (comment)' },
+    { name: 'mip',          abbrevs: [],                   handler: 'cmdMip',          async: false,                 description: 'MIP protocol control' },
+    { name: 'grep',         abbrevs: ['buffer'],           handler: 'cmdGrep',         async: false,                 description: 'Search scrollback buffer' },
+    { name: 'help',         abbrevs: [],                   handler: 'cmdHelp',         async: false,                 description: 'Show command help' },
+    // --- Functions ---
+    { name: 'function',     abbrevs: ['func'],             handler: 'cmdFunction',     async: false,                 description: 'Define @function' },
+    { name: 'unfunction',   abbrevs: ['unfunc'],           handler: 'cmdUnfunction',   async: false,                 description: 'Remove @function' },
+    // --- Events ---
+    { name: 'event',        abbrevs: [],                   handler: 'cmdEvent',        async: false,                 description: 'Bind event handler' },
+    { name: 'unevent',      abbrevs: [],                   handler: 'cmdUnevent',      async: false,                 description: 'Remove event handler' },
+    // --- Session ---
+    { name: 'end',          abbrevs: [],                   handler: 'cmdEnd',          async: false,                 description: 'End session' },
+    { name: 'zap',          abbrevs: [],                   handler: 'cmdZap',          async: false,                 description: 'Disconnect from MUD' },
+];
+
+// Build dispatch and GET_ALL_AFTER maps from registry
+const CMD_DISPATCH = {};
+const CMD_GET_ALL_AFTER = {};
+for (const entry of COMMAND_REGISTRY) {
+    CMD_DISPATCH[entry.name] = entry;
+    if (entry.getAllAfter !== undefined) CMD_GET_ALL_AFTER[entry.name] = entry.getAllAfter;
+    for (const abbr of entry.abbrevs) {
+        CMD_DISPATCH[abbr] = entry;
+        if (entry.getAllAfter !== undefined) CMD_GET_ALL_AFTER[abbr] = entry.getAllAfter;
+    }
+}
+
 class WMTClient {
     constructor() {
         this.connection = null;
@@ -5727,278 +5827,19 @@ class WMTClient {
         const args = parsed.args;
         const rest = parsed.rest;
 
-        switch (cmdName) {
-            // Alias commands
-            case 'alias':
-            case 'ali':
-                await this.cmdAlias(args);
-                break;
-            case 'unalias':
-            case 'unali':
-                await this.cmdUnalias(args);
-                break;
-
-            // Action/Trigger commands
-            case 'action':
-            case 'act':
-                await this.cmdAction(args);
-                break;
-            case 'unaction':
-            case 'unact':
-                await this.cmdUnaction(args);
-                break;
-
-            // Ticker commands
-            case 'ticker':
-            case 'tick':
-                await this.cmdTicker(args);
-                break;
-            case 'unticker':
-            case 'untick':
-                await this.cmdUnticker(args);
-                break;
-
-            // Delay commands
-            case 'delay':
-            case 'del':
-                this.cmdDelay(args);
-                break;
-            case 'undelay':
-            case 'undel':
-                this.cmdUndelay(args);
-                break;
-
-            // Info/list commands
-            case 'info':
-                this.cmdInfo(args);
-                break;
-
-            // Class commands
-            case 'class':
-            case 'cls':
-                await this.cmdClass(args);
-                break;
-
-            // Script file commands
-            case 'read':
-                await this.cmdRead(args);
-                break;
-            case 'write':
-                await this.cmdWrite(args);
-                break;
-            case 'scripts':
-            case 'script':
-            case 'files':
-                await this.cmdScripts(args);
-                break;
-
-            // Gag command (shortcut for gag trigger)
-            case 'gag':
-                await this.cmdGag(args);
-                break;
-            case 'ungag':
-                await this.cmdUngag(args);
-                break;
-
-            // Highlight command
-            case 'highlight':
-            case 'high':
-                await this.cmdHighlight(args);
-                break;
-            case 'unhighlight':
-            case 'unhigh':
-                await this.cmdUnhighlight(args);
-                break;
-
-            // Substitute command (text replacement)
-            case 'substitute':
-            case 'sub':
-                await this.cmdSubstitute(args);
-                break;
-            case 'unsubstitute':
-            case 'unsub':
-                await this.cmdUnsubstitute(args);
-                break;
-
-            // Variable commands
-            case 'var':
-            case 'variable':
-                this.cmdVar(args);
-                break;
-            case 'unvar':
-            case 'unvariable':
-                this.cmdUnvar(args);
-                break;
-
-            // Math command
-            case 'math':
-                this.cmdMath(args);
-                break;
-
-            // Regexp command
-            case 'regexp':
-            case 'regex':
-                await this.cmdRegexp(args);
-                break;
-
-            // Conditional commands
-            case 'if':
-                await this.cmdIf(args, rest);
-                break;
-
-            // Display commands
-            case 'showme':
-            case 'show':
-                this.cmdShowme(args, rest);
-                break;
-            case 'echo':
-                this.cmdEcho(args, rest);
-                break;
-
-            // Audio commands
-            case 'bell':
-                this.cmdBell();
-                break;
-
-            // Send command (raw)
-            case 'send':
-                this.cmdSend(args);
-                break;
-
-            // Loop command
-            case 'loop':
-                this.cmdLoop(args, rest);
-                break;
-
-            // Foreach command
-            case 'foreach':
-                this.cmdForeach(args, rest);
-                break;
-
-            // List command
-            case 'list':
-                this.cmdList(args, rest);
-                break;
-
-            // Loop control commands
-            case 'break':
-                this.loopBreak = true;
-                break;
-            case 'continue':
-                this.loopContinue = true;
-                break;
-
-            // Prompt command (capture to status bar)
-            case 'prompt':
-                this.cmdPrompt(args);
-                break;
-            case 'unprompt':
-                this.cmdUnprompt(args);
-                break;
-
-            // Pathdir command (for speedwalk)
-            case 'pathdir':
-                this.cmdPathdir(args);
-                break;
-            case 'unpathdir':
-                this.cmdUnpathdir(args);
-                break;
-
-            // Config command
-            case 'config':
-                this.cmdConfig(args);
-                break;
-
-            // Format command
-            case 'format':
-                this.cmdFormat(args);
-                break;
-
-            // Replace command
-            case 'replace':
-                this.cmdReplace(args);
-                break;
-            case 'cat':
-                this.cmdCat(args);
-                break;
-
-            // Split screen commands
-            case 'split':
-                this.cmdSplit(args);
-                break;
-            case 'unsplit':
-                this.cmdUnsplit();
-                break;
-
-            // #line subcommands
-            case 'line':
-                await this.cmdLine(args, rest);
-                break;
-
-            // No operation (comment)
-            case 'nop':
-                // Do nothing - it's a comment
-                break;
-
-            // MIP control
-            case 'mip':
-                this.cmdMip(args);
-                break;
-
-            // Scrollback search
-            case 'grep':
-            case 'buffer':
-                this.cmdGrep(args, rest);
-                break;
-
-            // Help
-            case 'help':
-                this.cmdHelp();
-                break;
-
-            // Function commands (TinTin++ style)
-            case 'function':
-            case 'func':
-                this.cmdFunction(args);
-                break;
-            case 'unfunction':
-            case 'unfunc':
-                this.cmdUnfunction(args);
-                break;
-            case 'return':
-                this.cmdReturn(args, rest);
-                break;
-
-            // Local variable commands
-            case 'local':
-                this.cmdLocal(args);
-                break;
-            case 'unlocal':
-                this.cmdUnlocal(args);
-                break;
-
-            // Switch/case commands
-            case 'switch':
-                this.cmdSwitch(args, rest);
-                break;
-
-            // Event commands
-            case 'event':
-                this.cmdEvent(args);
-                break;
-            case 'unevent':
-                this.cmdUnevent(args);
-                break;
-
-            case 'end':
-                this.cmdEnd(args);
-                break;
-            case 'zap':
-                this.cmdZap(args);
-                break;
-
-            default:
-                this.appendOutput(`Unknown command: #${cmdName}`, 'error');
+        // Registry-driven dispatch
+        const entry = CMD_DISPATCH[cmdName];
+        if (!entry) {
+            this.appendOutput(`Unknown command: #${cmdName}`, 'error');
+            return;
+        }
+        if (entry.special === 'nop') return;
+        if (entry.special === 'break') { this.loopBreak = true; return; }
+        if (entry.special === 'continue') { this.loopContinue = true; return; }
+        if (entry.async) {
+            await this[entry.handler](args, rest);
+        } else {
+            this[entry.handler](args, rest);
         }
     }
 
@@ -7520,187 +7361,19 @@ class WMTClient {
 
         const { command, args, rest } = parsed;
 
-        switch (command.toLowerCase()) {
-            case 'action':
-            case 'act':
-                await this.cmdAction(args);
-                break;
-            case 'unaction':
-            case 'unact':
-                await this.cmdUnaction(args);
-                break;
-            case 'alias':
-            case 'ali':
-                await this.cmdAlias(args);
-                break;
-            case 'unalias':
-            case 'unali':
-                await this.cmdUnalias(args);
-                break;
-            case 'gag':
-                await this.cmdGag(args);
-                break;
-            case 'ungag':
-                await this.cmdUngag(args);
-                break;
-            case 'highlight':
-            case 'high':
-                await this.cmdHighlight(args);
-                break;
-            case 'unhighlight':
-            case 'unhigh':
-                await this.cmdUnhighlight(args);
-                break;
-            case 'substitute':
-            case 'sub':
-                await this.cmdSubstitute(args);
-                break;
-            case 'unsubstitute':
-            case 'unsub':
-                await this.cmdUnsubstitute(args);
-                break;
-            case 'regexp':
-            case 'regex':
-                await this.cmdRegexp(args);
-                break;
-            case 'var':
-            case 'variable':
-                this.cmdVar(args);
-                break;
-            case 'unvar':
-            case 'unvariable':
-                this.cmdUnvar(args);
-                break;
-            case 'math':
-                this.cmdMath(args);
-                break;
-            case 'if':
-                await this.cmdIf(args, rest);
-                break;
-            case 'showme':
-            case 'show':
-                this.cmdShowme(args, rest);
-                break;
-            case 'echo':
-                this.cmdEcho(args, rest);
-                break;
-            case 'ticker':
-            case 'tick':
-                this.cmdTicker(args);
-                break;
-            case 'unticker':
-            case 'untick':
-                this.cmdUnticker(args);
-                break;
-            case 'delay':
-            case 'del':
-                this.cmdDelay(args);
-                break;
-            case 'undelay':
-            case 'undel':
-                this.cmdUndelay(args);
-                break;
-            case 'read':
-                await this.cmdRead(args);
-                break;
-            case 'write':
-                await this.cmdWrite(args);
-                break;
-            case 'send':
-                this.cmdSend(args);
-                break;
-            case 'class':
-            case 'cls':
-                await this.cmdClass(args);
-                break;
-            case 'prompt':
-                this.cmdPrompt(args);
-                break;
-            case 'unprompt':
-                this.cmdUnprompt(args);
-                break;
-            case 'config':
-                this.cmdConfig(args);
-                break;
-            case 'split':
-                this.cmdSplit(args);
-                break;
-            case 'unsplit':
-                this.cmdUnsplit();
-                break;
-            case 'bell':
-                this.cmdBell();
-                break;
-            case 'loop':
-                this.cmdLoop(args, rest);
-                break;
-            case 'foreach':
-                this.cmdForeach(args, rest);
-                break;
-            case 'list':
-                this.cmdList(args, rest);
-                break;
-            case 'function':
-            case 'func':
-                this.cmdFunction(args);
-                break;
-            case 'unfunction':
-            case 'unfunc':
-                this.cmdUnfunction(args);
-                break;
-            case 'return':
-                this.cmdReturn(args, rest);
-                break;
-            case 'local':
-                this.cmdLocal(args);
-                break;
-            case 'unlocal':
-                this.cmdUnlocal(args);
-                break;
-            case 'switch':
-                this.cmdSwitch(args, rest);
-                break;
-            case 'event':
-                this.cmdEvent(args);
-                break;
-            case 'unevent':
-                this.cmdUnevent(args);
-                break;
-            case 'format':
-                this.cmdFormat(args);
-                break;
-            case 'replace':
-                this.cmdReplace(args);
-                break;
-            case 'cat':
-                this.cmdCat(args);
-                break;
-            case 'pathdir':
-                this.cmdPathdir(args);
-                break;
-            case 'unpathdir':
-                this.cmdUnpathdir(args);
-                break;
-            case 'info':
-                this.cmdInfo(args);
-                break;
-            case 'mip':
-                this.cmdMip(args);
-                break;
-            case 'line':
-                await this.cmdLine(args, rest);
-                break;
-            case 'nop':
-                break;
-            case 'end':
-                this.cmdEnd(args);
-                break;
-            case 'zap':
-                this.cmdZap(args);
-                break;
-            default:
-                this.appendOutput(`Unknown command: #${command}`, 'error');
-                break;
+        // Registry-driven dispatch (same as processClientCommand)
+        const entry = CMD_DISPATCH[command.toLowerCase()];
+        if (!entry) {
+            this.appendOutput(`Unknown command: #${command}`, 'error');
+            return;
+        }
+        if (entry.special === 'nop') return;
+        if (entry.special === 'break') { this.loopBreak = true; return; }
+        if (entry.special === 'continue') { this.loopContinue = true; return; }
+        if (entry.async) {
+            await this[entry.handler](args, rest);
+        } else {
+            this[entry.handler](args, rest);
         }
     }
 
@@ -7724,31 +7397,10 @@ class WMTClient {
         // GET_ALL: take rest of line up to semicolon (for unbraced args)
         // If arg starts with {, both modes behave the same: read to matching }
         //
+        // CMD_GET_ALL_AFTER is auto-generated from COMMAND_REGISTRY above.
         // Number of GET_ONE args before GET_ALL kicks in for the remaining text.
-        // Commands not listed here: all args are GET_ONE (default behavior).
-        const GET_ALL_AFTER = {
-            'math': 1,                    // #math {var} {expression}
-            'variable': 1, 'var': 1,     // #var {name} {value}
-            'local': 1,                   // #local {name} {value}
-            'cat': 1,                     // #cat {var} {value}
-            'showme': 0, 'show': 0,      // #showme {text} [row] [col]
-            'echo': 0,                    // #echo {text} [row]
-            'send': 0,                    // #send {text}
-            'action': 1, 'act': 1,       // #action {pattern} {body} [priority]
-            'alias': 1, 'ali': 1,        // #alias {pattern} {body} [priority]
-            'gag': 0,                     // #gag {pattern}
-            'highlight': 1, 'high': 1, 'hi': 1,  // #highlight {pattern} {color} [priority]
-            'substitute': 1, 'sub': 1,   // #sub {pattern} {replacement} [priority]
-            'ticker': 1, 'tick': 1,      // #ticker {name} {command} {interval}
-            'delay': 1, 'del': 1,        // #delay {name} {command} {seconds}
-            'class': 2,                   // #class {name} {option} {body}
-            'replace': 2,                 // #replace {var} {old} {new}
-            'format': 1,                  // #format {var} {format} [args...]
-            'unaction': 0, 'unact': 0,   // #unaction {pattern}
-            'unalias': 0, 'unali': 0,    // #unalias {pattern}
-            'ungag': 0,                   // #ungag {pattern}
-        };
-        const getAllAfter = GET_ALL_AFTER[command];
+        // Commands not in the map: all args are GET_ONE (default behavior).
+        const getAllAfter = CMD_GET_ALL_AFTER[command];
 
         // Parse arguments respecting braces and GET_ONE/GET_ALL modes
         const args = [];
