@@ -1022,6 +1022,19 @@ async function restorePersistentSessions() {
         });
         continue;
       }
+      // Browser already connected — don't overwrite the session. Creating a
+      // new session object would orphan the browser's WebSocket, triggers,
+      // aliases, and variables. The _pendingBridgeResume / connectToMud flow
+      // will establish the MUD connection when set_triggers arrives.
+      if (existing.ws) {
+        logSessionEvent('RESTORE_SKIP_BROWSER', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName,
+          existingToken: existingToken.substring(0, 8),
+          note: 'browser already connected, skipping restore'
+        });
+        continue;
+      }
     }
 
     // Create session object
