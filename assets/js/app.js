@@ -988,6 +988,21 @@ class WMTClient {
                 }
                 break;
 
+            case 'var_update':
+                // Server-side variable change (from #math/#var/#format/#cat/#replace in alias/trigger expansion).
+                // Update our local copy so the next sync doesn't overwrite the server's value.
+                if (data.variables) {
+                    for (const [key, val] of Object.entries(data.variables)) {
+                        this.variables[key] = val;
+                    }
+                }
+                if (data.deleted) {
+                    for (const key of data.deleted) {
+                        delete this.variables[key];
+                    }
+                }
+                break;
+
             case 'disable_trigger':
                 // Server detected a trigger loop - disable the offending trigger
                 if (data.triggerId) {

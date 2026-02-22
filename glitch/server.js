@@ -4508,6 +4508,8 @@ function serverProcessInlineCommand(cmd, session) {
       // Track server-side modification time to prevent stale client sync overwrite
       if (!session._varServerModified) session._varServerModified = {};
       session._varServerModified[varName] = Date.now();
+      // Push change to client so it stays in sync (prevents stale sync overwrite after 2s window)
+      sendToClient(session, { type: 'var_update', variables: { [varName]: result } });
     }
     return true;
   }
@@ -4528,6 +4530,8 @@ function serverProcessInlineCommand(cmd, session) {
     // Track server-side modification time to prevent stale client sync overwrite
     if (!session._varServerModified) session._varServerModified = {};
     session._varServerModified[varName] = Date.now();
+    // Push change to client so it stays in sync
+    sendToClient(session, { type: 'var_update', variables: { [varName]: value } });
     return true;
   }
 
@@ -4541,6 +4545,8 @@ function serverProcessInlineCommand(cmd, session) {
     // Track server-side modification time
     if (!session._varServerModified) session._varServerModified = {};
     session._varServerModified[varName] = Date.now();
+    // Push deletion to client
+    sendToClient(session, { type: 'var_update', deleted: [varName] });
     return true;
   }
 
@@ -4557,6 +4563,7 @@ function serverProcessInlineCommand(cmd, session) {
       session.variables[varName] = result;
       if (!session._varServerModified) session._varServerModified = {};
       session._varServerModified[varName] = Date.now();
+      sendToClient(session, { type: 'var_update', variables: { [varName]: result } });
     }
     return true;
   }
@@ -4576,6 +4583,7 @@ function serverProcessInlineCommand(cmd, session) {
       session.variables[varName] = current;
       if (!session._varServerModified) session._varServerModified = {};
       session._varServerModified[varName] = Date.now();
+      sendToClient(session, { type: 'var_update', variables: { [varName]: current } });
     }
     return true;
   }
@@ -4643,6 +4651,7 @@ function serverProcessInlineCommand(cmd, session) {
         session.variables[varName] = String(currentVal).split(oldText).join(newText);
         if (!session._varServerModified) session._varServerModified = {};
         session._varServerModified[varName] = Date.now();
+        sendToClient(session, { type: 'var_update', variables: { [varName]: session.variables[varName] } });
       }
     }
     return true;
