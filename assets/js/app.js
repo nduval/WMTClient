@@ -903,9 +903,24 @@ class WMTClient {
                     }
                 }
 
+                // Retroactive line reassembly: if the server reassembled a
+                // previously incomplete fragment, replace the incomplete div
+                if (data.replaceIncomplete) {
+                    const output = document.getElementById('mud-output');
+                    if (output) {
+                        for (let i = output.children.length - 1; i >= 0; i--) {
+                            if (output.children[i].classList.contains('incomplete')) {
+                                output.removeChild(output.children[i]);
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 this.appendOutput(data.line, 'mud', {
                     highlight: data.highlight,
-                    sound: data.sound
+                    sound: data.sound,
+                    incomplete: data.incomplete
                 });
                 break;
 
@@ -2412,6 +2427,7 @@ class WMTClient {
 
         const line = document.createElement('div');
         line.className = 'line ' + type;
+        if (options.incomplete) line.classList.add('incomplete');
 
         // Convert ANSI codes to HTML
         let html = this.ansiToHtml(text);

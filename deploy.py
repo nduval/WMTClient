@@ -172,10 +172,27 @@ def deploy_test_server():
         print(f"  SCP failed: {result.stderr.strip()}")
         return False
 
-    result = subprocess.run(
-        f'{ssh_cmd} "sudo cp /tmp/server.js /opt/wmt/server.js && sudo chown wmt:wmt /opt/wmt/server.js && sudo systemctl restart wmt-server"',
+    # Copy, patch allowedServers to include localhost:4000 (mock MUD), restart
+    # Write a patch script remotely to avoid Windows/SSH quoting issues
+    patch_lines = [
+        'sudo cp /tmp/server.js /opt/wmt/server.js',
+        "sudo sed -i \"s|{ host: '3k.org', port: 3000 }|{ host: '3k.org', port: 3000 }, { host: 'localhost', port: 4000 }|\" /opt/wmt/server.js",
+        'sudo chown wmt:wmt /opt/wmt/server.js',
+        'sudo systemctl restart wmt-server',
+    ]
+    patch_content = '#!/bin/bash\nset -e\n' + '\n'.join(patch_lines) + '\n'
+    # Write the script locally, SCP it, run it
+    patch_file = BASE_DIR / '.deploy_patch.sh'
+    patch_file.write_text(patch_content, newline='\n')
+    subprocess.run(
+        f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{patch_file}" ubuntu@{host}:/tmp/deploy_patch.sh',
         shell=True, capture_output=True, text=True
     )
+    result = subprocess.run(
+        f'{ssh_cmd} "bash /tmp/deploy_patch.sh"',
+        shell=True, capture_output=True, text=True
+    )
+    patch_file.unlink(missing_ok=True)
     if result.returncode != 0:
         print(f"  Deploy failed: {result.stderr.strip()}")
         return False
@@ -246,7 +263,7 @@ def run_test_suites():
 
     # Print summary table
     for label, script, passed, failed, status in details:
-        icon = '\u2713' if status == 'PASS' else ('\u2717' if status == 'FAIL' else '?')
+        icon = 'OK' if status == 'PASS' else ('FAIL' if status == 'FAIL' else '??')
         pad_label = f"{label} ({script}):".ljust(45)
         print(f"  {pad_label} {passed:>2} passed, {failed} failed  {icon}")
 
