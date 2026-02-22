@@ -2474,9 +2474,11 @@ function processLine(session, line) {
     if (cmd.startsWith('#')) {
       // Process #math/#var server-side for immediate variable updates
       serverProcessInlineCommand(cmd, session);
+      // Substitute $variables and @functions before sending to client
+      const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
       sendToClient(session, {
         type: 'client_command',
-        command: cmd
+        command: substitutedCmd
       });
     } else if (session.mudSocket && !session.mudSocket.destroyed) {
       // Expand aliases before sending to MUD
@@ -2992,7 +2994,7 @@ wss.on('connection', (ws, req) => {
                 if (hitAsyncRead) return [trimmed];
 
                 // For # commands: execute #var/#math inline for side effects,
-                // then return the command for client forwarding
+                // then substitute $variables before returning to client
                 if (trimmed.startsWith('#')) {
                   // Check if this is an async read — stop expanding after it
                   if (ASYNC_READ_RE.test(trimmed)) {
@@ -3000,7 +3002,9 @@ wss.on('connection', (ws, req) => {
                   } else {
                     serverProcessInlineCommand(trimmed, session);
                   }
-                  return [trimmed];
+                  // Substitute $vars and @funcs AFTER inline processing
+                  // so freshly-set vars are visible (e.g. #var {x} {42};#showme {$x})
+                  return [substituteUserVariables(trimmed, session.variables || {}, session.functions || {})];
                 }
 
                 // Substitute $variables BEFORE alias pattern matching
@@ -3247,9 +3251,10 @@ wss.on('connection', (ws, req) => {
             processed.commands.forEach(cmd => {
               if (cmd.startsWith('#')) {
                 serverProcessInlineCommand(cmd, session);
+                const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
                 sendToClient(session, {
                   type: 'client_command',
-                  command: cmd
+                  command: substitutedCmd
                 });
               } else if (session.mudSocket && !session.mudSocket.destroyed) {
                 // Expand aliases before sending to MUD
@@ -3840,7 +3845,11 @@ function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, funct
       } else if (session) {
         serverProcessInlineCommand(partTrimmed, session);
       }
-      results.push(partTrimmed);
+      // Substitute $variables and @functions in # commands before sending to client
+      // (e.g. #showme {attacking $target} → #showme {attacking goblin})
+      // Must happen AFTER serverProcessInlineCommand so freshly-set vars are available
+      const substitutedCmd = substituteUserVariables(partTrimmed, variables, functions);
+      results.push(substitutedCmd);
       return;
     }
 
