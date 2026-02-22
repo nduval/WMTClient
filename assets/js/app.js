@@ -339,6 +339,17 @@ class WMTClient {
             const aliasesData = await aliasesRes.json();
             if (aliasesData.success) {
                 this.aliases = aliasesData.aliases || [];
+                // Migrate: fix matchType for aliases with TinTin++ wildcards
+                // saved before auto-detection was added
+                const ttWildcard = /%[*+?.dDwWsSaAcCpPuU0-9!]/;
+                let migrated = false;
+                for (const a of this.aliases) {
+                    if (a.matchType === 'exact' && a.pattern && ttWildcard.test(a.pattern)) {
+                        a.matchType = 'tintin';
+                        migrated = true;
+                    }
+                }
+                if (migrated) this.saveAliases();
             }
 
             // Load tickers
