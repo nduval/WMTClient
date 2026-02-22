@@ -4261,20 +4261,23 @@ class WMTClient {
 
         await this.saveTriggers();
         this.closeModal();
-        this.loadPanelContent('triggers');
+        if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
+        this.renderScriptsSidebar();
     }
 
     async toggleTrigger(index) {
         this.triggers[index].enabled = !this.triggers[index].enabled;
         await this.saveTriggers();
-        this.loadPanelContent('triggers');
+        if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
+        this.renderScriptsSidebar();
     }
 
     async deleteTrigger(index) {
         if (!confirm('Delete this trigger?')) return;
         this.triggers.splice(index, 1);
         await this.saveTriggers();
-        this.loadPanelContent('triggers');
+        if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
+        this.renderScriptsSidebar();
     }
 
     showSaveError(msg) {
@@ -4483,6 +4486,7 @@ class WMTClient {
 
         await this.saveTriggers();
         this.closeModal();
+        if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
         this.renderScriptsSidebar();
         this.editingGagIndex = null;
     }
@@ -4684,6 +4688,7 @@ class WMTClient {
 
         await this.saveTriggers();
         this.closeModal();
+        if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
         this.renderScriptsSidebar();
         this.editingHighlightIndex = null;
     }
@@ -4818,20 +4823,23 @@ class WMTClient {
 
         await this.saveAliases();
         this.closeModal();
-        this.loadPanelContent('aliases');
+        if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
+        this.renderScriptsSidebar();
     }
 
     async toggleAlias(index) {
         this.aliases[index].enabled = !this.aliases[index].enabled;
         await this.saveAliases();
-        this.loadPanelContent('aliases');
+        if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
+        this.renderScriptsSidebar();
     }
 
     async deleteAlias(index) {
         if (!confirm('Delete this alias?')) return;
         this.aliases.splice(index, 1);
         await this.saveAliases();
-        this.loadPanelContent('aliases');
+        if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
+        this.renderScriptsSidebar();
     }
 
     async saveAliases() {
@@ -5867,7 +5875,8 @@ class WMTClient {
                 this.applyPreferences();
             }
 
-            this.loadPanelContent('settings');
+            if (this.currentPanel === 'settings') this.loadPanelContent('settings');
+            this.renderScriptsSidebar();
             this.appendOutput('Settings imported successfully.', 'system');
         } catch (e) {
             alert('Failed to import settings: ' + e.message);
@@ -8238,6 +8247,7 @@ class WMTClient {
 
         await this.saveTriggers();
         this.closeModal();
+        if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
         this.renderScriptsSidebar();
         this.editingSubstituteIndex = null;
     }
