@@ -521,14 +521,14 @@ def main():
             if failed == 0:
                 test_ok = True
             else:
-                print(f"\n\u26a0 {failed} test(s) failed on sandbox.")
+                print(f"\nWARNING: {failed} test(s) failed on sandbox.")
                 if args.force:
                     print("  --force specified, proceeding to production anyway.")
                 else:
                     print("  Aborting production deploy. Use --force to override.")
                     sys.exit(1)
         else:
-            print("\n\u26a0 Test sandbox deploy failed.")
+            print("\nWARNING: Test sandbox deploy failed.")
             if args.force:
                 print("  --force specified, proceeding to production anyway.")
             else:
