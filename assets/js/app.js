@@ -645,9 +645,10 @@ class WMTClient {
     // Filter triggers/aliases by enabled classes
     getFilteredTriggers() {
         const enabledClasses = this.getEnabledClassIds();
+        const allClassIds = new Set(this.classes.map(c => c.id));
         return this.triggers.filter(t => {
-            // If no class assigned, always include
-            if (!t.class) return true;
+            // If no class assigned or orphaned (class was deleted), always include
+            if (!t.class || !allClassIds.has(t.class)) return true;
             // If class assigned, check if class is enabled
             return enabledClasses.has(t.class);
         });
@@ -655,9 +656,10 @@ class WMTClient {
 
     getFilteredAliases() {
         const enabledClasses = this.getEnabledClassIds();
+        const allClassIds = new Set(this.classes.map(c => c.id));
         return this.aliases.filter(a => {
-            // If no class assigned, always include
-            if (!a.class) return true;
+            // If no class assigned or orphaned (class was deleted), always include
+            if (!a.class || !allClassIds.has(a.class)) return true;
             // If class assigned, check if class is enabled
             return enabledClasses.has(a.class);
         });
@@ -665,11 +667,12 @@ class WMTClient {
 
     getFilteredTickers() {
         const enabledClasses = this.getEnabledClassIds();
+        const allClassIds = new Set(this.classes.map(c => c.id));
         return this.tickers.filter(t => {
             // If ticker is disabled, exclude
             if (!t.enabled) return false;
-            // If no class assigned, always include
-            if (!t.class) return true;
+            // If no class assigned or orphaned (class was deleted), always include
+            if (!t.class || !allClassIds.has(t.class)) return true;
             // If class assigned, check if class is enabled
             return enabledClasses.has(t.class);
         });
@@ -970,13 +973,17 @@ class WMTClient {
             case 'client_command':
                 // Execute client-side command(s) from trigger/alias (silent - no confirmation output).
                 // May contain semicolons for bundled commands (e.g., after #class {read}).
-                // Uses executeCommandString for proper sequential async execution.
+                // Queue commands sequentially to prevent race conditions — e.g., #class {kill}
+                // followed by #class {read} must complete in order, not overlap.
                 if (data.command) {
-                    this._silent = true;
-                    this.executeCommandString(data.command).catch((e) => {
+                    const cmd = data.command;
+                    this._clientCmdQueue = (this._clientCmdQueue || Promise.resolve()).then(() => {
+                        this._silent = true;
+                        return this.executeCommandString(cmd).finally(() => {
+                            this._silent = false;
+                        });
+                    }).catch((e) => {
                         console.error('CLIENT_CMD_ERR:', e);
-                    }).finally(() => {
-                        this._silent = false;
                     });
                 }
                 break;
@@ -6366,14 +6373,17 @@ class WMTClient {
 
             case 'clear': {
                 // Special case: empty class name targets all unassigned items
+                // Must match UI definition: no class OR orphaned class (class was killed/deleted)
                 if (!className) {
-                    const isUnassigned = (item) => !item.class;
+                    const classIds = new Set(this.classes.map(c => c.id));
+                    const isUnassigned = (item) => !item.class || !classIds.has(item.class);
+                    const isAssigned = (item) => item.class && classIds.has(item.class);
                     const removedTriggers = this.triggers.filter(isUnassigned).length;
                     const removedAliases = this.aliases.filter(isUnassigned).length;
                     const removedTickers = this.tickers.filter(isUnassigned).length;
-                    this.triggers = this.triggers.filter(t => t.class);
-                    this.aliases = this.aliases.filter(a => a.class);
-                    this.tickers = this.tickers.filter(t => t.class);
+                    this.triggers = this.triggers.filter(isAssigned);
+                    this.aliases = this.aliases.filter(isAssigned);
+                    this.tickers = this.tickers.filter(isAssigned);
                     const total = removedTriggers + removedAliases + removedTickers;
                     await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
                     this.sendFilteredTriggersAndAliases();
@@ -7611,9 +7621,10 @@ class WMTClient {
                 content += '\n';
             }
 
-            // Export unassigned items
-            const unassignedTriggers = this.triggers.filter(t => !t.class);
-            const unassignedAliases = this.aliases.filter(a => !a.class);
+            // Export unassigned items (including orphans whose class was deleted)
+            const exportClassIds = new Set(this.classes.map(c => c.id));
+            const unassignedTriggers = this.triggers.filter(t => !t.class || !exportClassIds.has(t.class));
+            const unassignedAliases = this.aliases.filter(a => !a.class || !exportClassIds.has(a.class));
 
             if (unassignedTriggers.length > 0 || unassignedAliases.length > 0) {
                 content += `#nop {Unassigned items}\n`;
