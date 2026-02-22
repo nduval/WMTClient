@@ -3882,6 +3882,8 @@ function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, funct
  * Returns true if pattern contains % wildcards, anchors, or { } braces
  */
 function isTinTinPattern(pattern) {
+  // ~ prefix = raw PCRE regex mode
+  if (pattern.startsWith('~')) return true;
   // Check for % followed by wildcard chars or digits
   if (/%[*+?.dDwWsSaAcCpPuU0-9!]/.test(pattern)) return true;
   // Check for ^ anchor at start
@@ -3943,13 +3945,21 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
     // Keep original line for output (preserves colors)
     const matchLine = stripAnsi(line);
 
+    // Handle ~ prefix (raw PCRE regex mode: {capture} → (capture), no % wildcard processing)
+    const isTildeRegex = pattern.startsWith('~');
+    let cachedRegexStr = null;
+    if (isTildeRegex) {
+      // Strip ~ and convert {} → () for capture groups, pass everything else through raw
+      cachedRegexStr = pattern.slice(1).replace(/(?<!\\)\{([^}]*)\}/g, '($1)');
+    }
+
     // Auto-detect pattern type: TinTin++ syntax or simple contains
-    const useTinTin = isTinTinPattern(pattern);
+    const useTinTin = isTildeRegex || isTinTinPattern(pattern);
 
     if (useTinTin) {
       // TinTin++ pattern matching (case-sensitive by default)
       try {
-        const regexPattern = tinTinToRegex(pattern);
+        const regexPattern = cachedRegexStr || tinTinToRegex(pattern);
         const regex = new RegExp(regexPattern);
         const match = matchLine.match(regex);
         if (match) {
@@ -4010,7 +4020,7 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
 
               let searchPattern;
               if (useTinTin) {
-                const regexPattern = tinTinToRegex(pattern);
+                const regexPattern = cachedRegexStr || tinTinToRegex(pattern);
                 searchPattern = new RegExp(`(${regexPattern})`, 'g');
               } else {
                 const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -4047,7 +4057,7 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
             replacement = substituteUserVariables(replacement, variables, functions);
             // Find and replace the matched portion (case-sensitive)
             if (useTinTin) {
-              const regexPattern = tinTinToRegex(pattern);
+              const regexPattern = cachedRegexStr || tinTinToRegex(pattern);
               const searchPattern = new RegExp(regexPattern, 'g');
               result.line = result.line.replace(searchPattern, replacement);
             } else {
