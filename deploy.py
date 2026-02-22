@@ -6,8 +6,10 @@ Deploys to Lightsail (SSH) and/or IONOS (SFTP)
 
 import os
 import sys
+import re
 import subprocess
 import argparse
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -133,7 +135,6 @@ def deploy_lightsail(target='server', force_bridge=False):
         return False
 
     # Verify it started
-    import time
     time.sleep(2)
     result = subprocess.run(
         f'{ssh_cmd} "systemctl is-active wmt-server"',
@@ -146,36 +147,114 @@ def deploy_lightsail(target='server', force_bridge=False):
         print(f"WARNING: Service status is '{status}' — check journalctl -u wmt-server")
     return True
 
-def sync_test_server():
-    """Sync server.js to the test sandbox (non-fatal if it fails)"""
-    print("\n=== Syncing server.js to test sandbox ===")
+def deploy_test_server():
+    """Deploy server.js to the test sandbox. Returns True on success, False on failure."""
+    print("\n=== Deploying server.js to test sandbox ===")
     ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
     host = '18.225.235.28'
 
     if not ssh_key.exists():
-        print("  SKIP: test-mud.pem not found, cannot sync test server")
-        return
+        print("  ERROR: test-mud.pem not found")
+        return False
 
     local_file = BASE_DIR / 'glitch' / 'server.js'
-    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@{host}'
+    if not local_file.exists():
+        print("  ERROR: glitch/server.js not found")
+        return False
+
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
 
     result = subprocess.run(
-        f'scp -i "{ssh_key}" -o ConnectTimeout=5 "{local_file}" ubuntu@{host}:/tmp/server.js',
+        f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local_file}" ubuntu@{host}:/tmp/server.js',
         shell=True, capture_output=True, text=True
     )
     if result.returncode != 0:
-        print(f"  WARN: SCP to test server failed: {result.stderr.strip()}")
-        return
+        print(f"  SCP failed: {result.stderr.strip()}")
+        return False
 
     result = subprocess.run(
         f'{ssh_cmd} "sudo cp /tmp/server.js /opt/wmt/server.js && sudo chown wmt:wmt /opt/wmt/server.js && sudo systemctl restart wmt-server"',
         shell=True, capture_output=True, text=True
     )
     if result.returncode != 0:
-        print(f"  WARN: Test server deploy failed: {result.stderr.strip()}")
-        return
+        print(f"  Deploy failed: {result.stderr.strip()}")
+        return False
 
-    print("  Test server synced and restarted.")
+    # Wait for service to start, then verify
+    time.sleep(2)
+    result = subprocess.run(
+        f'{ssh_cmd} "systemctl is-active wmt-server"',
+        shell=True, capture_output=True, text=True
+    )
+    status = result.stdout.strip()
+    if status == 'active':
+        print("  Test server deployed and running.")
+        return True
+    else:
+        print(f"  WARNING: Service status is '{status}' — check journalctl -u wmt-server")
+        return False
+
+
+def run_test_suites():
+    """Run all WMT test suites on sandbox. Returns (total_passed, total_failed, details)."""
+    print("\n=== Running test suites on sandbox ===")
+    ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
+    host = '18.225.235.28'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
+
+    suites = [
+        ('Pipeline',  'test_wmt_client.js'),
+        ('Aliases',   'test_alias_compare.js'),
+        ('Triggers',  'test_trigger_compare.js'),
+    ]
+
+    total_passed = 0
+    total_failed = 0
+    details = []
+
+    for label, script in suites:
+        try:
+            result = subprocess.run(
+                f'{ssh_cmd} "cd /opt/wmt/tests && node {script} ws://localhost:3000"',
+                shell=True, capture_output=True, text=True, timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            details.append((label, script, 0, 0, 'TIMEOUT'))
+            total_failed += 1
+            continue
+
+        output = result.stdout + result.stderr
+
+        # Parse "Results: X passed, Y failed" or "=== Results: X passed, Y failed ==="
+        match = re.search(r'(\d+)\s+passed,\s+(\d+)\s+failed', output)
+        if match:
+            passed = int(match.group(1))
+            failed = int(match.group(2))
+        elif result.returncode == 0:
+            # No parseable results but exited OK — count as 1 pass
+            passed = 1
+            failed = 0
+        else:
+            # Can't parse and non-zero exit — count as failure
+            passed = 0
+            failed = 1
+
+        total_passed += passed
+        total_failed += failed
+        status = 'PASS' if failed == 0 else 'FAIL'
+        details.append((label, script, passed, failed, status))
+
+    # Print summary table
+    for label, script, passed, failed, status in details:
+        icon = '\u2713' if status == 'PASS' else ('\u2717' if status == 'FAIL' else '?')
+        pad_label = f"{label} ({script}):".ljust(45)
+        print(f"  {pad_label} {passed:>2} passed, {failed} failed  {icon}")
+
+    total = total_passed + total_failed
+    print(f"  {'':45} {'---':>10}")
+    print(f"  {'Total:':45} {total_passed:>2}/{total} passed")
+
+    return total_passed, total_failed, details
 
 
 def deploy_ionos():
@@ -372,11 +451,12 @@ def log_deploy(target, commit_hash, success):
 
 def main():
     parser = argparse.ArgumentParser(description='Deploy WMT Client')
-    parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'all'],
+    parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'test', 'all'],
                        default='all', help='Deployment target (default: all)')
     parser.add_argument('--list', action='store_true', help='List files that would be deployed')
     parser.add_argument('--no-commit', action='store_true', help='Skip auto-commit before deploy')
     parser.add_argument('--yes', action='store_true', help='Confirm bridge deploy (required — bridge restart kills ALL MUD connections)')
+    parser.add_argument('--force', action='store_true', help='Deploy to production even if sandbox tests fail')
 
     args = parser.parse_args()
 
@@ -387,6 +467,19 @@ def main():
         print("\nFiles deployed to Lightsail:")
         print("  server.js (lightsail target)")
         print("  bridge.js (bridge target)")
+        return
+
+    # --- Test-only target ---
+    if args.target == 'test':
+        if not deploy_test_server():
+            print("\n=== Test deploy failed ===")
+            sys.exit(1)
+        passed, failed, details = run_test_suites()
+        if failed > 0:
+            print(f"\n=== {failed} test(s) failed ===")
+            sys.exit(1)
+        else:
+            print(f"\n=== All {passed} tests passed ===")
         return
 
     # Auto-commit tracked changes before deploying
@@ -402,16 +495,45 @@ def main():
 
     success = True
 
-    if args.target in ['lightsail', 'all']:
+    # --- All target: test-first pipeline ---
+    if args.target == 'all':
+        # Deploy to sandbox and run tests first
+        test_ok = False
+        if deploy_test_server():
+            passed, failed, details = run_test_suites()
+            if failed == 0:
+                test_ok = True
+            else:
+                print(f"\n\u26a0 {failed} test(s) failed on sandbox.")
+                if args.force:
+                    print("  --force specified, proceeding to production anyway.")
+                else:
+                    print("  Aborting production deploy. Use --force to override.")
+                    sys.exit(1)
+        else:
+            print("\n\u26a0 Test sandbox deploy failed.")
+            if args.force:
+                print("  --force specified, proceeding to production anyway.")
+            else:
+                print("  Aborting production deploy. Use --force to override.")
+                sys.exit(1)
+
+        # Deploy to production
         if not deploy_lightsail('server'):
             success = False
-        sync_test_server()
+        if not deploy_ionos():
+            success = False
 
-    if args.target == 'bridge':
+    elif args.target == 'lightsail':
+        if not deploy_lightsail('server'):
+            success = False
+        deploy_test_server()  # Keep sandbox in sync (non-blocking)
+
+    elif args.target == 'bridge':
         if not deploy_lightsail('bridge', force_bridge=args.yes):
             success = False
 
-    if args.target in ['ionos', 'all']:
+    elif args.target == 'ionos':
         if not deploy_ionos():
             success = False
 
