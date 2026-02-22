@@ -6245,8 +6245,8 @@ class WMTClient {
             seconds = parseFloat(args[2]);
         }
 
-        if (isNaN(seconds) || seconds <= 0) {
-            this.appendOutput('#DELAY: seconds must be a positive number', 'error');
+        if (isNaN(seconds) || seconds < 0) {
+            this.appendOutput('#DELAY: seconds must be a non-negative number', 'error');
             return;
         }
 
