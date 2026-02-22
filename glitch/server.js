@@ -562,7 +562,8 @@ async function persistAllSessions() {
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
         token: token,
         isWizard: session.isWizard || false,
-        persistedAt: Date.now()
+        persistedAt: Date.now(),
+        chatBuffer: session.chatBuffer || []
       });
     }
   }
@@ -1073,6 +1074,9 @@ async function restorePersistentSessions() {
     session.targetHost = ps.server === '3s' ? '3scapes.org' : '3k.org';
     session.targetPort = ps.server === '3s' ? 3200 : 3000;
     session.disconnectedAt = Date.now(); // No browser connected yet
+    if (ps.chatBuffer && ps.chatBuffer.length > 0) {
+      session.chatBuffer = ps.chatBuffer;
+    }
 
     let success = false;
 
