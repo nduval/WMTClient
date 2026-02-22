@@ -83,6 +83,15 @@ ssh ec2-user@52.5.228.15 -i ~/.ssh/id_rsa
 ```
 - TinTin++ scripts: `~/elminster/*.tin`
 
+**SSH to Test Lightsail (Sandbox):**
+```bash
+ssh -i ~/.ssh/test-mud.pem ubuntu@18.225.235.28
+```
+- Safe sandbox for testing server.js changes without affecting users
+- Mock MUD on port 4000, WMT server on port 3000
+- TinTin++ + `ttrun` installed for behavior comparison
+- Reference test library: `/opt/wmt/tests/` — run with `/opt/wmt/tests/run_tests.sh`
+
 **Sync between environments:**
 ```bash
 python .claude/sync.py status   # Check both

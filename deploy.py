@@ -9,6 +9,7 @@ import sys
 import subprocess
 import argparse
 from pathlib import Path
+from datetime import datetime, timezone
 
 # Base directory
 BASE_DIR = Path(__file__).parent
@@ -322,6 +323,21 @@ def git_commit_before_deploy():
         print(f"  Commit failed: {result.stderr.strip()}")
 
 
+def log_deploy(target, commit_hash, success):
+    """Append a line to the deploy log on Lightsail (always, even with no code changes)"""
+    ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
+    host = '3.14.128.194'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no ubuntu@{host}'
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    status = 'OK' if success else 'FAILED'
+    entry = f'{ts} target={target} commit={commit_hash} status={status}'
+    subprocess.run(
+        f'{ssh_cmd} "echo \'{entry}\' | sudo tee -a /var/log/wmt/deploy.log > /dev/null"',
+        shell=True, capture_output=True, text=True
+    )
+    print(f"  Deploy logged: {entry}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Deploy WMT Client')
     parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'all'],
@@ -345,6 +361,13 @@ def main():
     if not args.no_commit:
         git_commit_before_deploy()
 
+    # Get current commit hash for deploy log
+    commit_result = subprocess.run(
+        'git rev-parse --short HEAD', shell=True,
+        capture_output=True, text=True, cwd=str(BASE_DIR)
+    )
+    commit_hash = commit_result.stdout.strip() if commit_result.returncode == 0 else 'unknown'
+
     success = True
 
     if args.target in ['lightsail', 'all']:
@@ -358,6 +381,9 @@ def main():
     if args.target in ['ionos', 'all']:
         if not deploy_ionos():
             success = False
+
+    # Log every deploy to Lightsail for audit trail
+    log_deploy(args.target, commit_hash, success)
 
     if success:
         print("\n=== Deployment complete! ===")
