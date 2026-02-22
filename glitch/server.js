@@ -2473,13 +2473,18 @@ function processLine(session, line) {
   processed.commands.forEach(cmd => {
     if (cmd.startsWith('#')) {
       // Process #math/#var server-side for immediate variable updates
-      serverProcessInlineCommand(cmd, session);
-      // Substitute $variables and @functions before sending to client
-      const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
-      sendToClient(session, {
-        type: 'client_command',
-        command: substitutedCmd
-      });
+      const handled = serverProcessInlineCommand(cmd, session);
+      if (!handled) {
+        // Not a server-handled variable command — substitute and forward to client
+        // (e.g. #if, #showme, #delay, etc.)
+        const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
+        sendToClient(session, {
+          type: 'client_command',
+          command: substitutedCmd
+        });
+      }
+      // If handled (#math/#var/#format/#cat/#replace): var_update already pushed to client.
+      // Do NOT forward as client_command to avoid double-execution.
     } else if (session.mudSocket && !session.mudSocket.destroyed) {
       // Expand aliases before sending to MUD
       const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
@@ -3000,7 +3005,14 @@ wss.on('connection', (ws, req) => {
                   if (ASYNC_READ_RE.test(trimmed)) {
                     hitAsyncRead = true;
                   } else {
-                    serverProcessInlineCommand(trimmed, session);
+                    const handled = serverProcessInlineCommand(trimmed, session);
+                    if (handled) {
+                      // Server already processed this command (#math/#var/#format/#cat/#replace)
+                      // and pushed var_update to client. Do NOT forward as client_command or the
+                      // client will double-execute with post-substitution values, corrupting
+                      // step counters and other sequential variables.
+                      return [];
+                    }
                   }
                   // Substitute $vars and @funcs AFTER inline processing
                   // so freshly-set vars are visible (e.g. #var {x} {42};#showme {$x})
@@ -3250,12 +3262,14 @@ wss.on('connection', (ws, req) => {
             // Execute any trigger commands (with alias expansion)
             processed.commands.forEach(cmd => {
               if (cmd.startsWith('#')) {
-                serverProcessInlineCommand(cmd, session);
-                const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
-                sendToClient(session, {
-                  type: 'client_command',
-                  command: substitutedCmd
-                });
+                const handled = serverProcessInlineCommand(cmd, session);
+                if (!handled) {
+                  const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
+                  sendToClient(session, {
+                    type: 'client_command',
+                    command: substitutedCmd
+                  });
+                }
               } else if (session.mudSocket && !session.mudSocket.destroyed) {
                 // Expand aliases before sending to MUD
                 const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
@@ -3843,7 +3857,14 @@ function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, funct
       if (ASYNC_READ_RE.test(partTrimmed)) {
         state.hitAsyncRead = true;
       } else if (session) {
-        serverProcessInlineCommand(partTrimmed, session);
+        const handled = serverProcessInlineCommand(partTrimmed, session);
+        if (handled) {
+          // Server already processed this command (#math/#var/#format/#cat/#replace)
+          // and pushed var_update to client. Do NOT forward as client_command or the
+          // client will double-execute with post-substitution values, corrupting
+          // step counters and other sequential variables.
+          return;
+        }
       }
       // Substitute $variables and @functions in # commands before sending to client
       // (e.g. #showme {attacking $target} → #showme {attacking goblin})
