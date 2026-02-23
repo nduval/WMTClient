@@ -1035,6 +1035,10 @@ async function restorePersistentSessions() {
     if (existingToken && sessions.has(existingToken)) {
       const existing = sessions.get(existingToken);
       if (existing.mudSocket && !existing.mudSocket.destroyed) {
+        // Still merge chatBuffer if the existing session lost it
+        if (ps.chatBuffer && ps.chatBuffer.length > 0 && existing.chatBuffer.length === 0) {
+          existing.chatBuffer = ps.chatBuffer;
+        }
         logSessionEvent('RESTORE_SKIP_ACTIVE', {
           token: ps.token.substring(0, 8),
           char: ps.characterName,
@@ -1048,11 +1052,22 @@ async function restorePersistentSessions() {
       // aliases, and variables. The _pendingBridgeResume / connectToMud flow
       // will establish the MUD connection when set_triggers arrives.
       if (existing.ws) {
+        // Merge chatBuffer from persistence — the new session has an empty
+        // chatBuffer since the browser reconnected before restore ran.
+        if (ps.chatBuffer && ps.chatBuffer.length > 0 && existing.chatBuffer.length === 0) {
+          existing.chatBuffer = ps.chatBuffer;
+          // Replay to the connected browser so ChatMon shows history
+          for (const msg of ps.chatBuffer) {
+            try {
+              existing.ws.send(JSON.stringify(msg));
+            } catch (e) { break; }
+          }
+        }
         logSessionEvent('RESTORE_SKIP_BROWSER', {
           token: ps.token.substring(0, 8),
           char: ps.characterName,
           existingToken: existingToken.substring(0, 8),
-          note: 'browser already connected, skipping restore'
+          note: 'browser already connected, merged chatBuffer'
         });
         continue;
       }
