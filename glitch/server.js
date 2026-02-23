@@ -2117,6 +2117,7 @@ function parseMipMessage(session, msgType, msgData) {
         let channel = 'tell';
         let rawText = '';
         let isSoulEcho = false;
+        let isSentByUser = false;
         if (parts[0] === '' && parts.length >= 3) {
           const sender = parts[1];
           const message = parts.slice(2).join('~');
@@ -2131,6 +2132,7 @@ function parseMipMessage(session, msgType, msgData) {
           const message = parts.slice(2).join('~');
           formatted = `<span style="color:#88ff88">[To ${recipient}]:</span> ${convertMipColors(message)}`;
           rawText = `[To ${recipient}]: ${stripAnsi(message)}`;
+          isSentByUser = true;
         } else {
           formatted = convertMipColors(msgData);
           rawText = stripAnsi(msgData);
@@ -2145,7 +2147,8 @@ function parseMipMessage(session, msgType, msgData) {
             channel: channel,
             raw: msgData,
             rawText: rawText,
-            message: formatted
+            message: formatted,
+            outbound: isSentByUser || undefined
           });
 
           // Server-side Discord notification (works even when browser is closed)

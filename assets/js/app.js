@@ -1087,7 +1087,7 @@ class WMTClient {
             case 'mip_chat':
                 // Handle MIP chat/tell messages
                 if (data.message) {
-                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText);
+                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound });
                 }
                 break;
 
@@ -1935,7 +1935,7 @@ class WMTClient {
         dockBtn.title = titles[position] || 'Dock window';
     }
 
-    appendChatMessage(message, chatType = 'channel', channel = '', rawText = '') {
+    appendChatMessage(message, chatType = 'channel', channel = '', rawText = '', options = {}) {
         // Get channel preferences
         const channelKey = channel.toLowerCase();
         const prefs = this.channelPrefs[channelKey] || {};
@@ -1945,8 +1945,8 @@ class WMTClient {
             return; // Don't display hidden channels
         }
 
-        // Play sound if enabled for this channel
-        if (prefs.sound) {
+        // Play sound if enabled for this channel (skip for outbound messages)
+        if (prefs.sound && !options.noSound) {
             this.playBell();
         }
 
