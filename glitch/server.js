@@ -895,7 +895,8 @@ function autoLoginToMud(session, password) {
               if (session.lastFlushedIncomplete) {
                 session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
                 session.lastFlushedIncomplete = null;
-                session._replaceIncomplete = true;
+                // Tell client to remove the fragment div before we send the full line
+                sendToClient(session, { type: 'remove_incomplete' });
                 if (session.lastFlushedExpiry) {
                   clearTimeout(session.lastFlushedExpiry);
                   session.lastFlushedExpiry = null;
@@ -1102,7 +1103,8 @@ async function restorePersistentSessions() {
         if (session.lastFlushedIncomplete) {
           session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
           session.lastFlushedIncomplete = null;
-          session._replaceIncomplete = true;
+          // Tell client to remove the fragment div before we send the full line
+          sendToClient(session, { type: 'remove_incomplete' });
           if (session.lastFlushedExpiry) {
             clearTimeout(session.lastFlushedExpiry);
             session.lastFlushedExpiry = null;
@@ -1913,13 +1915,6 @@ function clearAllTickers(session) {
  * Buffer keeps the MOST RECENT lines - old lines are dropped when full
  */
 function sendToClient(session, message) {
-  // Retroactive line reassembly: if a flushed incomplete fragment was
-  // reassembled with new data, mark the first mud message as a replacement
-  if (message.type === 'mud' && session._replaceIncomplete) {
-    message.replaceIncomplete = true;
-    delete session._replaceIncomplete;
-  }
-
   // Buffer ChatMon messages for replay on session resume
   if (message.type === 'mip_chat' || message.type === 'trigger_chatmon') {
     session.chatBuffer.push(message);
@@ -2678,6 +2673,19 @@ function connectToMud(session) {
       session.lineBufferTimeout = null;
     }
 
+    // Retroactive reassembly: if we recently flushed an incomplete
+    // fragment, prepend it so the full line gets processed correctly
+    if (session.lastFlushedIncomplete) {
+      session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
+      session.lastFlushedIncomplete = null;
+      // Tell client to remove the fragment div before we send the full line
+      sendToClient(session, { type: 'remove_incomplete' });
+      if (session.lastFlushedExpiry) {
+        clearTimeout(session.lastFlushedExpiry);
+        session.lastFlushedExpiry = null;
+      }
+    }
+
     const fullText = session.lineBuffer + text;
     const parts = fullText.split('\n');
 
@@ -2690,15 +2698,27 @@ function connectToMud(session) {
     if (!text.endsWith('\n') && parts.length > 0) {
       session.lineBuffer = parts.pop();
       if (session.lineBuffer) {
-        // Packet patch timeout - wait for more data before processing incomplete lines
-        // Similar to TinTin++ #config {packet patch} - recommended 0.5-1.0 seconds
-        // GA (Go Ahead) signal flushes immediately, so this only affects prompts on MUDs without GA
         session.lineBufferTimeout = setTimeout(() => {
           if (session.lineBuffer) {
-            processLine(session, session.lineBuffer);
+            // Send fragment for immediate display (skip triggers)
+            let displayFragment = session.lineBuffer;
+            if (session.currentAnsiState && !/^\x1b\[/.test(displayFragment)) {
+              displayFragment = session.currentAnsiState + displayFragment;
+            }
+            sendToClient(session, {
+              type: 'mud',
+              line: displayFragment,
+              incomplete: true
+            });
+            // Save for reassembly when more data arrives
+            session.lastFlushedIncomplete = session.lineBuffer;
             session.lineBuffer = '';
+            session.lastFlushedExpiry = setTimeout(() => {
+              session.lastFlushedIncomplete = null;
+              session.lastFlushedExpiry = null;
+            }, 3000);
           }
-        }, 500);
+        }, 150);
       }
     } else {
       session.lineBuffer = '';
