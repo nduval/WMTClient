@@ -3060,6 +3060,10 @@ wss.on('connection', (ws, req) => {
             // (used by #send for ANSI codes containing semicolons)
             if (data.raw) {
               session.mudSocket.write((data.command || '') + '\r\n');
+            } else if (!(data.command || '').trim()) {
+              // Empty or whitespace-only: send directly to MUD (board editors,
+              // "press enter to continue", blank lines in pasted text)
+              session.mudSocket.write((data.command || '') + '\r\n');
             } else {
               // Recursively expand aliases and handle semicolons.
               // TinTin++ processes commands sequentially: #var/#math in an alias
@@ -3071,8 +3075,7 @@ wss.on('connection', (ws, req) => {
               const expandCommand = (cmd, depth = 0) => {
                 if (depth > 10) return [cmd];
                 const trimmed = cmd.trim();
-                // Empty after trim: send as bare newline to MUD (board editors, "press enter")
-                if (!trimmed) return [cmd];
+                if (!trimmed) return [];
 
                 // After a #read/#class read, don't expand — return literal for client
                 if (hitAsyncRead) return [trimmed];
@@ -3733,9 +3736,6 @@ function parseCommands(input) {
   // Trailing backslash with no next char - keep it
   if (escaped) current += '\\';
   if (current.trim()) commands.push(current.trim());
-  // If input was non-empty but produced no commands (whitespace only),
-  // pass it through as-is — MUD board editors need blank/space lines
-  if (commands.length === 0 && input.length > 0) commands.push(input);
   return commands;
 }
 
