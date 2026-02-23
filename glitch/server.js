@@ -895,8 +895,6 @@ function autoLoginToMud(session, password) {
               if (session.lastFlushedIncomplete) {
                 session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
                 session.lastFlushedIncomplete = null;
-                // Tell client to remove the fragment div before we send the full line
-                sendToClient(session, { type: 'remove_incomplete' });
                 if (session.lastFlushedExpiry) {
                   clearTimeout(session.lastFlushedExpiry);
                   session.lastFlushedExpiry = null;
@@ -917,23 +915,17 @@ function autoLoginToMud(session, password) {
                 if (session.lineBuffer) {
                   session.lineBufferTimeout = setTimeout(() => {
                     if (session.lineBuffer) {
-                      // Send fragment for immediate display (skip triggers)
-                      let displayFragment = session.lineBuffer;
-                      if (session.currentAnsiState && !/^\x1b\[/.test(displayFragment)) {
-                        displayFragment = session.currentAnsiState + displayFragment;
-                      }
-                      sendToClient(session, {
-                        type: 'mud',
-                        line: displayFragment,
-                        incomplete: true
-                      });
-                      // Save for reassembly when more data arrives
+                      // Stage 1: Hold fragment silently for reassembly
                       session.lastFlushedIncomplete = session.lineBuffer;
                       session.lineBuffer = '';
+                      // Stage 2: Display after 350ms more (500ms total) if no continuation
                       session.lastFlushedExpiry = setTimeout(() => {
-                        session.lastFlushedIncomplete = null;
+                        if (session.lastFlushedIncomplete) {
+                          processLine(session, session.lastFlushedIncomplete);
+                          session.lastFlushedIncomplete = null;
+                        }
                         session.lastFlushedExpiry = null;
-                      }, 3000);
+                      }, 350);
                     }
                   }, 150);
                 }
@@ -1103,8 +1095,6 @@ async function restorePersistentSessions() {
         if (session.lastFlushedIncomplete) {
           session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
           session.lastFlushedIncomplete = null;
-          // Tell client to remove the fragment div before we send the full line
-          sendToClient(session, { type: 'remove_incomplete' });
           if (session.lastFlushedExpiry) {
             clearTimeout(session.lastFlushedExpiry);
             session.lastFlushedExpiry = null;
@@ -1125,23 +1115,17 @@ async function restorePersistentSessions() {
           if (session.lineBuffer) {
             session.lineBufferTimeout = setTimeout(() => {
               if (session.lineBuffer) {
-                // Send fragment for immediate display (skip triggers)
-                let displayFragment = session.lineBuffer;
-                if (session.currentAnsiState && !/^\x1b\[/.test(displayFragment)) {
-                  displayFragment = session.currentAnsiState + displayFragment;
-                }
-                sendToClient(session, {
-                  type: 'mud',
-                  line: displayFragment,
-                  incomplete: true
-                });
-                // Save for reassembly when more data arrives
+                // Stage 1: Hold fragment silently for reassembly
                 session.lastFlushedIncomplete = session.lineBuffer;
                 session.lineBuffer = '';
+                // Stage 2: Display after 350ms more (500ms total) if no continuation
                 session.lastFlushedExpiry = setTimeout(() => {
-                  session.lastFlushedIncomplete = null;
+                  if (session.lastFlushedIncomplete) {
+                    processLine(session, session.lastFlushedIncomplete);
+                    session.lastFlushedIncomplete = null;
+                  }
                   session.lastFlushedExpiry = null;
-                }, 3000);
+                }, 350);
               }
             }, 150);
           }
@@ -2700,23 +2684,17 @@ function connectToMud(session) {
       if (session.lineBuffer) {
         session.lineBufferTimeout = setTimeout(() => {
           if (session.lineBuffer) {
-            // Send fragment for immediate display (skip triggers)
-            let displayFragment = session.lineBuffer;
-            if (session.currentAnsiState && !/^\x1b\[/.test(displayFragment)) {
-              displayFragment = session.currentAnsiState + displayFragment;
-            }
-            sendToClient(session, {
-              type: 'mud',
-              line: displayFragment,
-              incomplete: true
-            });
-            // Save for reassembly when more data arrives
+            // Stage 1: Hold fragment silently for reassembly
             session.lastFlushedIncomplete = session.lineBuffer;
             session.lineBuffer = '';
+            // Stage 2: Display after 350ms more (500ms total) if no continuation
             session.lastFlushedExpiry = setTimeout(() => {
-              session.lastFlushedIncomplete = null;
+              if (session.lastFlushedIncomplete) {
+                processLine(session, session.lastFlushedIncomplete);
+                session.lastFlushedIncomplete = null;
+              }
               session.lastFlushedExpiry = null;
-            }, 3000);
+            }, 350);
           }
         }, 150);
       }
