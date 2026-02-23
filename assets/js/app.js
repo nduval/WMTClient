@@ -3154,8 +3154,7 @@ class WMTClient {
             commands.push(buffer);
         }
 
-        // Filter out empty-only lines from multi-line paste (but a single empty line is fine)
-        return commands.filter(cmd => cmd.trim() !== '' || commands.length === 1);
+        return commands;
     }
 
     reconnect() {
