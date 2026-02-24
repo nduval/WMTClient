@@ -67,9 +67,12 @@ Read these files when working on related topics.
 
 ## Development Environments
 
+The working directory varies by machine. Check `memory/hosts.md` for the hostname → path mapping.
+
 | Environment | Path | Notes |
 |-------------|------|-------|
-| **Windows** | `D:/GitHub/client` | Primary, uses Git Bash |
+| **NathansASUS** | `C:/Users/nduva/OneDrive/GitHub/client` | Primary, uses Git Bash |
+| **SKYNET** | `C:/Users/nduva/OneDrive/GitHub/client` | Original machine, **READ ONLY** |
 | **Mac Mini** | `~/github/client` | Secondary, SSH accessible |
 
 **SSH to Mac Mini:**

@@ -43,6 +43,7 @@ function getUserPreferences(string $userId): array {
         'textColor' => DEFAULT_TEXT_COLOR,
         'backgroundColor' => DEFAULT_BACKGROUND_COLOR,
         'echoCommands' => true,
+        'verbatimMode' => false,
         'scrollOnOutput' => true,
         'keepAlive' => true,
         'keepAliveInterval' => 60

@@ -104,6 +104,8 @@ const COMMAND_REGISTRY = [
     // --- Config ---
     { name: 'config',       abbrevs: [],                   handler: 'cmdConfig',       async: false,
       category: 'Config', syntax: '#config {option} {value}', description: 'Toggle settings' },
+    { name: 'verbatim',     abbrevs: [],                   handler: 'cmdVerbatim',     async: false,
+      category: 'Settings', syntax: '#verbatim', description: 'Toggle verbatim mode (send raw input to MUD)' },
     // --- Format/String ---
     { name: 'format',       abbrevs: [],                   handler: 'cmdFormat',       async: false, getAllAfter: 1, serverInline: true,
       category: 'Strings', syntax: '#format {variable} {format} [args]', description: 'Format string into variable' },
@@ -2984,6 +2986,54 @@ class WMTClient {
         // Track last user input for idle disconnect (deadman switch)
         this.lastUserInput = Date.now();
 
+        // Check if this is the #verbatim toggle command itself (always allow it)
+        const trimmed = rawInput.trim().toLowerCase();
+        if (trimmed === '#verbatim' || trimmed === '#verb') {
+            if (this.preferences.echoCommands !== false) {
+                this.appendOutput('> ' + rawInput, 'command');
+            }
+            this.cmdVerbatim([]);
+            if (this.preferences.retainLastCommand) {
+                input.value = rawInput;
+            } else {
+                input.value = '';
+            }
+            this.historyIndex = -1;
+            return;
+        }
+
+        // Verbatim mode: send raw input directly to MUD, no parsing
+        if (this.preferences.verbatimMode) {
+            // Add to history
+            if (rawInput.trim()) {
+                this.commandHistory.unshift(rawInput);
+                if (this.commandHistory.length > this.maxHistorySize) {
+                    this.commandHistory.pop();
+                }
+            }
+            // Echo if enabled
+            if (this.preferences.echoCommands !== false) {
+                this.appendOutput('> ' + rawInput, 'command');
+            }
+            // Split on newlines only (for multi-line paste), send each line raw
+            const lines = rawInput.split('\n');
+            for (const line of lines) {
+                this.connection.sendCommand(line, true);
+            }
+            this.resetHistorySearch();
+            input.value = '';
+            if (this.preferences.retainLastCommand) input.value = rawInput;
+            this.userScrolledUp = false;
+            this.ignoreScrollEvents = true;
+            const output = document.getElementById('mud-output');
+            if (output) {
+                output.scrollTop = output.scrollHeight;
+                this.lastScrollTop = output.scrollTop;
+            }
+            setTimeout(() => { this.ignoreScrollEvents = false; }, 500);
+            return;
+        }
+
         // Parse multi-line input into individual commands
         const commands = this.parseMultiLineInput(rawInput);
 
@@ -4964,6 +5014,14 @@ class WMTClient {
                     </label>
                 </div>
                 <div class="settings-toggle">
+                    <span class="settings-toggle-label">Verbatim Mode</span>
+                    <label class="settings-toggle-switch">
+                        <input type="checkbox" id="pref-verbatim" ${prefs.verbatimMode ? 'checked' : ''}>
+                        <span class="settings-toggle-slider"></span>
+                    </label>
+                </div>
+                <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: -5px;">Send raw input to MUD (no aliases, semicolons, or variables)</p>
+                <div class="settings-toggle">
                     <span class="settings-toggle-label">Auto-scroll Output</span>
                     <label class="settings-toggle-switch">
                         <input type="checkbox" id="pref-scroll" ${prefs.scrollOnOutput !== false ? 'checked' : ''}>
@@ -5330,6 +5388,7 @@ class WMTClient {
             textColor: document.getElementById('pref-text-color')?.value || this.preferences.textColor || '#00ff00',
             backgroundColor: document.getElementById('pref-bg-color')?.value || this.preferences.backgroundColor || '#000000',
             echoCommands: document.getElementById('pref-echo')?.checked ?? this.preferences.echoCommands ?? true,
+            verbatimMode: document.getElementById('pref-verbatim')?.checked ?? this.preferences.verbatimMode ?? false,
             scrollOnOutput: document.getElementById('pref-scroll')?.checked ?? this.preferences.scrollOnOutput ?? true,
             scrollbackLimit: parseInt(document.getElementById('pref-scrollback')?.value) || this.preferences.scrollbackLimit || 5000,
             retainLastCommand: document.getElementById('pref-retain')?.checked ?? this.preferences.retainLastCommand ?? false,
@@ -10791,6 +10850,17 @@ class WMTClient {
 
     // #config {option} {value} - Set configuration options
     // Reference: https://tintin.mudhalla.net/manual/config.php
+    cmdVerbatim(args) {
+        this.preferences.verbatimMode = !this.preferences.verbatimMode;
+        const state = this.preferences.verbatimMode ? 'ON' : 'OFF';
+        this.appendOutput(`Verbatim mode ${state}`, 'system');
+        // Update settings checkbox if panel is open
+        const checkbox = document.getElementById('pref-verbatim');
+        if (checkbox) checkbox.checked = this.preferences.verbatimMode;
+        // Persist
+        this.saveCurrentPreferences();
+    }
+
     cmdConfig(args) {
         if (args.length < 1) {
             // Show current config
@@ -10799,6 +10869,7 @@ class WMTClient {
                 : 'OFF';
             this.appendOutput('Configuration:', 'system');
             this.appendOutput(`  SPEEDWALK: ${this.speedwalkEnabled ? 'ON' : 'OFF'}`, 'system');
+            this.appendOutput(`  VERBATIM: ${this.preferences.verbatimMode ? 'ON' : 'OFF'}`, 'system');
             this.appendOutput(`  DEADMAN: ${deadmanStatus}`, 'system');
             return;
         }

@@ -154,6 +154,10 @@ switch ($action) {
             $validated['echoCommands'] = (bool)$preferences['echoCommands'];
         }
 
+        if (isset($preferences['verbatimMode'])) {
+            $validated['verbatimMode'] = (bool)$preferences['verbatimMode'];
+        }
+
         if (isset($preferences['scrollOnOutput'])) {
             $validated['scrollOnOutput'] = (bool)$preferences['scrollOnOutput'];
         }
