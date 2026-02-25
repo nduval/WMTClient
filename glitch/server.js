@@ -4165,8 +4165,10 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
     }
 
     if (matched && trigger.actions) {
-      // Track this fire for loop detection
-      if (loopTracker && trigger.id) {
+      // Track this fire for loop detection (only for triggers that execute commands —
+      // gags, highlights, and substitutes are passive and can't cause loops)
+      const hasCommands = trigger.actions.some(a => a.type === 'command');
+      if (hasCommands && loopTracker && trigger.id) {
         if (!loopTracker[trigger.id]) {
           loopTracker[trigger.id] = { count: 0, firstFire: now };
         }
