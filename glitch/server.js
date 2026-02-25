@@ -921,7 +921,7 @@ function autoLoginToMud(session, password) {
                       // Stage 2: Display after 350ms more (500ms total) if no continuation
                       session.lastFlushedExpiry = setTimeout(() => {
                         if (session.lastFlushedIncomplete) {
-                          processLine(session, session.lastFlushedIncomplete);
+                          processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
                           session.lastFlushedIncomplete = null;
                         }
                         session.lastFlushedExpiry = null;
@@ -1136,7 +1136,7 @@ async function restorePersistentSessions() {
                 // Stage 2: Display after 350ms more (500ms total) if no continuation
                 session.lastFlushedExpiry = setTimeout(() => {
                   if (session.lastFlushedIncomplete) {
-                    processLine(session, session.lastFlushedIncomplete);
+                    processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
                     session.lastFlushedIncomplete = null;
                   }
                   session.lastFlushedExpiry = null;
@@ -2312,6 +2312,16 @@ function parseFFFStats(session, data) {
 }
 
 /**
+ * Strip incomplete ANSI escape sequence from end of a fragment.
+ * Called before flushing a held fragment that timed out waiting for continuation.
+ * e.g., "You grant the blessing of \x1b[34;1" → "You grant the blessing of "
+ */
+function stripTrailingAnsi(text) {
+  // Match an incomplete ANSI sequence at the end: ESC, or ESC[, or ESC[digits/semicolons (no closing 'm')
+  return text.replace(/\x1b\[[0-9;]*$|\x1b$/, '');
+}
+
+/**
  * Process a single line from MUD
  */
 function processLine(session, line) {
@@ -2713,7 +2723,7 @@ function connectToMud(session) {
             // Stage 2: Display after 350ms more (500ms total) if no continuation
             session.lastFlushedExpiry = setTimeout(() => {
               if (session.lastFlushedIncomplete) {
-                processLine(session, session.lastFlushedIncomplete);
+                processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
                 session.lastFlushedIncomplete = null;
               }
               session.lastFlushedExpiry = null;
