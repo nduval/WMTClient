@@ -56,6 +56,7 @@ switch ($action) {
                 'token' => $session['token'],
                 'isWizard' => $session['isWizard'] ?? false,
                 'persistedAt' => $session['persistedAt'] ?? (time() * 1000),
+                'chatBuffer' => $session['chatBuffer'] ?? [],
                 'savedAt' => date('c')
             ];
         }
