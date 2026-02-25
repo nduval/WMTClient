@@ -2465,6 +2465,11 @@ function processLine(session, line) {
     if (/\s#N\/\w+\s+#N\s*$/.test(line) && line.includes('~')) return;
     if (/^[a-z]+\s+#N\s*$/.test(line) && line.length < 20) return;
     if (/^#N(\/\w+)?\s*(#N)?\s*$/.test(line)) return;
+
+    // MIP FFF data fragments leaked from TCP-split MIP messages
+    // e.g., "7~G~99", "~A~100~B~200", "~H~50"
+    const strippedMip = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+    if (/^[\d]*(?:~[A-Z]~[\d]*)+$/.test(strippedMip)) return;
   }
 
   if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {

@@ -932,12 +932,25 @@ class WMTClient {
             case 'remove_incomplete': {
                 // Server reassembled a TCP fragment — remove the incomplete div
                 // The complete line follows as a normal 'mud' message
-                const output = document.getElementById('mud-output');
-                if (output) {
-                    for (let i = output.children.length - 1; i >= 0; i--) {
-                        if (output.children[i].classList.contains('incomplete')) {
-                            output.removeChild(output.children[i]);
+                // Check render queue first (may not be flushed to DOM yet)
+                let removed = false;
+                if (this._renderQueue) {
+                    for (let i = this._renderQueue.length - 1; i >= 0; i--) {
+                        if (this._renderQueue[i].options.incomplete) {
+                            this._renderQueue.splice(i, 1);
+                            removed = true;
                             break;
+                        }
+                    }
+                }
+                if (!removed) {
+                    const output = document.getElementById('mud-output');
+                    if (output) {
+                        for (let i = output.children.length - 1; i >= 0; i--) {
+                            if (output.children[i].classList.contains('incomplete')) {
+                                output.removeChild(output.children[i]);
+                                break;
+                            }
                         }
                     }
                 }
@@ -2442,22 +2455,46 @@ class WMTClient {
         // During #read, suppress system confirmation messages (TinTin++ behavior)
         if (this.readingSilent && type === 'system') return;
 
+        // Queue for next animation frame — batches rapid lines into a single DOM update
+        if (!this._renderQueue) this._renderQueue = [];
+        this._renderQueue.push({ text, type, options });
+
+        if (!this._renderPending) {
+            this._renderPending = true;
+            requestAnimationFrame(() => this._flushRenderQueue());
+        }
+    }
+
+    // Flush all queued lines to DOM in a single batch (one reflow per frame)
+    _flushRenderQueue() {
+        this._renderPending = false;
+        const queue = this._renderQueue;
+        this._renderQueue = [];
+
         const output = document.getElementById('mud-output');
-        if (!output) return;
+        if (!output || queue.length === 0) return;
 
-        const line = document.createElement('div');
-        line.className = 'line ' + type;
-        if (options.incomplete) line.classList.add('incomplete');
+        const fragment = document.createDocumentFragment();
+        let lastSound = null;
 
-        // Convert ANSI codes to HTML
-        let html = this.ansiToHtml(text);
+        for (const item of queue) {
+            const line = document.createElement('div');
+            line.className = 'line ' + item.type;
+            if (item.options.incomplete) line.classList.add('incomplete');
 
-        // Convert <hl style="...">text</hl> tags to styled spans (from server-side highlights)
-        html = html.replace(/&lt;hl style="([^"]*)"&gt;(.*?)&lt;\/hl&gt;/gi, '<span style="$1">$2</span>');
+            // Convert ANSI codes to HTML
+            let html = this.ansiToHtml(item.text);
 
-        line.innerHTML = html;
+            // Convert <hl style="...">text</hl> tags to styled spans (from server-side highlights)
+            html = html.replace(/&lt;hl style="([^"]*)"&gt;(.*?)&lt;\/hl&gt;/gi, '<span style="$1">$2</span>');
 
-        output.appendChild(line);
+            line.innerHTML = html;
+            fragment.appendChild(line);
+
+            if (item.options.sound) lastSound = item.options.sound;
+        }
+
+        output.appendChild(fragment);
 
         // Scrollback limit - remove old lines to prevent memory issues
         // Use efficient batch removal to minimize layout thrashing (which can reset mobile zoom)
@@ -2472,26 +2509,13 @@ class WMTClient {
         }
 
         // Smart auto-scroll: scroll to bottom if enabled AND user hasn't scrolled up
-        // Use requestAnimationFrame to batch scroll updates (prevents mobile zoom reset)
         if (this.preferences.scrollOnOutput !== false && !this.userScrolledUp) {
-            if (!this.pendingScroll) {
-                this.pendingScroll = true;
-                requestAnimationFrame(() => {
-                    this.pendingScroll = false;
-                    const out = document.getElementById('mud-output');
-                    if (out) {
-                        out.scrollTop = out.scrollHeight;
-                        // Update lastScrollTop so scroll detection doesn't think user scrolled
-                        this.lastScrollTop = out.scrollTop;
-                    }
-                });
-            }
+            output.scrollTop = output.scrollHeight;
+            this.lastScrollTop = output.scrollTop;
         }
 
-        // Play sound if specified
-        if (options.sound) {
-            this.playSound(options.sound);
-        }
+        // Play sound (last one wins if multiple in batch)
+        if (lastSound) this.playSound(lastSound);
     }
 
     ansiToHtml(text) {
