@@ -906,6 +906,7 @@ function autoLoginToMud(session, password) {
 
               if (hasGA) {
                 session.lineBuffer = '';
+                flushPatchQueue(session);
                 parts.forEach(line => processLine(session, line));
                 return;
               }
@@ -933,7 +934,7 @@ function autoLoginToMud(session, password) {
                 session.lineBuffer = '';
               }
 
-              parts.forEach(line => processLine(session, line));
+              queueLinesForProcessing(session, parts);
             });
 
             resolve(true);
@@ -1121,6 +1122,7 @@ async function restorePersistentSessions() {
 
         if (hasGA) {
           session.lineBuffer = '';
+          flushPatchQueue(session);
           parts.forEach(line => processLine(session, line));
           return;
         }
@@ -1148,7 +1150,7 @@ async function restorePersistentSessions() {
           session.lineBuffer = '';
         }
 
-        parts.forEach(line => processLine(session, line));
+        queueLinesForProcessing(session, parts);
       });
 
       session.mudSocket.on('close', () => {
@@ -1826,7 +1828,12 @@ function createSession(token) {
     tickerIntervals: {},   // Map of ticker id -> interval timer
 
     // ChatMon message buffer (persists across session resume)
-    chatBuffer: []
+    chatBuffer: [],
+
+    // Packet patch: fixed-delay batching for complete lines (seconds, 0 = disabled)
+    packetPatchMs: 250,  // Default 0.25s
+    patchQueue: [],
+    patchTimeout: null
   };
 }
 
@@ -2312,6 +2319,48 @@ function parseFFFStats(session, data) {
 }
 
 /**
+ * Queue complete lines for batch processing (packet patch).
+ * Uses a FIXED delay from first data arrival — no timer reset.
+ * If packetPatchMs is 0, processes immediately.
+ */
+function queueLinesForProcessing(session, parts) {
+  if (session.packetPatchMs <= 0) {
+    // No packet patch — process immediately (original behavior)
+    parts.forEach(line => processLine(session, line));
+    return;
+  }
+
+  // Add to queue
+  session.patchQueue.push(...parts);
+
+  // Only start a timer if one isn't already running (fixed delay, no reset)
+  if (!session.patchTimeout) {
+    session.patchTimeout = setTimeout(() => {
+      const batch = session.patchQueue;
+      session.patchQueue = [];
+      session.patchTimeout = null;
+      batch.forEach(line => processLine(session, line));
+    }, session.packetPatchMs);
+  }
+}
+
+/**
+ * Flush any pending packet patch queue immediately.
+ * Called when GA arrives (MUD says "I'm done, show this now").
+ */
+function flushPatchQueue(session) {
+  if (session.patchTimeout) {
+    clearTimeout(session.patchTimeout);
+    session.patchTimeout = null;
+  }
+  if (session.patchQueue.length > 0) {
+    const batch = session.patchQueue;
+    session.patchQueue = [];
+    batch.forEach(line => processLine(session, line));
+  }
+}
+
+/**
  * Strip incomplete ANSI escape sequence from end of a fragment.
  * Called before flushing a held fragment that timed out waiting for continuation.
  * e.g., "You grant the blessing of \x1b[34;1" → "You grant the blessing of "
@@ -2708,6 +2757,7 @@ function connectToMud(session) {
 
     if (hasGA) {
       session.lineBuffer = '';
+      flushPatchQueue(session);
       parts.forEach(line => processLine(session, line));
       return;
     }
@@ -2735,7 +2785,7 @@ function connectToMud(session) {
       session.lineBuffer = '';
     }
 
-    parts.forEach(line => processLine(session, line));
+    queueLinesForProcessing(session, parts);
   });
 
   session.mudSocket.on('close', () => {
@@ -3276,6 +3326,12 @@ wss.on('connection', (ws, req) => {
           session.mipId = data.mipId || null;
           session.mipDebug = data.debug || false;
           console.log(`MIP ${session.mipEnabled ? 'enabled' : 'disabled'}${session.mipId ? ' (ID: ' + session.mipId + ')' : ''}`);
+          break;
+
+        case 'set_packet_patch':
+          // Packet patch delay in seconds (0 = disabled)
+          session.packetPatchMs = Math.max(0, Math.min(2000, Math.round((parseFloat(data.value) || 0) * 1000)));
+          console.log(`Packet patch: ${session.packetPatchMs}ms`);
           break;
 
         case 'set_discord_prefs':

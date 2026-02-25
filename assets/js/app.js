@@ -699,6 +699,9 @@ class WMTClient {
         this.sendDiscordPrefsToServer();
         this.syncVariablesToServer();
         this.syncFunctionsToServer();
+        // Send packet_patch preference to server
+        const ppVal = this.preferences.packetPatch ?? 0.25;
+        this.connection.send('set_packet_patch', { value: ppVal });
     }
 
     // Send Discord preferences to server for server-side notifications (works when browser closed)
@@ -5430,7 +5433,8 @@ class WMTClient {
             debugIf: document.getElementById('pref-debug-if')?.checked ?? this.preferences.debugIf ?? false,
             notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
             notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30,
-            startupScript: document.getElementById('pref-startup-script')?.value || ''
+            startupScript: document.getElementById('pref-startup-script')?.value || '',
+            packetPatch: this.preferences.packetPatch ?? 0.25
         };
 
         try {
@@ -10897,10 +10901,13 @@ class WMTClient {
             const deadmanStatus = this.preferences.idleDisconnectMinutes
                 ? `ON (${this.preferences.idleDisconnectMinutes} min)`
                 : 'OFF';
+            const ppVal = this.preferences.packetPatch ?? 0.25;
+            const ppStatus = ppVal > 0 ? `${ppVal}s` : 'OFF';
             this.appendOutput('Configuration:', 'system');
             this.appendOutput(`  SPEEDWALK: ${this.speedwalkEnabled ? 'ON' : 'OFF'}`, 'system');
             this.appendOutput(`  VERBATIM: ${this.preferences.verbatimMode ? 'ON' : 'OFF'}`, 'system');
             this.appendOutput(`  DEADMAN: ${deadmanStatus}`, 'system');
+            this.appendOutput(`  PACKET_PATCH: ${ppStatus}`, 'system');
             return;
         }
 
@@ -10950,9 +10957,35 @@ class WMTClient {
                 }
                 break;
 
+            case 'PACKET_PATCH':
+            case 'PACKETPATCH':
+                if (value === 'OFF' || value === '0' || value === 'FALSE') {
+                    this.preferences.packetPatch = 0;
+                    this.connection.send('set_packet_patch', { value: 0 });
+                    this.appendOutput('Packet patch disabled', 'system');
+                } else if (value === null) {
+                    const ppVal = this.preferences.packetPatch ?? 0.25;
+                    this.appendOutput(`PACKET_PATCH: ${ppVal > 0 ? ppVal + 's' : 'OFF'}`, 'system');
+                } else {
+                    const seconds = parseFloat(value);
+                    if (!isNaN(seconds) && seconds >= 0 && seconds <= 2) {
+                        this.preferences.packetPatch = seconds;
+                        this.connection.send('set_packet_patch', { value: seconds });
+                        if (seconds > 0) {
+                            this.appendOutput(`Packet patch set to ${seconds}s`, 'system');
+                        } else {
+                            this.appendOutput('Packet patch disabled', 'system');
+                        }
+                    } else {
+                        this.appendOutput('Usage: #config {PACKET_PATCH} {0-2 seconds|OFF}', 'error');
+                    }
+                }
+                this.savePreferences();
+                break;
+
             default:
                 this.appendOutput(`Unknown config option: ${option}`, 'error');
-                this.appendOutput('Available options: SPEEDWALK, DEADMAN', 'system');
+                this.appendOutput('Available options: SPEEDWALK, DEADMAN, PACKET_PATCH', 'system');
         }
     }
 
