@@ -7391,6 +7391,10 @@ class WMTClient {
             this.setLocalVariable('%1', eventArg);
         }
 
+        // Suppress confirmations (#OK: #VARIABLE...) — events are programmatic, not interactive
+        const wasSilent = this._silent;
+        this._silent = true;
+
         handlers.forEach(handler => {
             try {
                 this.executeCommandString(handler.body);
@@ -7399,6 +7403,7 @@ class WMTClient {
             }
         });
 
+        this._silent = wasSilent;
         this.localScopes.pop();
     }
 
