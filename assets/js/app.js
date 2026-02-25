@@ -2985,6 +2985,7 @@ class WMTClient {
 
         // Track last user input for idle disconnect (deadman switch)
         this.lastUserInput = Date.now();
+        this.fireEvent('RECEIVED INPUT', rawInput);
 
         // Check if this is the #verbatim toggle command itself (always allow it)
         const trimmed = rawInput.trim().toLowerCase();
