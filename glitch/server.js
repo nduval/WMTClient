@@ -25,6 +25,7 @@ const BRIDGE_URL = process.env.BRIDGE_URL || null; // ws://localhost:4000 for br
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
 const SESSION_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes without browser = close MUD connection
 const CHAT_BUFFER_MAX = 100;  // Max ChatMon messages to preserve across session resume
+const PACKET_PATCH_MS = 50;   // Batch-flush delay for complete lines (catches TCP splits)
 
 // Persistent sessions store: token -> session object
 const sessions = new Map();
@@ -906,7 +907,12 @@ function autoLoginToMud(session, password) {
 
               if (hasGA) {
                 session.lineBuffer = '';
-                parts.forEach(line => processLine(session, line));
+                // GA = MUD says "done" — flush any pending batch + current lines immediately
+                if (session.patchTimeout) clearTimeout(session.patchTimeout);
+                const pending = session.patchQueue || [];
+                session.patchQueue = [];
+                session.patchTimeout = null;
+                [...pending, ...parts].forEach(line => processLine(session, line));
                 return;
               }
 
@@ -933,7 +939,16 @@ function autoLoginToMud(session, password) {
                 session.lineBuffer = '';
               }
 
-              parts.forEach(line => processLine(session, line));
+              // Queue complete lines for batch processing (catches TCP splits)
+              if (!session.patchQueue) session.patchQueue = [];
+              session.patchQueue.push(...parts);
+              if (session.patchTimeout) clearTimeout(session.patchTimeout);
+              session.patchTimeout = setTimeout(() => {
+                const batch = session.patchQueue;
+                session.patchQueue = [];
+                session.patchTimeout = null;
+                batch.forEach(line => processLine(session, line));
+              }, PACKET_PATCH_MS);
             });
 
             resolve(true);
@@ -1121,7 +1136,12 @@ async function restorePersistentSessions() {
 
         if (hasGA) {
           session.lineBuffer = '';
-          parts.forEach(line => processLine(session, line));
+          // GA = MUD says "done" — flush any pending batch + current lines immediately
+          if (session.patchTimeout) clearTimeout(session.patchTimeout);
+          const pending = session.patchQueue || [];
+          session.patchQueue = [];
+          session.patchTimeout = null;
+          [...pending, ...parts].forEach(line => processLine(session, line));
           return;
         }
 
@@ -1148,7 +1168,16 @@ async function restorePersistentSessions() {
           session.lineBuffer = '';
         }
 
-        parts.forEach(line => processLine(session, line));
+        // Queue complete lines for batch processing (catches TCP splits)
+        if (!session.patchQueue) session.patchQueue = [];
+        session.patchQueue.push(...parts);
+        if (session.patchTimeout) clearTimeout(session.patchTimeout);
+        session.patchTimeout = setTimeout(() => {
+          const batch = session.patchQueue;
+          session.patchQueue = [];
+          session.patchTimeout = null;
+          batch.forEach(line => processLine(session, line));
+        }, PACKET_PATCH_MS);
       });
 
       session.mudSocket.on('close', () => {
@@ -2693,7 +2722,12 @@ function connectToMud(session) {
 
     if (hasGA) {
       session.lineBuffer = '';
-      parts.forEach(line => processLine(session, line));
+      // GA = MUD says "done" — flush any pending batch + current lines immediately
+      if (session.patchTimeout) clearTimeout(session.patchTimeout);
+      const pending = session.patchQueue || [];
+      session.patchQueue = [];
+      session.patchTimeout = null;
+      [...pending, ...parts].forEach(line => processLine(session, line));
       return;
     }
 
@@ -2720,7 +2754,16 @@ function connectToMud(session) {
       session.lineBuffer = '';
     }
 
-    parts.forEach(line => processLine(session, line));
+    // Queue complete lines for batch processing (catches TCP splits)
+    if (!session.patchQueue) session.patchQueue = [];
+    session.patchQueue.push(...parts);
+    if (session.patchTimeout) clearTimeout(session.patchTimeout);
+    session.patchTimeout = setTimeout(() => {
+      const batch = session.patchQueue;
+      session.patchQueue = [];
+      session.patchTimeout = null;
+      batch.forEach(line => processLine(session, line));
+    }, PACKET_PATCH_MS);
   });
 
   session.mudSocket.on('close', () => {
