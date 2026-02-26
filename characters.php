@@ -58,6 +58,8 @@ if (in_array($username, $ADMIN_USERS)) {
                 $userData['character_data'][$charId] = [
                     'triggers' => loadJsonFile($charDir . '/triggers.json'),
                     'aliases' => loadJsonFile($charDir . '/aliases.json'),
+                    'classes' => loadJsonFile($charDir . '/classes.json'),
+                    'tickers' => loadJsonFile($charDir . '/tickers.json'),
                     'preferences' => loadJsonFile($charDir . '/preferences.json')
                 ];
             }
