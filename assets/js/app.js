@@ -5433,7 +5433,7 @@ class WMTClient {
             debugIf: document.getElementById('pref-debug-if')?.checked ?? this.preferences.debugIf ?? false,
             notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
             notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30,
-            startupScript: document.getElementById('pref-startup-script')?.value || '',
+            startupScript: document.getElementById('pref-startup-script')?.value || this.preferences.startupScript || '',
             packetPatch: this.preferences.packetPatch ?? 0.25
         };
 
