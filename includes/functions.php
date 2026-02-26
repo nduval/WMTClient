@@ -45,6 +45,7 @@ function sanitize(string $input): string {
 function jsonResponse(array $data, int $statusCode = 200): void {
     http_response_code($statusCode);
     header('Content-Type: application/json');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
     echo json_encode($data);
     exit;
 }
