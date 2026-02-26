@@ -311,6 +311,42 @@ function initializeUserData(string $userId, string $username, string $passwordHa
 }
 
 /**
+ * Character index — global lookup table at data/character_index.json
+ * Maps every character to its userId for quick admin/debug lookups.
+ * Auto-maintained by create/rename/delete operations.
+ */
+function getCharacterIndexPath(): string {
+    return DATA_PATH . '/character_index.json';
+}
+
+function updateCharacterIndex(string $userId, string $characterId, string $characterName, string $server = '3k'): void {
+    $indexPath = getCharacterIndexPath();
+    $index = loadJsonFile($indexPath);
+    // Remove any existing entry for this charId
+    $index = array_filter($index, function($e) use ($characterId) {
+        return $e['characterId'] !== $characterId;
+    });
+    // Add updated entry
+    $index[] = [
+        'userId' => $userId,
+        'characterId' => $characterId,
+        'name' => $characterName,
+        'server' => $server,
+        'updatedAt' => date('c')
+    ];
+    saveJsonFile($indexPath, array_values($index));
+}
+
+function removeFromCharacterIndex(string $characterId): void {
+    $indexPath = getCharacterIndexPath();
+    $index = loadJsonFile($indexPath);
+    $index = array_filter($index, function($e) use ($characterId) {
+        return $e['characterId'] !== $characterId;
+    });
+    saveJsonFile($indexPath, array_values($index));
+}
+
+/**
  * Create a new character for a user
  */
 function createCharacter(string $userId, string $characterName, string $server = '3k'): array {
@@ -348,6 +384,9 @@ function createCharacter(string $userId, string $characterName, string $server =
         'keepAlive' => true,
         'keepAliveInterval' => 60
     ]);
+
+    // Update global character index
+    updateCharacterIndex($userId, $characterId, $characterName, $server);
 
     return $character;
 }
@@ -431,6 +470,9 @@ function deleteCharacter(string $userId, string $characterId): bool {
         rmdir($charPath);
     }
 
+    // Remove from global character index
+    removeFromCharacterIndex($characterId);
+
     return true;
 }
 
@@ -440,10 +482,12 @@ function deleteCharacter(string $userId, string $characterId): bool {
 function renameCharacter(string $userId, string $characterId, string $newName): bool {
     $characters = getCharacters($userId);
     $found = false;
+    $server = '3k';
 
     foreach ($characters as &$char) {
         if ($char['id'] === $characterId) {
             $char['name'] = $newName;
+            $server = $char['server'] ?? '3k';
             $found = true;
             break;
         }
@@ -453,7 +497,14 @@ function renameCharacter(string $userId, string $characterId, string $newName): 
         return false;
     }
 
-    return saveJsonFile(getCharactersListPath($userId), $characters);
+    $result = saveJsonFile(getCharactersListPath($userId), $characters);
+
+    // Update global character index with new name
+    if ($result) {
+        updateCharacterIndex($userId, $characterId, $newName, $server);
+    }
+
+    return $result;
 }
 
 /**
