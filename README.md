@@ -2,7 +2,7 @@
 
 A web-based MUD client for 3k.org built with PHP and WebSockets.
 
-**Live URL**: https://client.wemudtogether.com/client/
+**Live URL**: https://client.wemudtogether.com/
 
 ## Features
 
@@ -76,7 +76,7 @@ screen -dmS wmt php websocket/server.php
 
 ### Step 6: Test
 
-Visit: https://client.wemudtogether.com/client/
+Visit: https://client.wemudtogether.com/
 
 ## Alternative WebSocket Hosting
 
