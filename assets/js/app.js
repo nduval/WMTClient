@@ -6031,7 +6031,7 @@ class WMTClient {
         const modal = document.getElementById('copy-from-char-modal');
         if (!modal) return;
 
-        modal.classList.add('active');
+        modal.classList.add('open');
 
         // Fetch character list
         const select = document.getElementById('copy-source-char');
@@ -6066,7 +6066,7 @@ class WMTClient {
 
     closeCopyFromCharModal() {
         const modal = document.getElementById('copy-from-char-modal');
-        if (modal) modal.classList.remove('active');
+        if (modal) modal.classList.remove('open');
     }
 
     async executeCopyFromCharacter() {
