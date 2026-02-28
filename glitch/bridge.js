@@ -9,6 +9,7 @@
  *   { type: 'data', token, data }           — Send data to MUD (base64-encoded)
  *   { type: 'resume', token }               — Re-attach to existing MUD connection
  *   { type: 'destroy', token }              — Close MUD connection
+ *   { type: 'rekey', oldToken, newToken }   — Remap connection to new token
  *
  * Protocol (bridge → server.js):
  *   { type: 'connected', token }            — MUD TCP connected
@@ -77,17 +78,17 @@ wss.on('connection', (ws) => {
         mudConnections.set(token, entry);
 
         socket.connect(port, host, () => {
-          console.log(`[bridge] MUD connected: ${host}:${port} (${token.substring(0, 8)})`);
+          console.log(`[bridge] MUD connected: ${host}:${port} (${entry.token.substring(0, 8)})`);
           entry.connected = true;
-          sendToServer(entry, { type: 'connected', token });
+          sendToServer(entry, { type: 'connected', token: entry.token });
         });
 
         socket.on('data', (data) => {
           if (entry.serverWs && entry.serverWs.readyState === WebSocket.OPEN) {
-            // Relay directly to server.js
+            // Relay directly to server.js (use entry.token — may have been rekeyed)
             sendToServer(entry, {
               type: 'data',
-              token,
+              token: entry.token,
               data: data.toString('base64')
             });
           } else {
@@ -101,20 +102,20 @@ wss.on('connection', (ws) => {
         });
 
         socket.on('close', () => {
-          console.log(`[bridge] MUD closed (${token.substring(0, 8)})`);
+          console.log(`[bridge] MUD closed (${entry.token.substring(0, 8)})`);
           entry.connected = false;
-          sendToServer(entry, { type: 'close', token });
-          mudConnections.delete(token);
+          sendToServer(entry, { type: 'close', token: entry.token });
+          mudConnections.delete(entry.token);
         });
 
         socket.on('error', (err) => {
-          console.log(`[bridge] MUD error (${token.substring(0, 8)}): ${err.message}`);
-          sendToServer(entry, { type: 'error', token, message: err.message });
+          console.log(`[bridge] MUD error (${entry.token.substring(0, 8)}): ${err.message}`);
+          sendToServer(entry, { type: 'error', token: entry.token, message: err.message });
         });
 
         socket.on('end', () => {
-          console.log(`[bridge] MUD end (${token.substring(0, 8)})`);
-          sendToServer(entry, { type: 'end', token });
+          console.log(`[bridge] MUD end (${entry.token.substring(0, 8)})`);
+          sendToServer(entry, { type: 'end', token: entry.token });
         });
 
         break;
@@ -162,6 +163,22 @@ wss.on('connection', (ws) => {
         // Confirm connection is still alive
         if (entry.connected) {
           safeSend(ws, JSON.stringify({ type: 'connected', token }));
+        }
+        break;
+      }
+
+      case 'rekey': {
+        // Remap connection from old token to new token (after session rekey)
+        const oldToken = msg.oldToken;
+        const newToken = msg.newToken;
+        if (oldToken && newToken) {
+          const entry = mudConnections.get(oldToken);
+          if (entry) {
+            mudConnections.delete(oldToken);
+            entry.token = newToken;
+            mudConnections.set(newToken, entry);
+            console.log(`[bridge] Rekeyed (${oldToken.substring(0, 8)} -> ${newToken.substring(0, 8)})`);
+          }
         }
         break;
       }

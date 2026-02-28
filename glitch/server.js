@@ -561,6 +561,9 @@ async function persistAllSessions() {
         characterName: session.characterName,
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
         token: token,
+        // Save bridge token separately — may differ from session token if
+        // the old bridge.js hasn't processed a rekey message yet
+        bridgeToken: (session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined,
         isWizard: session.isWizard || false,
         persistedAt: Date.now(),
         chatBuffer: session.chatBuffer || []
@@ -1092,7 +1095,10 @@ async function restorePersistentSessions() {
     if (BRIDGE_URL) {
       // Bridge mode: resume existing TCP connection (no re-login needed!)
       // The bridge held the MUD connection while we restarted.
-      session.mudSocket = new BridgeSocket(ps.token);
+      // Use bridgeToken if available — session token may have been rekeyed
+      // but bridge still knows the connection by the original token
+      const bridgeResumeToken = ps.bridgeToken || ps.token;
+      session.mudSocket = new BridgeSocket(bridgeResumeToken);
 
       // Set up normal data handler
       session.lineBuffer = '';
@@ -2909,6 +2915,18 @@ wss.on('connection', (ws, req) => {
               sessions.set(token, oldSession);
               userCharacterSessions.set(userCharKey, token);
               session = oldSession;
+
+              // Update BridgeSocket token so bridge stays in sync
+              if (oldSession.mudSocket && oldSession.mudSocket instanceof BridgeSocket) {
+                const oldBridgeToken = oldSession.mudSocket.token;
+                bridgeSockets.delete(oldBridgeToken);
+                oldSession.mudSocket.token = token;
+                bridgeSockets.set(token, oldSession.mudSocket);
+                // Notify bridge.js to remap its internal connection mapping
+                if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+                  bridgeWs.send(JSON.stringify({ type: 'rekey', oldToken: oldBridgeToken, newToken: token }));
+                }
+              }
 
               logSessionEvent('SESSION_RESUME', {
                 token: token.substring(0, 8),
