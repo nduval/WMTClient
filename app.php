@@ -342,6 +342,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-secondary" id="trigger-duplicate-btn" onclick="wmtClient.duplicateTrigger()" style="display:none;margin-right:auto;">Duplicate</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveTrigger()">Save</button>
             </div>

@@ -4172,7 +4172,33 @@ class WMTClient {
             this.addTriggerAction();
         }
 
+        // Show duplicate button only when editing an existing trigger
+        const dupBtn = document.getElementById('trigger-duplicate-btn');
+        if (dupBtn) dupBtn.style.display = index !== null ? '' : 'none';
+
         modal.classList.add('open');
+    }
+
+    duplicateTrigger() {
+        // Read current trigger being edited
+        const source = this.editingItem !== null ? this.triggers[this.editingItem] : null;
+        if (!source) return;
+
+        // Deep clone and give new ID
+        const clone = JSON.parse(JSON.stringify(source));
+        clone.id = this.generateId();
+        clone.name = (clone.name || clone.pattern) + ' (copy)';
+
+        // Add to triggers list
+        this.triggers.push(clone);
+        this.saveTriggers();
+        this.renderScriptsSidebar();
+
+        // Open the clone for editing
+        const newIndex = this.triggers.length - 1;
+        this.closeModal();
+        this.openTriggerModal(newIndex);
+        this.appendOutput(`Trigger duplicated: ${clone.name}`, 'system');
     }
 
     addTriggerAction(action = null) {
@@ -4248,10 +4274,7 @@ class WMTClient {
             <div class="action-fields">
                 ${buildInputFields(actionType, value, webhookUrl, discordMessage, chatmonMessage, fgColor, bgColor, soundType)}
             </div>
-            <div class="action-buttons">
-                <button type="button" class="btn btn-sm btn-secondary duplicate-action" title="Duplicate">⧉</button>
-                <button type="button" class="btn btn-sm btn-danger remove-action" title="Remove">X</button>
-            </div>
+            <button type="button" class="btn btn-sm btn-danger remove-action" title="Remove">X</button>
         `;
 
         // Switch between input types based on action type
@@ -4298,36 +4321,7 @@ class WMTClient {
         });
 
         div.querySelector('.remove-action').addEventListener('click', () => div.remove());
-        div.querySelector('.duplicate-action').addEventListener('click', () => {
-            const actionData = this._readActionFromRow(div);
-            this.addTriggerAction(actionData);
-        });
         container.appendChild(div);
-    }
-
-    _readActionFromRow(item) {
-        const type = item.querySelector('.action-type').value;
-        const action = { type };
-        if (type === 'command') {
-            action.command = item.querySelector('.action-value')?.value || '';
-        } else if (type === 'discord') {
-            action.webhookUrl = item.querySelector('.action-webhook')?.value || '';
-            action.message = item.querySelector('.action-message')?.value || '';
-        } else if (type === 'chatmon') {
-            action.message = item.querySelector('.action-chatmon-msg')?.value || '';
-        } else if (type === 'highlight') {
-            action.fgColor = item.querySelector('.action-fg-color')?.value || '#ffff00';
-            if (item.querySelector('.action-bg-enabled')?.checked) {
-                action.bgColor = item.querySelector('.action-bg-color')?.value || '#000000';
-            }
-            if (item.querySelector('.action-hl-blink')?.checked) action.blink = true;
-            if (item.querySelector('.action-hl-underline')?.checked) action.underline = true;
-        } else if (type === 'substitute') {
-            action.replacement = item.querySelector('.action-value')?.value || '';
-        } else if (type === 'sound') {
-            action.sound = item.querySelector('.action-sound')?.value || 'classic';
-        }
-        return action;
     }
 
     /**
