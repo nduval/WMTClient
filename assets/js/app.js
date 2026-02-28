@@ -999,6 +999,14 @@ class WMTClient {
                 this.updateConnectionStatus('disconnected');
                 break;
 
+            case 'quit_detected':
+                // User typed 'quit' in MUD — suppress auto-reconnect
+                if (this.connection) {
+                    this.connection.intentionalDisconnect = true;
+                    this.connection.reconnectAttempts = this.connection.maxReconnectAttempts;
+                }
+                break;
+
             case 'broadcast':
                 // Admin broadcast message - display prominently in terminal
                 this.appendOutput('', 'system');

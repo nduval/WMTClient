@@ -3235,6 +3235,12 @@ wss.on('connection', (ws, req) => {
                   // Forward to client for #delay, #showme, etc.
                   sendToClient(session, { type: 'client_command', command: ec });
                 } else {
+                  // Detect 'quit' command — flag as intentional disconnect so
+                  // client doesn't auto-reconnect after MUD closes connection
+                  if (ec.trim().toLowerCase() === 'quit') {
+                    session.explicitDisconnect = true;
+                    sendToClient(session, { type: 'quit_detected' });
+                  }
                   session.mudSocket.write(processEscapes(ec) + '\r\n');
                 }
                 return 'ok';
