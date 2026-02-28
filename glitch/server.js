@@ -2936,6 +2936,8 @@ wss.on('connection', (ws, req) => {
               oldSession.disconnectedAt = null;
               oldSession.explicitDisconnect = false;
               oldSession.isWizard = isWizard;
+              oldSession._bridgeModeInit = false;  // Clear stale flag
+              oldSession._pendingBridgeResume = false;
               if (oldSession.timeoutHandle) {
                 clearTimeout(oldSession.timeoutHandle);
                 oldSession.timeoutHandle = null;
@@ -3040,6 +3042,8 @@ wss.on('connection', (ws, req) => {
             session.disconnectedAt = null;
             session.explicitDisconnect = false;
             session.isWizard = isWizard;  // Update wizard status on reconnect
+            session._bridgeModeInit = false;  // Clear stale flag — prevents duplicate session_new
+            session._pendingBridgeResume = false;
             if (session.timeoutHandle) {
               clearTimeout(session.timeoutHandle);
               session.timeoutHandle = null;

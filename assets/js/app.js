@@ -854,12 +854,24 @@ class WMTClient {
                 this.cmdRead([this.preferences.startupScript]);
             }
         } else {
-            // MUD disconnected while we were away - always show this, it's important
+            // MUD disconnected while we were away — reconnect without full onConnect().
+            // onConnect() blindly sends character name on a 1500ms timer which causes
+            // double-send issues. Instead, use pendingReconnect which waits for the
+            // "Connected to" message (meaning MUD TCP is actually ready).
             this.appendOutput('Session resumed - MUD was disconnected.', 'system');
-            // MUD connection closed while we were away, treat like fresh connect
-            // Clear pendingReconnect so the duplicate name-send path in onMessage doesn't fire
-            this.pendingReconnect = false;
-            this.onConnect();
+            this.appendOutput('Reconnecting to MUD...', 'system');
+            this.passwordSent = false;
+            this.mipStarted = false;
+            this.pendingReconnect = true;
+            this.connection.setServer(
+                window.WMT_CONFIG.mudHost || '3k.org',
+                window.WMT_CONFIG.mudPort || 3000
+            );
+            this.sendFilteredTriggersAndAliases();
+            // Re-run startup script (client-side state lost on reload)
+            if (this.preferences.startupScript) {
+                this.cmdRead([this.preferences.startupScript]);
+            }
         }
     }
 
