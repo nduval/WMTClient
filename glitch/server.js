@@ -3017,7 +3017,13 @@ wss.on('connection', (ws, req) => {
               session.timeoutHandle = null;
             }
 
-            const mudConnected = session.mudSocket && !session.mudSocket.destroyed && session.mudSocket.writable;
+            // Match disconnect check (line 3539): !destroyed only, no .writable
+            // BridgeSocket.writable starts false until bridge responds, but the
+            // connection IS alive if the socket exists and isn't destroyed.
+            const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
+            if (mudConnected && !session.mudSocket.writable) {
+              console.log(`[bridge] Resume: mudSocket exists but writable=false for ${token.substring(0, 8)} — reporting connected anyway`);
+            }
             const disconnectDuration = session.disconnectedAt ? Math.round((Date.now() - session.disconnectedAt) / 1000) : 0;
             logSessionEvent('SESSION_RESUME', {
               token: token.substring(0, 8),
@@ -3408,7 +3414,7 @@ wss.on('connection', (ws, req) => {
               // to prevent MUD data flowing before gags/triggers are loaded.
               if (BRIDGE_URL && session._pendingBridgeResume) {
                 // Will be called from set_triggers handler
-              } else if (BRIDGE_URL && session.mudSocket && !session.mudSocket.destroyed) {
+              } else if (BRIDGE_URL && session.mudSocket && !session.mudSocket.destroyed && session.mudSocket.writable) {
                 // Already connected via bridge resume — skip
               } else {
                 connectToMud(session);
