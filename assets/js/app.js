@@ -6098,7 +6098,7 @@ class WMTClient {
                     if (cls.aliases > 0) parts.push(`${cls.aliases} alias`);
                     if (cls.tickers > 0) parts.push(`${cls.tickers} tick`);
                     const desc = parts.length > 0 ? ` (${parts.join(', ')})` : ' (empty)';
-                    classHtml += `<label class="checkbox-label" style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;"><input type="checkbox" class="copy-class-cb" value="${this.escapeHtml(cls.id)}" checked> ${this.escapeHtml(cls.name)}${desc}</label>`;
+                    classHtml += `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;font-size:0.9em;"><input type="checkbox" class="copy-class-cb" value="${this.escapeHtml(cls.id)}" style="width:auto;flex-shrink:0;" checked> ${this.escapeHtml(cls.name)}${desc}</label>`;
                 });
             }
 
@@ -6110,7 +6110,7 @@ class WMTClient {
                 if (u.triggers > 0) uParts.push(`${u.triggers} trig`);
                 if (u.aliases > 0) uParts.push(`${u.aliases} alias`);
                 if (u.tickers > 0) uParts.push(`${u.tickers} tick`);
-                classHtml += `<label class="checkbox-label" style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;"><input type="checkbox" id="copy-unassigned-cb" checked> <em>Unassigned</em> (${uParts.join(', ')})</label>`;
+                classHtml += `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;font-size:0.9em;"><input type="checkbox" id="copy-unassigned-cb" style="width:auto;flex-shrink:0;" checked> <em>Unassigned</em> (${uParts.join(', ')})</label>`;
             }
 
             if (!classHtml) {
@@ -6124,7 +6124,7 @@ class WMTClient {
             if (data.scripts && data.scripts.length > 0) {
                 data.scripts.forEach(s => {
                     const size = this.formatFileSize(s.size);
-                    scriptHtml += `<label class="checkbox-label" style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;"><input type="checkbox" class="copy-script-cb" value="${this.escapeHtml(s.name)}" checked> ${this.escapeHtml(s.name)} <span style="color:#666;">(${size})</span></label>`;
+                    scriptHtml += `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;font-size:0.9em;"><input type="checkbox" class="copy-script-cb" value="${this.escapeHtml(s.name)}" style="width:auto;flex-shrink:0;" checked> ${this.escapeHtml(s.name)} <span style="color:#666;">(${size})</span></label>`;
                 });
             } else {
                 scriptHtml = '<div style="color:#666;padding:4px;">(no scripts)</div>';
