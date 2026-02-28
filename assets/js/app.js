@@ -6131,9 +6131,14 @@ class WMTClient {
             }
             scriptList.innerHTML = scriptHtml;
 
-            // Show/hide script collision options based on script checkboxes
-            this._updateScriptCollisionVisibility();
-            scriptList.addEventListener('change', () => this._updateScriptCollisionVisibility());
+            // Wire up segmented control toggle
+            document.querySelectorAll('.copy-mode-opt').forEach(opt => {
+                opt.addEventListener('click', () => {
+                    document.querySelectorAll('.copy-mode-opt').forEach(o => o.classList.remove('selected'));
+                    opt.classList.add('selected');
+                    opt.querySelector('input').checked = true;
+                });
+            });
 
             // Show step 2, hide step 1
             document.getElementById('copy-step-1').style.display = 'none';
@@ -6144,12 +6149,6 @@ class WMTClient {
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = 'Load'; }
         }
-    }
-
-    _updateScriptCollisionVisibility() {
-        const anyScriptsChecked = document.querySelectorAll('.copy-script-cb:checked').length > 0;
-        const group = document.getElementById('copy-script-collision-group');
-        if (group) group.style.display = anyScriptsChecked ? '' : 'none';
     }
 
     copyStepBack() {
@@ -6164,7 +6163,6 @@ class WMTClient {
             document.querySelectorAll('#copy-classes-list input[type="checkbox"]').forEach(cb => cb.checked = checked);
         } else {
             document.querySelectorAll('#copy-scripts-list input[type="checkbox"]').forEach(cb => cb.checked = checked);
-            this._updateScriptCollisionVisibility();
         }
     }
 
@@ -6208,12 +6206,14 @@ class WMTClient {
             return;
         }
 
-        const mode = document.getElementById('copy-mode-replace')?.checked ? 'replace' : 'merge';
-        const scriptCollision = document.querySelector('input[name="copy-script-collision"]:checked')?.value || 'skip';
+        // Map unified mode to trigger mode + script collision
+        const copyMode = document.querySelector('input[name="copy-mode"]:checked')?.value || 'skip';
+        const mode = copyMode === 'overwrite' ? 'replace' : 'merge';
+        const scriptCollision = copyMode === 'keep_both' ? 'rename' : copyMode; // skip or overwrite
 
         if (mode === 'replace' && include.length > 0) {
             const sourceName = document.getElementById('copy-source-name')?.textContent || 'source';
-            if (!confirm(`Replace mode will OVERWRITE your current ${include.join(', ')} for the selected classes with data from ${sourceName}. Continue?`)) {
+            if (!confirm(`Overwrite mode will REPLACE your current ${include.join(', ')} for the selected classes with data from ${sourceName}. Continue?`)) {
                 return;
             }
         }

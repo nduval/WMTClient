@@ -718,21 +718,13 @@ setcookie($tokenCookieName, $wsToken, [
                         <div id="copy-scripts-list" style="max-height:150px;overflow-y:auto;background:#111;border-radius:4px;padding:6px;"></div>
                     </div>
 
-                    <!-- Options -->
+                    <!-- Duplicate handling -->
                     <div class="form-group">
-                        <label>Mode (triggers/aliases/tickers)</label>
-                        <div style="display:flex;gap:15px;">
-                            <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-merge" checked> Merge (skip duplicates)</label>
-                            <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-replace"> Replace (overwrite)</label>
-                        </div>
-                    </div>
-
-                    <div class="form-group" id="copy-script-collision-group" style="display:none;">
-                        <label>Script file collisions</label>
-                        <div style="display:flex;gap:15px;flex-wrap:wrap;">
-                            <label class="checkbox-label"><input type="radio" name="copy-script-collision" value="skip" checked> Skip</label>
-                            <label class="checkbox-label"><input type="radio" name="copy-script-collision" value="overwrite"> Overwrite</label>
-                            <label class="checkbox-label"><input type="radio" name="copy-script-collision" value="rename"> Rename (-copy)</label>
+                        <label>If duplicates exist</label>
+                        <div class="copy-mode-group">
+                            <label class="copy-mode-opt selected"><input type="radio" name="copy-mode" value="skip" checked> Skip</label>
+                            <label class="copy-mode-opt"><input type="radio" name="copy-mode" value="overwrite"> Overwrite</label>
+                            <label class="copy-mode-opt"><input type="radio" name="copy-mode" value="keep_both"> Keep Both</label>
                         </div>
                     </div>
 
