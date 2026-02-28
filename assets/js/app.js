@@ -1007,6 +1007,19 @@ class WMTClient {
                 }
                 break;
 
+            case 'mud_reconnect':
+                // Bridge came back after restart — re-establish MUD connection
+                this.appendOutput('Reconnecting to MUD...', 'system');
+                this.passwordSent = false;
+                this.mipStarted = false;
+                this.pendingReconnect = true; // Sends character name when "Connected to" arrives
+                this.connection.setServer(
+                    window.WMT_CONFIG.mudHost || '3k.org',
+                    window.WMT_CONFIG.mudPort || 3000
+                );
+                this.sendFilteredTriggersAndAliases();
+                break;
+
             case 'broadcast':
                 // Admin broadcast message - display prominently in terminal
                 this.appendOutput('', 'system');

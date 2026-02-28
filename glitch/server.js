@@ -177,6 +177,19 @@ function connectToBridge() {
       clearTimeout(bridgeReconnectTimer);
       bridgeReconnectTimer = null;
     }
+
+    // After bridge reconnect, tell connected browsers to re-establish MUD connections.
+    // Sessions lost their mudSocket when bridge dropped (close handler above).
+    let reconnectCount = 0;
+    for (const [token, session] of sessions) {
+      if (session.ws && session.ws.readyState === WebSocket.OPEN && !session.mudSocket && session.targetHost) {
+        reconnectCount++;
+        sendToClient(session, { type: 'mud_reconnect' });
+      }
+    }
+    if (reconnectCount > 0) {
+      console.log(`[bridge] Sent mud_reconnect to ${reconnectCount} connected browser(s)`);
+    }
   });
 
   bridgeWs.on('message', (raw) => {
@@ -189,6 +202,21 @@ function connectToBridge() {
   bridgeWs.on('close', () => {
     console.log('[bridge] Disconnected from bridge — reconnecting in 2s');
     bridgeWs = null;
+
+    // Properly close all BridgeSockets so sessions know MUD is gone.
+    // Without this, BridgeSockets become zombies (writable=true but can't write).
+    const affectedTokens = [];
+    for (const [token, bs] of bridgeSockets) {
+      affectedTokens.push(token.substring(0, 8));
+      bs.destroyed = true;
+      bs.writable = false;
+      bs.emit('close');
+    }
+    bridgeSockets.clear();
+    if (affectedTokens.length > 0) {
+      console.log(`[bridge] Closed ${affectedTokens.length} BridgeSockets: ${affectedTokens.join(', ')}`);
+    }
+
     bridgeReconnectTimer = setTimeout(connectToBridge, 2000);
   });
 
