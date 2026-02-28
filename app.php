@@ -666,6 +666,46 @@ setcookie($tokenCookieName, $wsToken, [
         </div>
     </div>
 
+    <!-- Copy from Character Modal -->
+    <div class="modal-overlay" id="copy-from-char-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Copy from Character</h3>
+                <button class="panel-close" onclick="wmtClient.closeCopyFromCharModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="copy-source-char">Source Character</label>
+                    <select id="copy-source-char" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>What to Copy</label>
+                    <div class="export-options">
+                        <label class="checkbox-label"><input type="checkbox" id="copy-triggers" checked> Triggers</label>
+                        <label class="checkbox-label"><input type="checkbox" id="copy-aliases" checked> Aliases</label>
+                        <label class="checkbox-label"><input type="checkbox" id="copy-tickers" checked> Tickers</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Mode</label>
+                    <div style="display:flex;gap:15px;">
+                        <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-merge" checked> Merge (skip duplicates)</label>
+                        <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-replace"> Replace (overwrite)</label>
+                    </div>
+                </div>
+                <div class="help-text" style="font-size:0.85em;color:#888;padding:10px;background:#111;border-radius:4px;">
+                    Classes are matched by name. If the source has a class that doesn't exist here, it will be created automatically.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="wmtClient.closeCopyFromCharModal()">Cancel</button>
+                <button class="btn btn-primary" id="copy-from-char-execute-btn" onclick="wmtClient.executeCopyFromCharacter()">Copy</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Script Editor Modal -->
     <div class="modal-overlay" id="script-editor-modal">
         <div class="modal" style="width:90%;max-width:700px">

@@ -5227,6 +5227,16 @@ class WMTClient {
             </div>
 
             <div class="settings-section">
+                <h4>Copy from Character</h4>
+                <p style="color:#999;font-size:12px;margin:0 0 8px">
+                    Copy triggers, aliases, or tickers from another character. Classes are matched by name or auto-created.
+                </p>
+                <button class="btn btn-secondary" id="copy-from-char-btn" style="width:100%">
+                    Copy from Another Character
+                </button>
+            </div>
+
+            <div class="settings-section">
                 <h4>Script Files</h4>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; color: #ccc;">Startup Script (runs on connect)</label>
@@ -5368,6 +5378,11 @@ class WMTClient {
             if (e.target.files.length) {
                 this.importSettings(e.target.files[0]);
             }
+        });
+
+        // Copy from character
+        document.getElementById('copy-from-char-btn')?.addEventListener('click', () => {
+            this.openCopyFromCharModal();
         });
 
         // Script file upload from settings panel
@@ -5515,6 +5530,11 @@ class WMTClient {
 
         if (exportPrefs) {
             data.preferences = this.preferences;
+        }
+
+        // Include classes when exporting triggers or aliases (for correct class mapping on import)
+        if ((data.triggers || data.aliases) && this.classes.length > 0) {
+            data.classes = this.classes;
         }
 
         // Check if anything to export
@@ -5972,35 +5992,148 @@ class WMTClient {
             const confirmMsg = 'Import settings? This will replace your current triggers, aliases, and preferences.';
             if (!confirm(confirmMsg)) return;
 
-            if (data.triggers) {
-                this.triggers = data.triggers;
-                await this.saveTriggers();
+            // Use server-side import which handles class mapping
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const res = await fetch('api/export.php?action=import&mode=replace', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await res.json();
+            if (!result.success) {
+                throw new Error(result.error || 'Import failed');
             }
 
-            if (data.aliases) {
-                this.aliases = data.aliases;
-                await this.saveAliases();
-            }
-
-            if (data.preferences) {
-                this.preferences = data.preferences;
-                const res = await fetch('api/preferences.php?action=save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ preferences: this.preferences })
-                });
-                if (!res.ok) {
-                    this.appendOutput(`Failed to save imported preferences (${res.status}) — your session may have expired.`, 'error');
-                    return;
-                }
-                this.applyPreferences();
-            }
+            // Reload all data from server to pick up class-remapped items
+            await this.loadSettings();
+            this.applyPreferences();
+            this.sendFilteredTriggersAndAliases();
 
             if (this.currentPanel === 'settings') this.loadPanelContent('settings');
             this.renderScriptsSidebar();
-            this.appendOutput('Settings imported successfully.', 'system');
+
+            const parts = result.imported || [];
+            let msg = `Settings imported successfully (${parts.join(', ')})`;
+            if (result.classesCreated > 0) msg += ` — ${result.classesCreated} classes created`;
+            this.appendOutput(msg, 'system');
         } catch (e) {
             alert('Failed to import settings: ' + e.message);
+        }
+    }
+
+    // ==========================================
+    // Copy from Character
+    // ==========================================
+
+    async openCopyFromCharModal() {
+        const modal = document.getElementById('copy-from-char-modal');
+        if (!modal) return;
+
+        modal.classList.add('active');
+
+        // Fetch character list
+        const select = document.getElementById('copy-source-char');
+        select.innerHTML = '<option value="">Loading...</option>';
+
+        try {
+            const res = await fetch('api/characters.php?action=list');
+            const data = await res.json();
+
+            if (!data.success || !data.characters) {
+                select.innerHTML = '<option value="">Failed to load characters</option>';
+                return;
+            }
+
+            // Filter out current character
+            const currentId = window.WMT_CONFIG.characterId;
+            const others = data.characters.filter(c => c.id !== currentId);
+
+            if (others.length === 0) {
+                select.innerHTML = '<option value="">No other characters</option>';
+                return;
+            }
+
+            select.innerHTML = others.map(c => {
+                const server = c.server === '3s' ? ' (3S)' : '';
+                return `<option value="${this.escapeHtml(c.id)}">${this.escapeHtml(c.name)}${server}</option>`;
+            }).join('');
+        } catch (e) {
+            select.innerHTML = '<option value="">Error loading characters</option>';
+        }
+    }
+
+    closeCopyFromCharModal() {
+        const modal = document.getElementById('copy-from-char-modal');
+        if (modal) modal.classList.remove('active');
+    }
+
+    async executeCopyFromCharacter() {
+        const sourceId = document.getElementById('copy-source-char')?.value;
+        if (!sourceId) {
+            alert('Please select a source character');
+            return;
+        }
+
+        const include = [];
+        if (document.getElementById('copy-triggers')?.checked) include.push('triggers');
+        if (document.getElementById('copy-aliases')?.checked) include.push('aliases');
+        if (document.getElementById('copy-tickers')?.checked) include.push('tickers');
+
+        if (include.length === 0) {
+            alert('Please select at least one type to copy');
+            return;
+        }
+
+        const mode = document.getElementById('copy-mode-replace')?.checked ? 'replace' : 'merge';
+
+        if (mode === 'replace') {
+            const sourceName = document.getElementById('copy-source-char')?.selectedOptions[0]?.text || 'source';
+            if (!confirm(`Replace mode will OVERWRITE your current ${include.join(', ')} with data from ${sourceName}. Continue?`)) {
+                return;
+            }
+        }
+
+        const btn = document.getElementById('copy-from-char-execute-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Copying...'; }
+
+        try {
+            const res = await fetch('api/export.php?action=copy_from', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_character_id: sourceId,
+                    include: include,
+                    mode: mode
+                })
+            });
+
+            const data = await res.json();
+
+            if (!data.success) {
+                throw new Error(data.error || 'Copy failed');
+            }
+
+            // Reload all data
+            await this.loadSettings();
+            this.sendFilteredTriggersAndAliases();
+            this.renderScriptsSidebar();
+
+            // Show summary
+            const s = data.summary || {};
+            const parts = [];
+            if (s.triggers !== undefined) parts.push(`${s.triggers} triggers`);
+            if (s.aliases !== undefined) parts.push(`${s.aliases} aliases`);
+            if (s.tickers !== undefined) parts.push(`${s.tickers} tickers`);
+            if (s.classesCreated > 0) parts.push(`${s.classesCreated} classes created`);
+
+            this.appendOutput(`Copy complete (${mode}): ${parts.join(', ')}`, 'system');
+            this.closeCopyFromCharModal();
+        } catch (e) {
+            alert('Copy failed: ' + e.message);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Copy'; }
         }
     }
 
