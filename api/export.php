@@ -23,6 +23,38 @@ if (!$characterId) {
 
 $action = $_GET['action'] ?? '';
 
+/**
+ * List script files recursively, returning relative paths with sizes (for preview)
+ */
+function listSourceScripts($basePath, $currentPath = '') {
+    $scripts = [];
+    $fullPath = $currentPath ? $basePath . '/' . $currentPath : $basePath;
+
+    if (!is_dir($fullPath)) return $scripts;
+
+    $entries = scandir($fullPath);
+    foreach ($entries as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+
+        $entryFullPath = $fullPath . '/' . $entry;
+        $relativePath = $currentPath ? $currentPath . '/' . $entry : $entry;
+
+        if (is_dir($entryFullPath)) {
+            $scripts = array_merge($scripts, listSourceScripts($basePath, $relativePath));
+        } else {
+            $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
+            if (in_array($ext, ['txt', 'tin'])) {
+                $scripts[] = [
+                    'name' => $relativePath,
+                    'size' => filesize($entryFullPath)
+                ];
+            }
+        }
+    }
+
+    return $scripts;
+}
+
 switch ($action) {
     case 'export':
         $include = $_GET['include'] ?? 'all';
@@ -268,6 +300,73 @@ switch ($action) {
         successResponse($summary);
         break;
 
+    case 'preview_source':
+        // GET: Returns summary of source character's classes, item counts, and scripts
+        $sourceCharId = $_GET['source_id'] ?? '';
+        if (empty($sourceCharId)) {
+            errorResponse('Source character ID is required');
+        }
+
+        // Validate source character belongs to same user
+        $sourceChar = getCharacter($userId, $sourceCharId);
+        if (!$sourceChar) {
+            errorResponse('Source character not found', 404);
+        }
+
+        // Load source data
+        $sourceClasses = loadJsonFile(getCharacterDataPath($userId, $sourceCharId) . '/classes.json');
+        $sourceTriggers = loadJsonFile(getTriggersPath($userId, $sourceCharId));
+        $sourceAliases = loadJsonFile(getAliasesPath($userId, $sourceCharId));
+        $sourceTickers = loadJsonFile(getTickersPath($userId, $sourceCharId));
+
+        // Count items per class
+        $classCounts = []; // classId => [triggers, aliases, tickers]
+        $unassigned = ['triggers' => 0, 'aliases' => 0, 'tickers' => 0];
+
+        foreach ($sourceTriggers as $t) {
+            $cls = $t['class'] ?? null;
+            if (empty($cls)) { $unassigned['triggers']++; }
+            else { $classCounts[$cls]['triggers'] = ($classCounts[$cls]['triggers'] ?? 0) + 1; }
+        }
+        foreach ($sourceAliases as $a) {
+            $cls = $a['class'] ?? null;
+            if (empty($cls)) { $unassigned['aliases']++; }
+            else { $classCounts[$cls]['aliases'] = ($classCounts[$cls]['aliases'] ?? 0) + 1; }
+        }
+        foreach ($sourceTickers as $t) {
+            $cls = $t['class'] ?? null;
+            if (empty($cls)) { $unassigned['tickers']++; }
+            else { $classCounts[$cls]['tickers'] = ($classCounts[$cls]['tickers'] ?? 0) + 1; }
+        }
+
+        // Build classes response
+        $classesResult = [];
+        foreach ($sourceClasses as $sc) {
+            $counts = $classCounts[$sc['id']] ?? [];
+            $classesResult[] = [
+                'id' => $sc['id'],
+                'name' => $sc['name'],
+                'enabled' => $sc['enabled'] ?? true,
+                'triggers' => $counts['triggers'] ?? 0,
+                'aliases' => $counts['aliases'] ?? 0,
+                'tickers' => $counts['tickers'] ?? 0
+            ];
+        }
+
+        // List script files (reuse listScripts pattern from api/scripts.php)
+        $sourceScriptsPath = getCharacterDataPath($userId, $sourceCharId) . '/scripts';
+        $scriptsResult = [];
+        if (is_dir($sourceScriptsPath)) {
+            $scriptsResult = listSourceScripts($sourceScriptsPath);
+        }
+
+        successResponse([
+            'classes' => $classesResult,
+            'unassigned' => $unassigned,
+            'scripts' => $scriptsResult
+        ]);
+        break;
+
     case 'copy_from':
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             errorResponse('Method not allowed', 405);
@@ -277,6 +376,10 @@ switch ($action) {
         $sourceCharId = $input['source_character_id'] ?? '';
         $include = $input['include'] ?? ['triggers', 'aliases', 'tickers'];
         $mode = $input['mode'] ?? 'merge';
+        $selectedClasses = $input['selected_classes'] ?? null; // null = all
+        $includeUnassigned = $input['include_unassigned'] ?? true;
+        $selectedScripts = $input['selected_scripts'] ?? [];
+        $scriptCollision = $input['script_collision'] ?? 'skip';
 
         if (empty($sourceCharId)) {
             errorResponse('Source character ID is required');
@@ -292,6 +395,13 @@ switch ($action) {
         if ($sourceCharId === $characterId) {
             errorResponse('Cannot copy from the same character');
         }
+
+        // Helper: check if an item should be included based on class filter
+        $shouldIncludeItem = function($itemClass) use ($selectedClasses, $includeUnassigned) {
+            if ($selectedClasses === null) return true; // no filter = include all
+            if (empty($itemClass)) return $includeUnassigned;
+            return in_array($itemClass, $selectedClasses);
+        };
 
         // Load source classes
         $sourceClassesPath = getCharacterDataPath($userId, $sourceCharId) . '/classes.json';
@@ -357,6 +467,15 @@ switch ($action) {
             $sourceTriggers = loadJsonFile(getTriggersPath($userId, $sourceCharId));
             $targetTriggers = ($mode === 'merge') ? loadJsonFile(getTriggersPath($userId, $characterId)) : [];
 
+            // In replace mode with class filter, keep items NOT in selected classes
+            if ($mode === 'replace' && $selectedClasses !== null) {
+                $targetTriggers = loadJsonFile(getTriggersPath($userId, $characterId));
+                // Remove only items whose class is in selectedClasses (or unassigned if includeUnassigned)
+                $targetTriggers = array_values(array_filter($targetTriggers, function($t) use ($shouldIncludeItem) {
+                    return !$shouldIncludeItem($t['class'] ?? null);
+                }));
+            }
+
             // Build existing patterns set for merge dedup (exact match)
             $existingPatterns = [];
             if ($mode === 'merge') {
@@ -367,6 +486,9 @@ switch ($action) {
 
             $copied = 0;
             foreach ($sourceTriggers as $trigger) {
+                // Class filter
+                if (!$shouldIncludeItem($trigger['class'] ?? null)) continue;
+
                 if ($mode === 'merge' && in_array($trigger['pattern'] ?? '', $existingPatterns)) {
                     continue;
                 }
@@ -386,6 +508,14 @@ switch ($action) {
             $sourceAliases = loadJsonFile(getAliasesPath($userId, $sourceCharId));
             $targetAliases = ($mode === 'merge') ? loadJsonFile(getAliasesPath($userId, $characterId)) : [];
 
+            // In replace mode with class filter, keep items NOT in selected classes
+            if ($mode === 'replace' && $selectedClasses !== null) {
+                $targetAliases = loadJsonFile(getAliasesPath($userId, $characterId));
+                $targetAliases = array_values(array_filter($targetAliases, function($a) use ($shouldIncludeItem) {
+                    return !$shouldIncludeItem($a['class'] ?? null);
+                }));
+            }
+
             // Build existing patterns set for merge dedup (case-insensitive)
             $existingPatterns = [];
             if ($mode === 'merge') {
@@ -396,6 +526,8 @@ switch ($action) {
 
             $copied = 0;
             foreach ($sourceAliases as $alias) {
+                if (!$shouldIncludeItem($alias['class'] ?? null)) continue;
+
                 if ($mode === 'merge' && in_array(strtolower($alias['pattern'] ?? ''), $existingPatterns)) {
                     continue;
                 }
@@ -414,6 +546,14 @@ switch ($action) {
             $sourceTickers = loadJsonFile(getTickersPath($userId, $sourceCharId));
             $targetTickers = ($mode === 'merge') ? loadJsonFile(getTickersPath($userId, $characterId)) : [];
 
+            // In replace mode with class filter, keep items NOT in selected classes
+            if ($mode === 'replace' && $selectedClasses !== null) {
+                $targetTickers = loadJsonFile(getTickersPath($userId, $characterId));
+                $targetTickers = array_values(array_filter($targetTickers, function($t) use ($shouldIncludeItem) {
+                    return !$shouldIncludeItem($t['class'] ?? null);
+                }));
+            }
+
             // Build existing names set for merge dedup (case-insensitive)
             $existingNames = [];
             if ($mode === 'merge') {
@@ -424,6 +564,8 @@ switch ($action) {
 
             $copied = 0;
             foreach ($sourceTickers as $ticker) {
+                if (!$shouldIncludeItem($ticker['class'] ?? null)) continue;
+
                 if ($mode === 'merge' && in_array(strtolower($ticker['name'] ?? ''), $existingNames)) {
                     continue;
                 }
@@ -442,6 +584,95 @@ switch ($action) {
             saveJsonFile($targetClassesPath, $targetClasses);
         }
         $summary['classesCreated'] = $classesCreated;
+
+        // Copy scripts
+        $scriptsCopied = 0;
+        $scriptsSkipped = 0;
+        if (!empty($selectedScripts) && is_array($selectedScripts)) {
+            $sourceScriptsPath = getCharacterDataPath($userId, $sourceCharId) . '/scripts';
+            $targetScriptsPath = getCharacterDataPath($userId, $characterId) . '/scripts';
+
+            if (!is_dir($targetScriptsPath)) {
+                mkdir($targetScriptsPath, 0755, true);
+            }
+
+            foreach ($selectedScripts as $scriptPath) {
+                // Sanitize: block traversal
+                $scriptPath = str_replace('\\', '/', $scriptPath);
+                $scriptPath = trim($scriptPath, '/');
+                if (strpos($scriptPath, '..') !== false || strpos($scriptPath, '//') !== false) {
+                    $scriptsSkipped++;
+                    continue;
+                }
+
+                $srcFile = $sourceScriptsPath . '/' . $scriptPath;
+                $dstFile = $targetScriptsPath . '/' . $scriptPath;
+
+                // Validate source exists and is within scripts dir
+                if (!file_exists($srcFile) || !is_file($srcFile)) {
+                    $scriptsSkipped++;
+                    continue;
+                }
+                $realSrc = realpath($srcFile);
+                $realSrcBase = realpath($sourceScriptsPath);
+                if ($realSrc === false || $realSrcBase === false || strpos($realSrc, $realSrcBase) !== 0) {
+                    $scriptsSkipped++;
+                    continue;
+                }
+
+                // Handle collision
+                if (file_exists($dstFile)) {
+                    if ($scriptCollision === 'skip') {
+                        $scriptsSkipped++;
+                        continue;
+                    } elseif ($scriptCollision === 'rename') {
+                        // Append -copy before extension
+                        $ext = pathinfo($scriptPath, PATHINFO_EXTENSION);
+                        $base = substr($scriptPath, 0, -(strlen($ext) + 1));
+                        $n = 1;
+                        do {
+                            $suffix = $n === 1 ? '-copy' : "-copy{$n}";
+                            $dstFile = $targetScriptsPath . '/' . $base . $suffix . '.' . $ext;
+                            $n++;
+                        } while (file_exists($dstFile));
+                    }
+                    // 'overwrite' falls through — just write
+                }
+
+                // Check storage limits
+                $existingSize = file_exists($dstFile) ? filesize($dstFile) : 0;
+                $newSize = filesize($srcFile);
+                $isNewFile = !file_exists($dstFile);
+                $limitCheck = checkUserStorageLimits($userId, $newSize - $existingSize, $isNewFile ? 1 : 0);
+                if (!$limitCheck['allowed']) {
+                    $scriptsSkipped++;
+                    continue;
+                }
+
+                // Create parent directories
+                $parentDir = dirname($dstFile);
+                if (!is_dir($parentDir)) {
+                    mkdir($parentDir, 0755, true);
+                }
+
+                // Validate destination is within target scripts dir
+                $realDstBase = realpath($targetScriptsPath);
+                $realParent = realpath($parentDir);
+                if ($realDstBase === false || $realParent === false || strpos($realParent, $realDstBase) !== 0) {
+                    $scriptsSkipped++;
+                    continue;
+                }
+
+                if (copy($srcFile, $dstFile)) {
+                    $scriptsCopied++;
+                } else {
+                    $scriptsSkipped++;
+                }
+            }
+
+            $summary['scriptsCopied'] = $scriptsCopied;
+            $summary['scriptsSkipped'] = $scriptsSkipped;
+        }
 
         successResponse([
             'message' => 'Copy successful',

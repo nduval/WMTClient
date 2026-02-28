@@ -668,40 +668,82 @@ setcookie($tokenCookieName, $wsToken, [
 
     <!-- Copy from Character Modal -->
     <div class="modal-overlay" id="copy-from-char-modal">
-        <div class="modal">
+        <div class="modal" style="max-width:520px">
             <div class="modal-header">
                 <h3>Copy from Character</h3>
                 <button class="panel-close" onclick="wmtClient.closeCopyFromCharModal()">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label for="copy-source-char">Source Character</label>
-                    <select id="copy-source-char" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;">
-                        <option value="">Loading...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>What to Copy</label>
-                    <div class="export-options">
-                        <label class="checkbox-label"><input type="checkbox" id="copy-triggers" checked> Triggers</label>
-                        <label class="checkbox-label"><input type="checkbox" id="copy-aliases" checked> Aliases</label>
-                        <label class="checkbox-label"><input type="checkbox" id="copy-tickers" checked> Tickers</label>
+                <!-- Step 1: Source Selection -->
+                <div id="copy-step-1">
+                    <div class="form-group">
+                        <label for="copy-source-char">Source Character</label>
+                        <select id="copy-source-char" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="text-align:right;">
+                        <button class="btn btn-primary" id="copy-load-preview-btn" onclick="wmtClient.loadCopyPreview()">Load</button>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Mode</label>
-                    <div style="display:flex;gap:15px;">
-                        <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-merge" checked> Merge (skip duplicates)</label>
-                        <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-replace"> Replace (overwrite)</label>
+
+                <!-- Step 2: Preview & Selection (hidden until loaded) -->
+                <div id="copy-step-2" style="display:none;">
+                    <div style="margin-bottom:8px;color:#aaa;font-size:0.85em;">
+                        Source: <strong id="copy-source-name" style="color:#fff;"></strong>
+                        <a href="#" onclick="wmtClient.copyStepBack();return false;" style="margin-left:10px;color:#5af;">change</a>
                     </div>
-                </div>
-                <div class="help-text" style="font-size:0.85em;color:#888;padding:10px;background:#111;border-radius:4px;">
-                    Classes are matched by name. If the source has a class that doesn't exist here, it will be created automatically.
+
+                    <!-- Classes section -->
+                    <div class="form-group">
+                        <label style="display:flex;justify-content:space-between;align-items:center;">
+                            Classes
+                            <span style="font-size:0.8em;">
+                                <a href="#" onclick="wmtClient.copyToggleAll('classes',true);return false;" style="color:#5af;">All</a>
+                                / <a href="#" onclick="wmtClient.copyToggleAll('classes',false);return false;" style="color:#5af;">None</a>
+                            </span>
+                        </label>
+                        <div id="copy-classes-list" style="max-height:180px;overflow-y:auto;background:#111;border-radius:4px;padding:6px;"></div>
+                    </div>
+
+                    <!-- Scripts section -->
+                    <div class="form-group">
+                        <label style="display:flex;justify-content:space-between;align-items:center;">
+                            Scripts
+                            <span style="font-size:0.8em;">
+                                <a href="#" onclick="wmtClient.copyToggleAll('scripts',true);return false;" style="color:#5af;">All</a>
+                                / <a href="#" onclick="wmtClient.copyToggleAll('scripts',false);return false;" style="color:#5af;">None</a>
+                            </span>
+                        </label>
+                        <div id="copy-scripts-list" style="max-height:150px;overflow-y:auto;background:#111;border-radius:4px;padding:6px;"></div>
+                    </div>
+
+                    <!-- Options -->
+                    <div class="form-group">
+                        <label>Mode (triggers/aliases/tickers)</label>
+                        <div style="display:flex;gap:15px;">
+                            <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-merge" checked> Merge (skip duplicates)</label>
+                            <label class="checkbox-label"><input type="radio" name="copy-mode" id="copy-mode-replace"> Replace (overwrite)</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group" id="copy-script-collision-group" style="display:none;">
+                        <label>Script file collisions</label>
+                        <div style="display:flex;gap:15px;flex-wrap:wrap;">
+                            <label class="checkbox-label"><input type="radio" name="copy-script-collision" value="skip" checked> Skip</label>
+                            <label class="checkbox-label"><input type="radio" name="copy-script-collision" value="overwrite"> Overwrite</label>
+                            <label class="checkbox-label"><input type="radio" name="copy-script-collision" value="rename"> Rename (-copy)</label>
+                        </div>
+                    </div>
+
+                    <div class="help-text" style="font-size:0.85em;color:#888;padding:10px;background:#111;border-radius:4px;">
+                        Classes are matched by name. If the source has a class that doesn't exist here, it will be created automatically.
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="wmtClient.closeCopyFromCharModal()">Cancel</button>
-                <button class="btn btn-primary" id="copy-from-char-execute-btn" onclick="wmtClient.executeCopyFromCharacter()">Copy</button>
+                <button class="btn btn-primary" id="copy-from-char-execute-btn" onclick="wmtClient.executeCopyFromCharacter()" style="display:none;">Copy</button>
             </div>
         </div>
     </div>

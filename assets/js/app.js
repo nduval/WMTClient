@@ -6033,6 +6033,12 @@ class WMTClient {
 
         modal.classList.add('open');
 
+        // Reset to step 1
+        document.getElementById('copy-step-1').style.display = '';
+        document.getElementById('copy-step-2').style.display = 'none';
+        document.getElementById('copy-from-char-execute-btn').style.display = 'none';
+        this._copyPreviewData = null;
+
         // Fetch character list
         const select = document.getElementById('copy-source-char');
         select.innerHTML = '<option value="">Loading...</option>';
@@ -6064,33 +6070,150 @@ class WMTClient {
         }
     }
 
+    async loadCopyPreview() {
+        const select = document.getElementById('copy-source-char');
+        const sourceId = select?.value;
+        if (!sourceId) { alert('Please select a source character'); return; }
+
+        const btn = document.getElementById('copy-load-preview-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+
+        try {
+            const res = await fetch(`api/export.php?action=preview_source&source_id=${encodeURIComponent(sourceId)}`);
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Failed to load preview');
+
+            this._copyPreviewData = data;
+            const sourceName = select.selectedOptions[0]?.text || 'Unknown';
+            document.getElementById('copy-source-name').textContent = sourceName;
+
+            // Render classes
+            const classList = document.getElementById('copy-classes-list');
+            let classHtml = '';
+
+            if (data.classes && data.classes.length > 0) {
+                data.classes.forEach(cls => {
+                    const parts = [];
+                    if (cls.triggers > 0) parts.push(`${cls.triggers} trig`);
+                    if (cls.aliases > 0) parts.push(`${cls.aliases} alias`);
+                    if (cls.tickers > 0) parts.push(`${cls.tickers} tick`);
+                    const desc = parts.length > 0 ? ` (${parts.join(', ')})` : ' (empty)';
+                    classHtml += `<label class="checkbox-label" style="display:block;padding:3px 0;"><input type="checkbox" class="copy-class-cb" value="${this.escapeHtml(cls.id)}" checked> ${this.escapeHtml(cls.name)}${desc}</label>`;
+                });
+            }
+
+            // Unassigned items
+            const u = data.unassigned || {};
+            const uTotal = (u.triggers || 0) + (u.aliases || 0) + (u.tickers || 0);
+            if (uTotal > 0) {
+                const uParts = [];
+                if (u.triggers > 0) uParts.push(`${u.triggers} trig`);
+                if (u.aliases > 0) uParts.push(`${u.aliases} alias`);
+                if (u.tickers > 0) uParts.push(`${u.tickers} tick`);
+                classHtml += `<label class="checkbox-label" style="display:block;padding:3px 0;"><input type="checkbox" id="copy-unassigned-cb" checked> <em>Unassigned</em> (${uParts.join(', ')})</label>`;
+            }
+
+            if (!classHtml) {
+                classHtml = '<div style="color:#666;padding:4px;">(no triggers, aliases, or tickers)</div>';
+            }
+            classList.innerHTML = classHtml;
+
+            // Render scripts
+            const scriptList = document.getElementById('copy-scripts-list');
+            let scriptHtml = '';
+            if (data.scripts && data.scripts.length > 0) {
+                data.scripts.forEach(s => {
+                    const size = this.formatFileSize(s.size);
+                    scriptHtml += `<label class="checkbox-label" style="display:block;padding:3px 0;"><input type="checkbox" class="copy-script-cb" value="${this.escapeHtml(s.name)}" checked> ${this.escapeHtml(s.name)} <span style="color:#666;">(${size})</span></label>`;
+                });
+            } else {
+                scriptHtml = '<div style="color:#666;padding:4px;">(no scripts)</div>';
+            }
+            scriptList.innerHTML = scriptHtml;
+
+            // Show/hide script collision options based on script checkboxes
+            this._updateScriptCollisionVisibility();
+            scriptList.addEventListener('change', () => this._updateScriptCollisionVisibility());
+
+            // Show step 2, hide step 1
+            document.getElementById('copy-step-1').style.display = 'none';
+            document.getElementById('copy-step-2').style.display = '';
+            document.getElementById('copy-from-char-execute-btn').style.display = '';
+        } catch (e) {
+            alert('Failed to load preview: ' + e.message);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Load'; }
+        }
+    }
+
+    _updateScriptCollisionVisibility() {
+        const anyScriptsChecked = document.querySelectorAll('.copy-script-cb:checked').length > 0;
+        const group = document.getElementById('copy-script-collision-group');
+        if (group) group.style.display = anyScriptsChecked ? '' : 'none';
+    }
+
+    copyStepBack() {
+        document.getElementById('copy-step-1').style.display = '';
+        document.getElementById('copy-step-2').style.display = 'none';
+        document.getElementById('copy-from-char-execute-btn').style.display = 'none';
+        this._copyPreviewData = null;
+    }
+
+    copyToggleAll(section, checked) {
+        if (section === 'classes') {
+            document.querySelectorAll('#copy-classes-list input[type="checkbox"]').forEach(cb => cb.checked = checked);
+        } else {
+            document.querySelectorAll('#copy-scripts-list input[type="checkbox"]').forEach(cb => cb.checked = checked);
+            this._updateScriptCollisionVisibility();
+        }
+    }
+
     closeCopyFromCharModal() {
         const modal = document.getElementById('copy-from-char-modal');
         if (modal) modal.classList.remove('open');
+        this._copyPreviewData = null;
     }
 
     async executeCopyFromCharacter() {
         const sourceId = document.getElementById('copy-source-char')?.value;
-        if (!sourceId) {
-            alert('Please select a source character');
-            return;
+        if (!sourceId) { alert('Please select a source character'); return; }
+
+        // Gather selected classes
+        const selectedClasses = [];
+        document.querySelectorAll('.copy-class-cb:checked').forEach(cb => selectedClasses.push(cb.value));
+        const includeUnassigned = document.getElementById('copy-unassigned-cb')?.checked ?? true;
+
+        // Gather selected scripts
+        const selectedScripts = [];
+        document.querySelectorAll('.copy-script-cb:checked').forEach(cb => selectedScripts.push(cb.value));
+
+        // Determine what types to include based on what's available
+        const preview = this._copyPreviewData;
+        const include = [];
+        if (preview) {
+            // Include types if any selected class or unassigned has items of that type
+            const hasType = (type) => {
+                if (includeUnassigned && (preview.unassigned?.[type] || 0) > 0) return true;
+                return (preview.classes || []).some(c => selectedClasses.includes(c.id) && (c[type] || 0) > 0);
+            };
+            if (hasType('triggers')) include.push('triggers');
+            if (hasType('aliases')) include.push('aliases');
+            if (hasType('tickers')) include.push('tickers');
+        } else {
+            include.push('triggers', 'aliases', 'tickers');
         }
 
-        const include = [];
-        if (document.getElementById('copy-triggers')?.checked) include.push('triggers');
-        if (document.getElementById('copy-aliases')?.checked) include.push('aliases');
-        if (document.getElementById('copy-tickers')?.checked) include.push('tickers');
-
-        if (include.length === 0) {
-            alert('Please select at least one type to copy');
+        if (include.length === 0 && selectedScripts.length === 0) {
+            alert('Nothing selected to copy');
             return;
         }
 
         const mode = document.getElementById('copy-mode-replace')?.checked ? 'replace' : 'merge';
+        const scriptCollision = document.querySelector('input[name="copy-script-collision"]:checked')?.value || 'skip';
 
-        if (mode === 'replace') {
-            const sourceName = document.getElementById('copy-source-char')?.selectedOptions[0]?.text || 'source';
-            if (!confirm(`Replace mode will OVERWRITE your current ${include.join(', ')} with data from ${sourceName}. Continue?`)) {
+        if (mode === 'replace' && include.length > 0) {
+            const sourceName = document.getElementById('copy-source-name')?.textContent || 'source';
+            if (!confirm(`Replace mode will OVERWRITE your current ${include.join(', ')} for the selected classes with data from ${sourceName}. Continue?`)) {
                 return;
             }
         }
@@ -6099,14 +6222,22 @@ class WMTClient {
         if (btn) { btn.disabled = true; btn.textContent = 'Copying...'; }
 
         try {
+            const body = {
+                source_character_id: sourceId,
+                include: include,
+                mode: mode,
+                selected_classes: selectedClasses.length > 0 ? selectedClasses : null,
+                include_unassigned: includeUnassigned
+            };
+            if (selectedScripts.length > 0) {
+                body.selected_scripts = selectedScripts;
+                body.script_collision = scriptCollision;
+            }
+
             const res = await fetch('api/export.php?action=copy_from', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    source_character_id: sourceId,
-                    include: include,
-                    mode: mode
-                })
+                body: JSON.stringify(body)
             });
 
             const data = await res.json();
@@ -6127,6 +6258,8 @@ class WMTClient {
             if (s.aliases !== undefined) parts.push(`${s.aliases} aliases`);
             if (s.tickers !== undefined) parts.push(`${s.tickers} tickers`);
             if (s.classesCreated > 0) parts.push(`${s.classesCreated} classes created`);
+            if (s.scriptsCopied !== undefined) parts.push(`${s.scriptsCopied} scripts copied`);
+            if (s.scriptsSkipped > 0) parts.push(`${s.scriptsSkipped} scripts skipped`);
 
             this.appendOutput(`Copy complete (${mode}): ${parts.join(', ')}`, 'system');
             this.closeCopyFromCharModal();
