@@ -6258,6 +6258,7 @@ class WMTClient {
             await this.loadSettings();
             this.sendFilteredTriggersAndAliases();
             this.renderScriptsSidebar();
+            this.loadScriptFilesList();
 
             // Show summary
             const s = data.summary || {};
