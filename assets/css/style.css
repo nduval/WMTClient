@@ -2135,6 +2135,12 @@ body {
 .action-item > .remove-action {
     flex: 0 0 auto;
 }
+.action-item > .action-buttons {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+    align-items: flex-start;
+}
 
 .add-action-btn {
     margin-top: 10px;
