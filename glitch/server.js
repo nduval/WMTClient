@@ -4166,8 +4166,9 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
   // TinTin++ processes actions in priority order, first command match wins
   const sorted = [...triggers].sort((a, b) => (a.priority || 5) - (b.priority || 5));
 
-  // Track whether a command action has already fired (TinTin++: first match only)
+  // Track whether a command action has already fired (TinTin++: first trigger's commands win)
   let commandFired = false;
+  let commandFiredByTrigger = null;  // Which trigger fired first (allow multiple actions within it)
 
   for (const trigger of sorted) {
     if (!trigger.enabled) continue;
@@ -4285,8 +4286,10 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
             }
             break;
           case 'command':
-            // TinTin++: only the first matching command action fires
-            if (commandFired) break;
+            // TinTin++: first matching TRIGGER's commands win (across triggers).
+            // But multiple command actions within a single trigger all execute
+            // (WMT UI allows multiple "Send command" actions per trigger).
+            if (commandFired && commandFiredByTrigger !== trigger) break;
             let cmd = action.command || '';
             if (matches.length) {
               // Always use TinTin var substitution for captured groups
@@ -4296,6 +4299,7 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
             const cmds = parseCommands(cmd);
             result.commands.push(...cmds);
             commandFired = true;
+            commandFiredByTrigger = trigger;
             break;
           case 'sound':
             result.sound = action.sound || 'beep';
