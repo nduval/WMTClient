@@ -15,8 +15,12 @@ define('MUD_PORT', 3000);
 define('WS_HOST', '0.0.0.0');
 define('WS_PORT', 8080);
 
-// WebSocket URL for client connection
-define('WS_CLIENT_URL', 'wss://ws.wemudtogether.com');  // Lightsail
+// WebSocket URL for client connection - dynamic based on serving domain
+if (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusinessservices.com') {
+    define('WS_CLIENT_URL', 'wss://ws.3kbusinessservices.com');
+} else {
+    define('WS_CLIENT_URL', 'wss://ws.wemudtogether.com');  // Lightsail
+}
 
 
 // Paths
