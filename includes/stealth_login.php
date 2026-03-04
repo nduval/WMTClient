@@ -13,6 +13,29 @@
     <meta property="og:url" content="https://3kbusinessservices.com">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
     <title>3K Business Services - Enterprise Resource Portal</title>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "3K Business Services",
+        "url": "https://3kbusinessservices.com",
+        "description": "Enterprise knowledge management and workforce training solutions.",
+        "foundingDate": "2024",
+        "address": {
+            "@type": "PostalAddress",
+            "streetAddress": "8500 Shoal Creek Blvd, Suite 4C",
+            "addressLocality": "Austin",
+            "addressRegion": "TX",
+            "postalCode": "78757",
+            "addressCountry": "US"
+        },
+        "contactPoint": {
+            "@type": "ContactPoint",
+            "telephone": "+1-512-555-0147",
+            "contactType": "customer service"
+        }
+    }
+    </script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -368,11 +391,10 @@
         <span>3K Business Services</span>
     </a>
     <div class="s-nav-links">
-        <a href="#">Solutions</a>
-        <a href="#">Resources</a>
-        <a href="#">Pricing</a>
-        <a href="#">Contact</a>
-        <a href="#" class="s-nav-cta" onclick="return false;">Request Demo</a>
+        <a href="/about.php">About</a>
+        <a href="/solutions.php">Solutions</a>
+        <a href="/contact.php">Contact</a>
+        <a href="/contact.php" class="s-nav-cta">Request Demo</a>
     </div>
 </nav>
 
@@ -490,10 +512,9 @@
 <footer class="s-footer">
     <div>&copy; 2024&ndash;2026 3K Business Services, LLC. All rights reserved.</div>
     <div>
-        <a href="#">Privacy Policy</a>
-        <a href="#">Terms of Service</a>
-        <a href="#">Status</a>
-        <a href="#">Support</a>
+        <a href="/privacy.php">Privacy Policy</a>
+        <a href="/terms.php">Terms of Service</a>
+        <a href="/contact.php">Support</a>
     </div>
 </footer>
 
