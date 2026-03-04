@@ -13,19 +13,20 @@ if (isLoggedIn()) {
 
 // Stealth domain detection
 $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusinessservices.com');
+
+// Stealth domain: render completely different page
+if ($isStealth) {
+    require_once __DIR__ . '/includes/stealth_login.php';
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<?php if ($isStealth): ?>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
-    <title>3K Business Services - Portal Login</title>
-<?php else: ?>
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <title><?= APP_NAME ?> - Login</title>
-<?php endif; ?>
     <style>
         * {
             box-sizing: border-box;
@@ -35,13 +36,8 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-<?php if ($isStealth): ?>
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
-            color: #333;
-<?php else: ?>
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #fff;
-<?php endif; ?>
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -49,15 +45,6 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
         }
 
         .container {
-<?php if ($isStealth): ?>
-            background: #fff;
-            border-radius: 8px;
-            padding: 40px;
-            width: 100%;
-            max-width: 420px;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e0e0e0;
-<?php else: ?>
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
             border-radius: 20px;
@@ -65,7 +52,6 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
             width: 100%;
             max-width: 400px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-<?php endif; ?>
         }
 
         .logo {
@@ -74,23 +60,13 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
         }
 
         .logo h1 {
-<?php if ($isStealth): ?>
-            font-size: 1.6em;
-            color: #1a56db;
-            font-weight: 600;
-<?php else: ?>
             font-size: 2.5em;
             color: #00ff00;
             text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
-<?php endif; ?>
         }
 
         .logo p {
-<?php if ($isStealth): ?>
-            color: #6b7280;
-<?php else: ?>
             color: #888;
-<?php endif; ?>
             font-size: 0.9em;
             margin-top: 5px;
         }
@@ -107,32 +83,19 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
             cursor: pointer;
             border: none;
             background: transparent;
-<?php if ($isStealth): ?>
-            color: #6b7280;
-<?php else: ?>
             color: #888;
-<?php endif; ?>
             font-size: 1em;
             border-bottom: 2px solid transparent;
             transition: all 0.3s;
         }
 
         .tab:hover {
-<?php if ($isStealth): ?>
-            color: #1a56db;
-<?php else: ?>
             color: #fff;
-<?php endif; ?>
         }
 
         .tab.active {
-<?php if ($isStealth): ?>
-            color: #1a56db;
-            border-bottom-color: #1a56db;
-<?php else: ?>
             color: #00ff00;
             border-bottom-color: #00ff00;
-<?php endif; ?>
         }
 
         .form-container {
@@ -150,54 +113,32 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
         .form-group label {
             display: block;
             margin-bottom: 8px;
-<?php if ($isStealth): ?>
-            color: #4b5563;
-            font-weight: 500;
-<?php else: ?>
             color: #ccc;
-<?php endif; ?>
         }
 
         .form-group input {
             width: 100%;
             padding: 12px 15px;
-<?php if ($isStealth): ?>
-            border: 1px solid #d1d5db;
-            border-radius: 6px;
-            background: #f9fafb;
-            color: #333;
-<?php else: ?>
             border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 8px;
             background: rgba(0, 0, 0, 0.3);
             color: #fff;
-<?php endif; ?>
             font-size: 1em;
             transition: border-color 0.3s;
         }
 
         .form-group input:focus {
             outline: none;
-<?php if ($isStealth): ?>
-            border-color: #1a56db;
-<?php else: ?>
             border-color: #00ff00;
-<?php endif; ?>
         }
 
         .btn {
             width: 100%;
             padding: 14px;
             border: none;
-<?php if ($isStealth): ?>
-            border-radius: 6px;
-            background: #1a56db;
-            color: #fff;
-<?php else: ?>
             border-radius: 8px;
             background: #00ff00;
             color: #000;
-<?php endif; ?>
             font-size: 1em;
             font-weight: bold;
             cursor: pointer;
@@ -205,11 +146,7 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
         }
 
         .btn:hover {
-<?php if ($isStealth): ?>
-            background: #1648b8;
-<?php else: ?>
             background: #00cc00;
-<?php endif; ?>
             transform: translateY(-2px);
         }
 
@@ -230,15 +167,9 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
         }
 
         .success-message {
-<?php if ($isStealth): ?>
-            background: #ecfdf5;
-            border: 1px solid #10b981;
-            color: #065f46;
-<?php else: ?>
             background: rgba(0, 255, 0, 0.2);
             border: 1px solid #00ff00;
             color: #00ff00;
-<?php endif; ?>
             padding: 10px;
             border-radius: 8px;
             margin-bottom: 20px;
@@ -309,17 +240,10 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
 </head>
 <body>
     <div class="container">
-<?php if ($isStealth): ?>
-        <div class="logo">
-            <h1>3K Business Services</h1>
-            <p>Enterprise Resource Portal</p>
-        </div>
-<?php else: ?>
         <div class="logo">
             <h1><?= APP_NAME ?></h1>
             <p>MUD Client for 3k.org</p>
         </div>
-<?php endif; ?>
 
         <div class="tabs">
             <button class="tab active" data-tab="login">Login</button>
@@ -380,14 +304,6 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
             </form>
         </div>
 
-<?php if ($isStealth): ?>
-        <div style="text-align: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-            <p style="color: #9ca3af; font-size: 0.75em; line-height: 1.6;">
-                3K Business Services &mdash; Streamlining enterprise workflows since 2024.<br>
-                Secure access to your organization's knowledge base and training resources.
-            </p>
-        </div>
-<?php else: ?>
         <div class="guest-section">
             <p class="guest-label">Or try it without an account:</p>
             <div class="guest-links">
@@ -400,31 +316,7 @@ $isStealth = (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] === '3kbusin
         <div class="support-link">
             <a href="https://buymeacoffee.com/wemudtogether" target="_blank" rel="noopener">Support this project</a>
         </div>
-<?php endif; ?>
     </div>
-
-<?php if ($isStealth): ?>
-    <div style="max-width: 700px; margin: 30px auto 0; padding: 0 20px; text-align: center;">
-        <div style="display: flex; gap: 30px; justify-content: center; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 180px; max-width: 200px;">
-                <div style="font-size: 1.5em; margin-bottom: 8px;">🎯</div>
-                <h3 style="color: #1a56db; font-size: 0.9em; margin-bottom: 6px;">Our Mission</h3>
-                <p style="color: #6b7280; font-size: 0.75em; line-height: 1.5;">Empowering teams with integrated knowledge management and continuous professional development tools.</p>
-            </div>
-            <div style="flex: 1; min-width: 180px; max-width: 200px;">
-                <div style="font-size: 1.5em; margin-bottom: 8px;">🔒</div>
-                <h3 style="color: #1a56db; font-size: 0.9em; margin-bottom: 6px;">Enterprise Security</h3>
-                <p style="color: #6b7280; font-size: 0.75em; line-height: 1.5;">End-to-end encryption and role-based access control. SOC 2 compliant infrastructure.</p>
-            </div>
-            <div style="flex: 1; min-width: 180px; max-width: 200px;">
-                <div style="font-size: 1.5em; margin-bottom: 8px;">📈</div>
-                <h3 style="color: #1a56db; font-size: 0.9em; margin-bottom: 6px;">Real-Time Analytics</h3>
-                <p style="color: #6b7280; font-size: 0.75em; line-height: 1.5;">Track engagement metrics, completion rates, and skill assessments across your organization.</p>
-            </div>
-        </div>
-        <p style="color: #9ca3af; font-size: 0.7em; margin-top: 30px;">&copy; 2024-2026 3K Business Services, LLC. All rights reserved.</p>
-    </div>
-<?php endif; ?>
 
     <script>
         // Tab switching
