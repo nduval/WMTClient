@@ -443,7 +443,6 @@
 
         <div class="s-tabs">
             <button class="s-tab active" data-tab="login">Sign In</button>
-            <button class="s-tab" data-tab="register">Create Account</button>
             <button class="s-tab" data-tab="forgot">Reset Password</button>
         </div>
 
@@ -459,31 +458,6 @@
                     <input type="password" id="login-password" name="password" required autocomplete="current-password" placeholder="Enter your password">
                 </div>
                 <button type="submit" class="s-btn" id="login-btn">Sign In</button>
-            </form>
-        </div>
-
-        <div id="register-form" class="s-form">
-            <div class="s-error" id="register-error"></div>
-            <div class="s-success" id="register-success"></div>
-            <form id="registerForm">
-                <div class="s-form-group">
-                    <label for="register-username">Username</label>
-                    <input type="text" id="register-username" name="username" required autocomplete="username" minlength="3" maxlength="30" pattern="[a-zA-Z0-9_]+" placeholder="Choose a username">
-                </div>
-                <div class="s-form-group">
-                    <label for="register-email">Work Email</label>
-                    <input type="email" id="register-email" name="email" required autocomplete="email" placeholder="you@company.com">
-                    <small class="s-form-hint">Used for account recovery only.</small>
-                </div>
-                <div class="s-form-group">
-                    <label for="register-password">Password</label>
-                    <input type="password" id="register-password" name="password" required autocomplete="new-password" minlength="6" placeholder="Create a password">
-                </div>
-                <div class="s-form-group">
-                    <label for="register-confirm">Confirm Password</label>
-                    <input type="password" id="register-confirm" name="confirm" required autocomplete="new-password" placeholder="Confirm your password">
-                </div>
-                <button type="submit" class="s-btn" id="register-btn">Create Account</button>
             </form>
         </div>
 
@@ -559,48 +533,6 @@
         }
         btn.disabled = false;
         btn.textContent = 'Sign In';
-    });
-
-    // Register form
-    document.getElementById('registerForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const btn = document.getElementById('register-btn');
-        const error = document.getElementById('register-error');
-        const success = document.getElementById('register-success');
-        const password = document.getElementById('register-password').value;
-        const confirm = document.getElementById('register-confirm').value;
-        if (password !== confirm) {
-            error.textContent = 'Passwords do not match';
-            error.style.display = 'block';
-            return;
-        }
-        btn.disabled = true;
-        btn.textContent = 'Creating account...';
-        error.style.display = 'none';
-        success.style.display = 'none';
-        try {
-            const response = await fetch('api/auth.php?action=register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: document.getElementById('register-username').value,
-                    email: document.getElementById('register-email').value,
-                    password: password
-                })
-            });
-            const data = await response.json();
-            if (data.success) {
-                window.location.href = 'characters.php';
-            } else {
-                error.textContent = data.error;
-                error.style.display = 'block';
-            }
-        } catch (err) {
-            error.textContent = 'Connection error. Please try again.';
-            error.style.display = 'block';
-        }
-        btn.disabled = false;
-        btn.textContent = 'Create Account';
     });
 
     // Forgot password form
