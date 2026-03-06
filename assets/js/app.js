@@ -813,7 +813,7 @@ class WMTClient {
         this.sendFilteredTriggersAndAliases();
     }
 
-    onSessionResumed(mudConnected, serverVariables) {
+    async onSessionResumed(mudConnected, serverVariables) {
         // Called when reconnecting to an existing session (e.g., after app switch)
         // Restore server-side variables (bot state like $secstepnumber survives refresh)
         if (serverVariables && Object.keys(serverVariables).length > 0) {
@@ -836,6 +836,10 @@ class WMTClient {
             (Date.now() - this.lastDisconnectTime < 5000);
         this.lastDisconnectTime = null;
         this.reconnectingSince = null;
+
+        // Reload triggers/aliases/tickers from the API (source of truth) before pushing
+        // to the server. Prevents a stale device from overwriting changes made elsewhere.
+        await this.loadSettings();
 
         if (mudConnected) {
             if (!briefReconnect) {
