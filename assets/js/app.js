@@ -813,7 +813,7 @@ class WMTClient {
         this.sendFilteredTriggersAndAliases();
     }
 
-    async onSessionResumed(mudConnected, serverVariables) {
+    onSessionResumed(mudConnected, serverVariables) {
         // Called when reconnecting to an existing session (e.g., after app switch)
         // Restore server-side variables (bot state like $secstepnumber survives refresh)
         if (serverVariables && Object.keys(serverVariables).length > 0) {
@@ -839,7 +839,11 @@ class WMTClient {
 
         // Reload triggers/aliases/tickers from the API (source of truth) before pushing
         // to the server. Prevents a stale device from overwriting changes made elsewhere.
-        await this.loadSettings();
+        // Non-blocking: don't await — let sendFilteredTriggersAndAliases run immediately,
+        // then re-send once loadSettings completes with fresh data.
+        this.loadSettings().then(() => {
+            this.sendFilteredTriggersAndAliases();
+        });
 
         if (mudConnected) {
             if (!briefReconnect) {
