@@ -2946,17 +2946,12 @@ wss.on('connection', (ws, req) => {
               userCharacterSessions.set(userCharKey, token);
               session = oldSession;
 
-              // Update BridgeSocket token so bridge stays in sync
-              if (oldSession.mudSocket && oldSession.mudSocket instanceof BridgeSocket) {
-                const oldBridgeToken = oldSession.mudSocket.token;
-                bridgeSockets.delete(oldBridgeToken);
-                oldSession.mudSocket.token = token;
-                bridgeSockets.set(token, oldSession.mudSocket);
-                // Notify bridge.js to remap its internal connection mapping
-                if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
-                  bridgeWs.send(JSON.stringify({ type: 'rekey', oldToken: oldBridgeToken, newToken: token }));
-                }
-              }
+              // BridgeSocket keeps its original token for bridge communication.
+              // The bridge doesn't need to know about session token changes —
+              // it just needs a stable identifier for the TCP connection.
+              // bridgeSockets map stays keyed by the original bridge-side token,
+              // and persist/restore uses session.mudSocket.token (bridgeToken)
+              // to reconnect to the right bridge connection.
 
               logSessionEvent('SESSION_RESUME', {
                 token: token.substring(0, 8),
