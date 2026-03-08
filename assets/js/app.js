@@ -3178,15 +3178,15 @@ class WMTClient {
             const currentInput = input.value;
             this.historySearchPrefix = currentInput;
 
-            // Build filtered matches list
+            // Build filtered matches list (deduplicated)
             if (currentInput) {
                 // Filter history to commands starting with the prefix
-                this.historySearchMatches = this.commandHistory.filter(cmd =>
-                    cmd.toLowerCase().startsWith(currentInput.toLowerCase())
+                this.historySearchMatches = this.commandHistory.filter((cmd, i, arr) =>
+                    cmd.toLowerCase().startsWith(currentInput.toLowerCase()) && arr.indexOf(cmd) === i
                 );
             } else {
-                // No prefix - use full history
-                this.historySearchMatches = [...this.commandHistory];
+                // No prefix - use full history, deduplicated
+                this.historySearchMatches = this.commandHistory.filter((cmd, i, arr) => arr.indexOf(cmd) === i);
             }
             this.historySearchIndex = -1;
         }
