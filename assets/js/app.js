@@ -3073,8 +3073,8 @@ class WMTClient {
 
         // Verbatim mode: send raw input directly to MUD, no parsing
         if (this.preferences.verbatimMode) {
-            // Add to history
-            if (rawInput.trim()) {
+            // Add to history (skip consecutive duplicates)
+            if (rawInput.trim() && this.commandHistory[0] !== rawInput) {
                 this.commandHistory.unshift(rawInput);
                 if (this.commandHistory.length > this.maxHistorySize) {
                     this.commandHistory.pop();
@@ -3108,8 +3108,8 @@ class WMTClient {
 
         // Process each command sequentially (await async commands like #class)
         for (const command of commands) {
-            // Add to history (only non-empty commands)
-            if (command.trim()) {
+            // Add to history (skip consecutive duplicates)
+            if (command.trim() && this.commandHistory[0] !== command) {
                 this.commandHistory.unshift(command);
                 if (this.commandHistory.length > this.maxHistorySize) {
                     this.commandHistory.pop();
