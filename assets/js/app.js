@@ -410,11 +410,15 @@ class WMTClient {
             splitTop?.style.setProperty('--mud-font', prefs.fontFamily);
             splitBottom?.style.setProperty('--mud-font', prefs.fontFamily);
         }
-        if (prefs.fontSize) {
-            output.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
-            if (mipBar) mipBar.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
-            splitTop?.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
-            splitBottom?.style.setProperty('--mud-font-size', prefs.fontSize + 'px');
+        const isMobileDevice = window.innerWidth <= 768;
+        const effectiveFontSize = isMobileDevice
+            ? (prefs.fontSizeMobile || prefs.fontSize || 14)
+            : (prefs.fontSize || 14);
+        if (effectiveFontSize) {
+            output.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
+            if (mipBar) mipBar.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
+            splitTop?.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
+            splitBottom?.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
         }
         if (prefs.textColor) {
             output.style.setProperty('--mud-text-color', prefs.textColor);
@@ -2690,7 +2694,7 @@ class WMTClient {
         element.addEventListener('touchstart', (e) => {
             if (e.touches.length === 2) {
                 initialDistance = getDistance(e.touches);
-                initialFontSize = this.preferences.fontSize || 14;
+                initialFontSize = this.preferences.fontSizeMobile || this.preferences.fontSize || 14;
                 e.preventDefault(); // Prevent browser zoom
             }
         }, { passive: false });
@@ -2709,8 +2713,8 @@ class WMTClient {
                 newSize = Math.max(6, Math.min(24, newSize));
 
                 // Only update if changed
-                if (newSize !== this.preferences.fontSize) {
-                    this.preferences.fontSize = newSize;
+                if (newSize !== (this.preferences.fontSizeMobile || this.preferences.fontSize)) {
+                    this.preferences.fontSizeMobile = newSize;
 
                     // Apply to output and MIP bar
                     const output = document.getElementById('mud-output');
@@ -5084,8 +5088,12 @@ class WMTClient {
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Font Size: <span id="font-size-value">${prefs.fontSize || 14}px</span></label>
+                    <label>Font Size (Desktop): <span id="font-size-value">${prefs.fontSize || 14}px</span></label>
                     <input type="range" id="pref-font-size" min="6" max="24" value="${prefs.fontSize || 14}">
+                </div>
+                <div class="form-group">
+                    <label>Font Size (Mobile): <span id="font-size-mobile-value">${prefs.fontSizeMobile || prefs.fontSize || 14}px</span></label>
+                    <input type="range" id="pref-font-size-mobile" min="6" max="24" value="${prefs.fontSizeMobile || prefs.fontSize || 14}">
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -5336,9 +5344,14 @@ class WMTClient {
     }
 
     bindSettingsEvents() {
-        // Font size preview
+        // Font size preview (desktop)
         document.getElementById('pref-font-size')?.addEventListener('input', (e) => {
             document.getElementById('font-size-value').textContent = e.target.value + 'px';
+        });
+
+        // Font size preview (mobile)
+        document.getElementById('pref-font-size-mobile')?.addEventListener('input', (e) => {
+            document.getElementById('font-size-mobile-value').textContent = e.target.value + 'px';
         });
 
         // MIP enabled toggle - show warning about reconnect when turning off
@@ -5495,6 +5508,7 @@ class WMTClient {
         this.preferences = {
             fontFamily: document.getElementById('pref-font-family')?.value || this.preferences.fontFamily || 'Consolas',
             fontSize: parseInt(document.getElementById('pref-font-size')?.value) || this.preferences.fontSize || 14,
+            fontSizeMobile: parseInt(document.getElementById('pref-font-size-mobile')?.value) || this.preferences.fontSizeMobile || this.preferences.fontSize || 14,
             textColor: document.getElementById('pref-text-color')?.value || this.preferences.textColor || '#00ff00',
             backgroundColor: document.getElementById('pref-bg-color')?.value || this.preferences.backgroundColor || '#000000',
             echoCommands: document.getElementById('pref-echo')?.checked ?? this.preferences.echoCommands ?? true,
