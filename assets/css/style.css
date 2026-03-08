@@ -1531,6 +1531,11 @@ body {
     font-size: 0.95em;
 }
 
+.form-group input[type="checkbox"] {
+    width: auto;
+    padding: 0;
+}
+
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
