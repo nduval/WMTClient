@@ -140,6 +140,12 @@ switch ($action) {
             $validated['fontSize'] = max(6, min(24, $fontSize));
         }
 
+        // Font size mobile (6-24)
+        if (isset($preferences['fontSizeMobile'])) {
+            $fontSizeMobile = intval($preferences['fontSizeMobile']);
+            $validated['fontSizeMobile'] = max(6, min(24, $fontSizeMobile));
+        }
+
         // Colors (validate hex format)
         if (isset($preferences['textColor']) && preg_match('/^#[0-9a-fA-F]{6}$/', $preferences['textColor'])) {
             $validated['textColor'] = $preferences['textColor'];
