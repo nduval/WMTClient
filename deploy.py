@@ -281,7 +281,7 @@ def run_test_suites():
 
 
 def deploy_ionos():
-    """Deploy PHP client to IONOS via SFTP"""
+    """Deploy changed PHP client files to IONOS via SFTP (skips unchanged files)"""
     print("\n=== Deploying to IONOS (SFTP) ===")
 
     try:
@@ -312,6 +312,7 @@ def deploy_ionos():
                 sftp.mkdir(remote_base)
 
         uploaded = 0
+        skipped = 0
 
         def should_exclude(path):
             path_str = str(path)
@@ -326,8 +327,17 @@ def deploy_ionos():
                     return True
             return False
 
+        def needs_upload(local_full, remote_full):
+            """Check if local file differs from remote (by size)"""
+            try:
+                remote_stat = sftp.stat(remote_full)
+                local_size = local_full.stat().st_size
+                return local_size != remote_stat.st_size
+            except (FileNotFoundError, IOError):
+                return True  # Remote doesn't exist, upload it
+
         def upload_path(local_path, remote_path):
-            nonlocal uploaded
+            nonlocal uploaded, skipped
 
             if should_exclude(local_path):
                 return
@@ -341,6 +351,11 @@ def deploy_ionos():
                 remote_full = remote_path_unix
 
             if local_full.is_file():
+                # Skip unchanged files
+                if not needs_upload(local_full, remote_full):
+                    skipped += 1
+                    return
+
                 # Ensure parent directory exists
                 remote_dir = '/'.join(remote_full.split('/')[:-1])
                 if remote_dir:  # Only check/create if not in root
@@ -380,7 +395,7 @@ def deploy_ionos():
         sftp.close()
         transport.close()
 
-        print(f"Uploaded {uploaded} files to IONOS.")
+        print(f"Uploaded {uploaded} files to IONOS ({skipped} unchanged, skipped).")
         return True
 
     except Exception as e:
