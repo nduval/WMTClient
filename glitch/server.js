@@ -266,6 +266,9 @@ const LOG_RETENTION_DAYS = 3; // Keep logs on Lightsail for 3 days
 const LOG_USER_ID = process.env.LOG_USER_ID || null; // If set, only log this user's sessions
 const _logDirsCreated = new Set();
 
+const LOG_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per character per day
+const _logFileSizeCache = new Map(); // filePath -> { size, checkedAt }
+
 function writeSessionLog(session, type, data) {
   if (!session) return;
   // Only log for the configured user (if filter is set)
@@ -287,11 +290,29 @@ function writeSessionLog(session, type, data) {
       }
     }
 
+    // Size cap: check every 60s, stop writing if over limit
+    const cached = _logFileSizeCache.get(filePath);
+    const now = Date.now();
+    if (cached && now - cached.checkedAt < 60000) {
+      if (cached.size >= LOG_MAX_FILE_SIZE) return;
+    } else {
+      try {
+        const stat = fs.statSync(filePath);
+        _logFileSizeCache.set(filePath, { size: stat.size, checkedAt: now });
+        if (stat.size >= LOG_MAX_FILE_SIZE) return;
+      } catch (e) {
+        _logFileSizeCache.set(filePath, { size: 0, checkedAt: now });
+      }
+    }
+
     const entry = JSON.stringify({
       ts: new Date().toISOString(),
       type,
       ...data
     }) + '\n';
+
+    // Update cached size estimate
+    if (cached) cached.size += entry.length;
 
     fs.appendFile(filePath, entry, (err) => {
       if (err && !writeSessionLog._errLogged) {
@@ -935,6 +956,14 @@ function autoLoginToMud(session, password) {
               const fullText = session.lineBuffer + text;
               const parts = fullText.split('\n');
 
+              // Remove trailing empty string artifact from \n-terminated data.
+              // "MIP_DATA\r\n".split('\n') → ["MIP_DATA\r", ""] — the empty string
+              // is a split artifact, not real content. Without this, every gagged MIP
+              // line leaks a blank line to the client.
+              if (fullText.endsWith('\n') && parts.length > 0 && parts[parts.length - 1] === '') {
+                parts.pop();
+              }
+
               if (hasGA) {
                 session.lineBuffer = '';
                 flushPatchQueue(session);
@@ -1153,6 +1182,11 @@ async function restorePersistentSessions() {
 
         const fullText = session.lineBuffer + text;
         const parts = fullText.split('\n');
+
+        // Remove trailing empty string artifact from \n-terminated data
+        if (fullText.endsWith('\n') && parts.length > 0 && parts[parts.length - 1] === '') {
+          parts.pop();
+        }
 
         if (hasGA) {
           session.lineBuffer = '';
@@ -2632,6 +2666,17 @@ function processLine(session, line) {
     });
   }
 
+  // Log all output (sent and gagged) for debugging
+  const strippedOut = stripAnsi(line);
+  if (strippedOut.length > 0) {
+    writeSessionLog(session, processed.gag ? 'gag' : 'output', {
+      line: strippedOut.substring(0, 500),
+      ws: strippedOut.trim() === '' ? `ws:${strippedOut.length}` : undefined
+    });
+  } else {
+    writeSessionLog(session, 'output', { line: '', ws: 'empty' });
+  }
+
   if (!processed.gag) {
     sendToClient(session, {
       type: 'mud',
@@ -2796,6 +2841,11 @@ function connectToMud(session) {
 
     const fullText = session.lineBuffer + text;
     const parts = fullText.split('\n');
+
+    // Remove trailing empty string artifact from \n-terminated data
+    if (fullText.endsWith('\n') && parts.length > 0 && parts[parts.length - 1] === '') {
+      parts.pop();
+    }
 
     if (hasGA) {
       session.lineBuffer = '';
