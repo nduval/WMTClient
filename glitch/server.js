@@ -2412,7 +2412,8 @@ function processLine(session, line) {
   line = line.replace(/\r/g, '');
 
   // Collapse consecutive empty lines — allow up to 2, drop the rest
-  if (line.trim() === '') {
+  // Use stripAnsi() because MUD often sends ANSI-only lines (e.g. \x1b[0m) that are visually empty
+  if (stripAnsi(line).trim() === '') {
     session._consecutiveEmptyLines = (session._consecutiveEmptyLines || 0) + 1;
     if (session._consecutiveEmptyLines > 2) return;
   } else {
