@@ -2410,7 +2410,6 @@ function stripTrailingAnsi(text) {
 function processLine(session, line) {
   // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
   line = line.replace(/\r/g, '');
-  if (line.trim() === '') return;
 
   // FIRST LINE OF DEFENSE: Gag MIP protocol lines
   if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {

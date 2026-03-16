@@ -2536,7 +2536,7 @@ class WMTClient {
             // Convert <hl style="...">text</hl> tags to styled spans (from server-side highlights)
             html = html.replace(/&lt;hl style="([^"]*)"&gt;(.*?)&lt;\/hl&gt;/gi, '<span style="$1">$2</span>');
 
-            line.innerHTML = html;
+            line.innerHTML = html || '&nbsp;';
             fragment.appendChild(line);
 
             if (item.options.sound) lastSound = item.options.sound;
