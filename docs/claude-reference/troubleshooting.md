@@ -9,6 +9,11 @@ Common issues and their solutions for the WMT client.
 2. Use regex `/%\d{5}\d{3}[A-Z]{3}/` - no anchors, catches pattern anywhere in line
 3. Check Lightsail version to ensure latest code is deployed (`https://ws.wemudtogether.com/health`)
 
+### Blank lines accumulating from MIP data (fixed 2026-03-16)
+**Problem:** Steady stream of empty lines every few seconds while idle or active. MIP status updates (guild stats, exp, timers) arrive as `#K%...\r\n`. When split by `\n`, this produces `["MIP_DATA\r", ""]`. The MIP line is correctly gagged, but the trailing `""` passes through as a blank line.
+
+**Fix:** Pop trailing empty string after `split('\n')` when `fullText.endsWith('\n')` — at all 3 data handler sites in server.js (bridge mode, direct mode, main handler). This removes the protocol artifact without affecting intentional blank lines in MUD content.
+
 ### HP/SP bars not updating
 1. Check that client name starts with "Portal" in the 3klient registration
 2. For fresh logins, ensure MIP enables AFTER leaving the stasis room (exits != "jump")
