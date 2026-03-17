@@ -67,30 +67,17 @@ Read these files when working on related topics.
 
 ## Development Environments
 
-The working directory varies by machine. Check `memory/hosts.md` for the hostname → path mapping.
+The working directory varies by machine. SSH connection details and IPs are in the Claude memory files (not committed to git).
 
 | Environment | Path | Notes |
 |-------------|------|-------|
-| **NathansASUS** | `C:/Users/nduva/OneDrive/GitHub/client` | Primary, uses Git Bash |
-| **SKYNET** | `C:/Users/nduva/OneDrive/GitHub/client` | Original machine, **READ ONLY** |
+| **Primary** | (see memory/hosts.md) | Uses Git Bash |
+| **Secondary** | (see memory/hosts.md) | **READ ONLY** |
 | **Mac Mini** | `~/github/client` | Secondary, SSH accessible |
 
-**SSH to Mac Mini:**
-```bash
-ssh nathan@192.168.86.55 -i ~/.ssh/id_rsa
-```
+SSH connection strings for Mac Mini, MUD Box (EC2), and Test Lightsail (Sandbox) are stored in Claude memory files only — see `memory/hosts.md`.
 
-**SSH to MUD Box (AWS EC2):**
-```bash
-ssh ec2-user@52.5.228.15 -i ~/.ssh/id_rsa
-```
-- TinTin++ scripts: `~/elminster/*.tin`
-
-**SSH to Test Lightsail (Sandbox):**
-```bash
-ssh -i ~/.ssh/test-mud.pem ubuntu@18.225.235.28
-```
-- Safe sandbox for testing server.js changes without affecting users
+- **Test Sandbox**: Safe for testing server.js changes without affecting users
 - Mock MUD on port 4000, WMT server on port 3000
 - TinTin++ + `ttrun` installed for behavior comparison
 - Reference test library: `/opt/wmt/tests/` — run with `/opt/wmt/tests/run_tests.sh`

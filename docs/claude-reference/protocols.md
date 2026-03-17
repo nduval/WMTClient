@@ -285,4 +285,4 @@ When matching trigger patterns, ANSI codes must be stripped first. Otherwise pat
 The WebSocket proxy includes a version indicator:
 - Visit `https://ws.wemudtogether.com/` - shows version in page title
 - Visit `https://ws.wemudtogether.com/health` - returns JSON with version field
-- Logs: `ssh ubuntu@3.14.128.194 -i ~/.ssh/wmt-client-socket.pem "sudo journalctl -u wmt-server -n 50"`
+- Logs: SSH to Lightsail and run `sudo journalctl -u wmt-server -n 50` (see Claude memory for connection details)

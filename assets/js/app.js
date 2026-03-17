@@ -548,28 +548,11 @@ class WMTClient {
             this.healthCheckPending = false;
             this.healthCheckTimeout = null;
 
-            // Prevent onclose from also trying to reconnect
+            // Force close zombie socket and reconnect cleanly
+            // Use reconnect() which nulls out onclose/onerror/onmessage
+            // handlers before closing, preventing a duplicate auto-reconnect race
             if (this.connection) {
-                this.connection.intentionalDisconnect = true;
-                this.connection.stopKeepAlive();
-
-                // Force close the zombie socket
-                if (this.connection.socket) {
-                    try {
-                        this.connection.socket.close();
-                    } catch (e) {
-                        console.log('Error closing socket:', e);
-                    }
-                }
-
-                // Now manually reconnect (reset flag first)
-                this.connection.intentionalDisconnect = false;
-                this.connection.reconnectAttempts = 0;
-                setTimeout(() => {
-                    if (this.connection) {
-                        this.connection.connect();
-                    }
-                }, 200);
+                this.connection.reconnect();
             }
         }, 5000);
     }
@@ -2467,15 +2450,17 @@ class WMTClient {
             const elapsed = Date.now() - this.reconnectingSince;
             if (elapsed < 5000) {
                 if (status === 'connected') {
-                    // Reconnected quickly - status bar already shows connected, no flicker
+                    // Reconnected quickly - clear suppression and fall through
+                    // to update UI (safe even if already showing "Connected")
                     this.reconnectingSince = null;
+                } else {
+                    // Suppress intermediate states (connecting, authenticating)
                     return;
                 }
-                // Suppress intermediate states (connecting, authenticating)
-                return;
+            } else {
+                // Been reconnecting too long (>5s) - start showing real status
+                this.reconnectingSince = null;
             }
-            // Been reconnecting too long (>5s) - start showing real status
-            this.reconnectingSince = null;
         }
 
         const indicator = document.querySelector('.status-indicator');
