@@ -1255,18 +1255,24 @@ body {
 
 .class-name {
     flex: 1;
+    min-width: 0;
     font-weight: bold;
     font-size: 0.9em;
     color: var(--text-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .class-count {
+    flex-shrink: 0;
     font-size: 0.75em;
     color: var(--text-muted);
     margin-right: 8px;
 }
 
 .class-toggle {
+    flex-shrink: 0;
     width: 36px;
     height: 20px;
     border-radius: 10px;
@@ -1300,6 +1306,7 @@ body {
 }
 
 .class-actions {
+    flex-shrink: 0;
     display: flex;
     gap: 4px;
     margin-left: 8px;
