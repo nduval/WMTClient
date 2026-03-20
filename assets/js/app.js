@@ -384,6 +384,26 @@ class WMTClient {
                 this.characterPassword = pwData.password;
             }
 
+            // Load package variables (fill in defaults, don't overwrite existing)
+            try {
+                const pkgVarsRes = await fetch('api/packages.php?action=variables');
+                const pkgVarsData = await pkgVarsRes.json();
+                if (pkgVarsData.success && pkgVarsData.variables) {
+                    let loaded = 0;
+                    for (const [key, val] of Object.entries(pkgVarsData.variables)) {
+                        if (this.variables[key] === undefined) {
+                            this.variables[key] = val;
+                            loaded++;
+                        }
+                    }
+                    if (loaded > 0) {
+                        this.syncVariablesToServer();
+                    }
+                }
+            } catch (e) {
+                // Non-fatal — package variables are supplemental
+            }
+
             // Load MIP conditions
             await this.loadMipConditions();
 
@@ -10804,7 +10824,8 @@ class WMTClient {
     // Reference: https://tintin.mudhalla.net/manual/foreach.php
     cmdForeach(args, rest) {
         if (args.length < 3) {
-            this.appendOutput('Usage: #foreach {list} {variable} {commands}', 'error');
+            // Silently do nothing for empty lists (TinTin++ behavior)
+            // e.g., #foreach $emptylist[%*] var {cmds} → resolves to 2 args when list is empty
             return;
         }
 
