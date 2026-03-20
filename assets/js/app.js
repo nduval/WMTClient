@@ -10808,25 +10808,44 @@ class WMTClient {
             return;
         }
 
-        const listStr = this.substituteVariables(args[0]);
         const varName = args[1];
         const commands = args[2];
 
-        // Parse the list - can be semicolon-separated or brace-separated
+        // Check for table iteration: $var[%*] — iterate over table/list values directly
+        // This preserves nested objects so $varName[key] access works in the loop body
+        const tableMatch = args[0].match(/^\$(\w+)\[%\*\]$/);
         let items = [];
 
-        if (listStr.includes('{') && listStr.includes('}')) {
-            // Brace-separated: {{bob}{tim}{kim}}
-            const braceRegex = /\{([^{}]*)\}/g;
-            let match;
-            while ((match = braceRegex.exec(listStr)) !== null) {
-                items.push(match[1]);
+        if (tableMatch) {
+            const tableName = tableMatch[1];
+            const tableVal = this.variables[tableName];
+            if (typeof tableVal === 'object' && tableVal !== null) {
+                // Get all values, preserving object structure
+                const keys = Object.keys(tableVal).sort((a, b) => {
+                    const na = parseInt(a), nb = parseInt(b);
+                    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                    return String(a).localeCompare(String(b));
+                });
+                items = keys.map(k => tableVal[k]);
             }
         }
 
-        // If no brace items found, try semicolon-separated
         if (items.length === 0) {
-            items = listStr.split(';').map(s => s.trim()).filter(s => s.length > 0);
+            const listStr = this.substituteVariables(args[0]);
+
+            if (listStr.includes('{') && listStr.includes('}')) {
+                // Brace-separated: {{bob}{tim}{kim}}
+                const braceRegex = /\{([^{}]*)\}/g;
+                let match;
+                while ((match = braceRegex.exec(listStr)) !== null) {
+                    items.push(match[1]);
+                }
+            }
+
+            // If no brace items found, try semicolon-separated
+            if (items.length === 0) {
+                items = listStr.split(';').map(s => s.trim()).filter(s => s.length > 0);
+            }
         }
 
         if (items.length === 0) {
@@ -10847,7 +10866,8 @@ class WMTClient {
                 this.appendOutput('Foreach exceeded maximum iterations (1000)', 'error');
                 break;
             }
-            this.variables[varName] = String(item);  // Ensure string storage
+            // Preserve objects for nested table access ($var[key])
+            this.variables[varName] = (typeof item === 'object' && item !== null) ? item : String(item);
             this.executeCommandString(commands);
 
             // Check for #break
@@ -11052,9 +11072,20 @@ class WMTClient {
 
             case 'sort': {
                 // #list {var} sort - Sort alphabetically
+                // If indexate set a sort field, sort nested objects by that field
                 const list = ensureList();
                 const arr = toArray(list);
-                arr.sort((a, b) => String(a).localeCompare(String(b)));
+                const sortField = this._listSortKeys?.[varName];
+                if (sortField) {
+                    arr.sort((a, b) => {
+                        const va = (typeof a === 'object' && a !== null) ? String(a[sortField] || '') : String(a);
+                        const vb = (typeof b === 'object' && b !== null) ? String(b[sortField] || '') : String(b);
+                        return va.localeCompare(vb);
+                    });
+                    delete this._listSortKeys[varName];
+                } else {
+                    arr.sort((a, b) => String(a).localeCompare(String(b)));
+                }
                 this.variables[varName] = fromArray(arr);
                 break;
             }
@@ -11187,11 +11218,19 @@ class WMTClient {
                 break;
             }
 
+            case 'index':
             case 'indexate': {
-                // #list {var} indexate - Re-index to 1..N (repair key gaps)
-                const list = ensureList();
-                const arr = toArray(list);
-                this.variables[varName] = fromArray(arr);
+                // #list {var} indexate {field} - Set sort key for nested tables
+                // #list {var} indexate         - Re-index to 1..N (repair key gaps)
+                if (args.length >= 3) {
+                    // Store sort field for next #list sort call
+                    if (!this._listSortKeys) this._listSortKeys = {};
+                    this._listSortKeys[varName] = args[2];
+                } else {
+                    const list = ensureList();
+                    const arr = toArray(list);
+                    this.variables[varName] = fromArray(arr);
+                }
                 break;
             }
 
