@@ -55,10 +55,16 @@ define('DEFAULT_FONT_SIZE', 14);
 define('DEFAULT_TEXT_COLOR', '#00ff00');
 define('DEFAULT_BACKGROUND_COLOR', '#000000');
 
+// System packages path (3kdb etc. — not per-user, exempt from storage limits)
+define('PACKAGES_PATH', DATA_PATH . '/packages');
+
 // Ensure data directories exist
 if (!is_dir(DATA_PATH)) {
     mkdir(DATA_PATH, 0755, true);
 }
 if (!is_dir(USERS_PATH)) {
     mkdir(USERS_PATH, 0755, true);
+}
+if (!is_dir(PACKAGES_PATH)) {
+    mkdir(PACKAGES_PATH, 0755, true);
 }

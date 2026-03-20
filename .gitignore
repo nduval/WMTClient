@@ -16,6 +16,9 @@ node_modules/
 # User data
 /data/users/
 
+# System packages (deployed separately via SFTP — too large for git)
+/data/packages/
+
 # IDE
 .idea/
 .vscode/
@@ -44,3 +47,6 @@ __pycache__/
 
 # TinTin++ reference materials (local research, not deployed)
 /tintin-reference/
+
+# Server-side tools (deployed to sandbox, not IONOS)
+/tools/

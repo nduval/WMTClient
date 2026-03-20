@@ -26,6 +26,9 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'list':
         $aliases = loadJsonFile(getAliasesPath($userId, $characterId));
+        // Merge in package aliases
+        $packageAliases = mergePackageItems($userId, $characterId, 'aliases');
+        $aliases = array_merge($aliases, $packageAliases);
         successResponse(['aliases' => $aliases]);
         break;
 
@@ -44,19 +47,26 @@ switch ($action) {
                 continue;
             }
 
-            $validatedAliases[] = [
+            $validated = [
                 'id' => $alias['id'] ?? generateId(),
                 'pattern' => trim($alias['pattern']),
                 'replacement' => $alias['replacement'],
-                'matchType' => in_array($alias['matchType'] ?? '', ['exact', 'startsWith', 'regex'])
+                'matchType' => in_array($alias['matchType'] ?? '', ['exact', 'startsWith', 'regex', 'tintin'])
                     ? $alias['matchType']
                     : 'exact',
                 'enabled' => $alias['enabled'] ?? true,
                 'class' => $alias['class'] ?? null
             ];
+            if (!empty($alias['package'])) {
+                $validated['package'] = $alias['package'];
+            }
+            $validatedAliases[] = $validated;
         }
 
-        saveJsonFile(getAliasesPath($userId, $characterId), $validatedAliases);
+        // Partition: user items go to aliases.json, package items go to packages/
+        $partitioned = partitionPackageItems($validatedAliases);
+        saveJsonFile(getAliasesPath($userId, $characterId), $partitioned['user']);
+        savePackageItems($userId, $characterId, 'aliases', $partitioned['packages']);
         successResponse(['aliases' => $validatedAliases]);
         break;
 

@@ -26,6 +26,9 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'list':
         $triggers = loadJsonFile(getTriggersPath($userId, $characterId));
+        // Merge in package triggers
+        $packageTriggers = mergePackageItems($userId, $characterId, 'triggers');
+        $triggers = array_merge($triggers, $packageTriggers);
         successResponse(['triggers' => $triggers]);
         break;
 
@@ -44,11 +47,11 @@ switch ($action) {
                 continue;
             }
 
-            $validatedTriggers[] = [
+            $validated = [
                 'id' => $trigger['id'] ?? generateId(),
                 'name' => sanitize($trigger['name'] ?? ''),
                 'pattern' => $trigger['pattern'],
-                'matchType' => in_array($trigger['matchType'] ?? '', ['exact', 'contains', 'startsWith', 'endsWith', 'regex'])
+                'matchType' => in_array($trigger['matchType'] ?? '', ['exact', 'contains', 'startsWith', 'endsWith', 'regex', 'tintin'])
                     ? $trigger['matchType']
                     : 'contains',
                 'actions' => $trigger['actions'] ?? [],
@@ -56,6 +59,11 @@ switch ($action) {
                 'priority' => intval($trigger['priority'] ?? 0),
                 'class' => $trigger['class'] ?? null
             ];
+            // Preserve package field for package items
+            if (!empty($trigger['package'])) {
+                $validated['package'] = $trigger['package'];
+            }
+            $validatedTriggers[] = $validated;
         }
 
         // Sort by priority
@@ -63,7 +71,10 @@ switch ($action) {
             return $b['priority'] - $a['priority'];
         });
 
-        saveJsonFile(getTriggersPath($userId, $characterId), $validatedTriggers);
+        // Partition: user items go to triggers.json, package items go to packages/
+        $partitioned = partitionPackageItems($validatedTriggers);
+        saveJsonFile(getTriggersPath($userId, $characterId), $partitioned['user']);
+        savePackageItems($userId, $characterId, 'triggers', $partitioned['packages']);
         successResponse(['triggers' => $validatedTriggers]);
         break;
 

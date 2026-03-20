@@ -5297,6 +5297,16 @@ class WMTClient {
             </div>
 
             <div class="settings-section">
+                <h4>Community Packages</h4>
+                <p style="color:#999;font-size:12px;margin:0 0 8px">
+                    Import community script packages (triggers, aliases, gags). Classes are disabled by default — enable what you need.
+                </p>
+                <div id="packages-list" style="margin-bottom:10px">
+                    <em style="color:#666">Loading...</em>
+                </div>
+            </div>
+
+            <div class="settings-section">
                 <h4>Script Files</h4>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; color: #ccc;">Startup Script (runs on connect)</label>
@@ -5466,6 +5476,9 @@ class WMTClient {
 
         // Load script files list
         this.loadScriptFilesList();
+
+        // Load community packages list
+        this.loadPackagesList();
     }
 
     // Quick save of current preferences (used by pinch-zoom, etc.)
@@ -5637,6 +5650,153 @@ class WMTClient {
         if (data.aliases) exportedItems.push(`${data.aliases.length} aliases`);
         if (data.preferences) exportedItems.push('preferences');
         this.appendOutput(`Exported: ${exportedItems.join(', ')}`, 'system');
+    }
+
+    // Load and render community packages list in settings
+    async loadPackagesList() {
+        const container = document.getElementById('packages-list');
+        if (!container) return;
+
+        try {
+            const res = await fetch('api/packages.php?action=status');
+            const data = await res.json();
+
+            if (!data.success || !data.packages || data.packages.length === 0) {
+                container.innerHTML = '<em style="color:#666">No community packages available</em>';
+                return;
+            }
+
+            let html = '';
+            for (const pkg of data.packages) {
+                const name = this.escapeHtml(pkg.name);
+                const desc = this.escapeHtml(pkg.description || '');
+                const ver = this.escapeHtml(pkg.availableVersion || 'unknown');
+
+                if (pkg.installed) {
+                    const iVer = this.escapeHtml(pkg.installedVersion || '');
+                    const stats = [];
+                    if (pkg.triggerCount) stats.push(`${pkg.triggerCount} triggers`);
+                    if (pkg.aliasCount) stats.push(`${pkg.aliasCount} aliases`);
+                    if (pkg.classCount) stats.push(`${pkg.classCount} classes`);
+                    const statsText = stats.length ? stats.join(', ') : '';
+
+                    html += `<div style="background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;padding:10px;margin-bottom:8px">
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <div>
+                                <strong style="color:#6f6">${name}</strong>
+                                <span style="color:#666;font-size:11px;margin-left:6px">v${iVer}</span>
+                                ${pkg.updateAvailable ? '<span style="color:#fa0;font-size:11px;margin-left:6px">(update available)</span>' : ''}
+                            </div>
+                            <div style="display:flex;gap:6px">
+                                ${pkg.updateAvailable ? `<button class="btn btn-secondary pkg-update-btn" data-pkg="${name}" style="font-size:11px;padding:3px 8px">Update</button>` : ''}
+                                <button class="btn btn-danger pkg-remove-btn" data-pkg="${name}" style="font-size:11px;padding:3px 8px">Remove</button>
+                            </div>
+                        </div>
+                        ${statsText ? `<div style="color:#888;font-size:11px;margin-top:4px">${statsText}</div>` : ''}
+                    </div>`;
+                } else {
+                    const stats = pkg.stats || {};
+                    const statParts = [];
+                    if (stats.triggers) statParts.push(`${stats.triggers} triggers`);
+                    if (stats.aliases) statParts.push(`${stats.aliases} aliases`);
+                    if (stats.classes) statParts.push(`${stats.classes} classes`);
+
+                    html += `<div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:6px;padding:10px;margin-bottom:8px">
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <div>
+                                <strong style="color:#aaf">${name}</strong>
+                                <span style="color:#666;font-size:11px;margin-left:6px">v${ver}</span>
+                            </div>
+                            <button class="btn btn-primary pkg-import-btn" data-pkg="${name}" style="font-size:11px;padding:3px 10px">Import</button>
+                        </div>
+                        ${desc ? `<div style="color:#999;font-size:11px;margin-top:4px">${desc}</div>` : ''}
+                        ${statParts.length ? `<div style="color:#888;font-size:11px;margin-top:2px">${statParts.join(', ')}</div>` : ''}
+                    </div>`;
+                }
+            }
+            container.innerHTML = html;
+
+            // Bind package action buttons
+            container.querySelectorAll('.pkg-import-btn').forEach(btn => {
+                btn.addEventListener('click', () => this.importPackage(btn.dataset.pkg));
+            });
+            container.querySelectorAll('.pkg-update-btn').forEach(btn => {
+                btn.addEventListener('click', () => this.updatePackage(btn.dataset.pkg));
+            });
+            container.querySelectorAll('.pkg-remove-btn').forEach(btn => {
+                btn.addEventListener('click', () => this.removePackage(btn.dataset.pkg));
+            });
+        } catch (e) {
+            console.error('Failed to load packages:', e);
+            container.innerHTML = '<em style="color:#f66">Failed to load packages</em>';
+        }
+    }
+
+    async importPackage(packageName) {
+        try {
+            const res = await fetch('api/packages.php?action=import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ package: packageName })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.appendOutput(`Package "${packageName}" imported: ${data.triggers} triggers, ${data.aliases} aliases, ${data.classes} classes (all disabled). Enable classes in the Classes panel.`, 'system');
+                this.loadPackagesList();
+                // Reload triggers/aliases/classes to include package items
+                await this.loadSettings();
+                this.sendFilteredTriggersAndAliases();
+            } else {
+                this.appendOutput(`Import failed: ${data.error}`, 'error');
+            }
+        } catch (e) {
+            this.appendOutput(`Import error: ${e.message}`, 'error');
+        }
+    }
+
+    async updatePackage(packageName) {
+        try {
+            const res = await fetch('api/packages.php?action=update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ package: packageName })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.appendOutput(`Package "${packageName}" updated to ${data.version}. Class enable states preserved.`, 'system');
+                this.loadPackagesList();
+                await this.loadSettings();
+                this.sendFilteredTriggersAndAliases();
+            } else {
+                this.appendOutput(`Update failed: ${data.error}`, 'error');
+            }
+        } catch (e) {
+            this.appendOutput(`Update error: ${e.message}`, 'error');
+        }
+    }
+
+    async removePackage(packageName) {
+        if (!confirm(`Remove "${packageName}" package? This will delete all its triggers, aliases, and classes from this character.`)) {
+            return;
+        }
+        try {
+            const res = await fetch('api/packages.php?action=remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ package: packageName })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.appendOutput(`Package "${packageName}" removed.`, 'system');
+                this.loadPackagesList();
+                await this.loadSettings();
+                this.sendFilteredTriggersAndAliases();
+            } else {
+                this.appendOutput(`Remove failed: ${data.error}`, 'error');
+            }
+        } catch (e) {
+            this.appendOutput(`Remove error: ${e.message}`, 'error');
+        }
     }
 
     // Load list of uploaded script files (with folder support)

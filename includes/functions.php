@@ -73,6 +73,7 @@ function getUserDataPath(string $userId): string {
 
 /**
  * Calculate total size of a directory recursively
+ * Skips /packages/ subdirectories (exempt from storage limits)
  */
 function getDirectorySize(string $path): int {
     $size = 0;
@@ -86,6 +87,11 @@ function getDirectorySize(string $path): int {
 
     foreach ($iterator as $file) {
         if ($file->isFile()) {
+            $filePath = $file->getPathname();
+            if (strpos($filePath, DIRECTORY_SEPARATOR . 'packages' . DIRECTORY_SEPARATOR) !== false
+                || strpos($filePath, '/packages/') !== false) {
+                continue;
+            }
             $size += $file->getSize();
         }
     }
@@ -95,6 +101,7 @@ function getDirectorySize(string $path): int {
 
 /**
  * Count total files in a directory recursively
+ * Skips /packages/ subdirectories (exempt from storage limits)
  */
 function getDirectoryFileCount(string $path): int {
     $count = 0;
@@ -108,6 +115,11 @@ function getDirectoryFileCount(string $path): int {
 
     foreach ($iterator as $file) {
         if ($file->isFile()) {
+            $filePath = $file->getPathname();
+            if (strpos($filePath, DIRECTORY_SEPARATOR . 'packages' . DIRECTORY_SEPARATOR) !== false
+                || strpos($filePath, '/packages/') !== false) {
+                continue;
+            }
             $count++;
         }
     }
@@ -791,4 +803,118 @@ function denyGuest(): void {
     if (isGuest()) {
         errorResponse('Guest accounts cannot save data', 403);
     }
+}
+
+// ─── Package helpers ────────────────────────────────────────────
+
+/**
+ * Get path to character's packages directory
+ */
+function getPackagesDir(string $userId, string $characterId): string {
+    return getCharacterDataPath($userId, $characterId) . '/packages';
+}
+
+/**
+ * Get path to a specific character package file
+ */
+function getPackagePath(string $userId, string $characterId, string $packageName): string {
+    // Sanitize package name to prevent path traversal
+    $safe = preg_replace('/[^a-zA-Z0-9_-]/', '', $packageName);
+    return getPackagesDir($userId, $characterId) . '/' . $safe . '.json';
+}
+
+/**
+ * Load all installed packages for a character
+ */
+function loadCharacterPackages(string $userId, string $characterId): array {
+    $dir = getPackagesDir($userId, $characterId);
+    if (!is_dir($dir)) {
+        return [];
+    }
+    $packages = [];
+    foreach (glob($dir . '/*.json') as $file) {
+        $data = loadJsonFile($file);
+        if (!empty($data['package'])) {
+            $packages[$data['package']] = $data;
+        }
+    }
+    return $packages;
+}
+
+/**
+ * Load package items (triggers/aliases/tickers) and merge with user items
+ * Returns combined array with package items tagged with 'package' field
+ */
+function mergePackageItems(string $userId, string $characterId, string $itemType): array {
+    $packages = loadCharacterPackages($userId, $characterId);
+    $packageItems = [];
+    foreach ($packages as $pkg) {
+        if (!empty($pkg[$itemType]) && is_array($pkg[$itemType])) {
+            foreach ($pkg[$itemType] as $item) {
+                $item['package'] = $pkg['package'];
+                $packageItems[] = $item;
+            }
+        }
+    }
+    return $packageItems;
+}
+
+/**
+ * Separate package items from user items in a save payload
+ * Returns ['user' => [...], 'packages' => ['pkgName' => [...], ...]]
+ */
+function partitionPackageItems(array $items): array {
+    $user = [];
+    $packages = [];
+    foreach ($items as $item) {
+        if (!empty($item['package'])) {
+            $pkgName = $item['package'];
+            if (!isset($packages[$pkgName])) {
+                $packages[$pkgName] = [];
+            }
+            $packages[$pkgName][] = $item;
+        } else {
+            $user[] = $item;
+        }
+    }
+    return ['user' => $user, 'packages' => $packages];
+}
+
+/**
+ * Save partitioned package items back to their package files
+ */
+function savePackageItems(string $userId, string $characterId, string $itemType, array $packageItems): void {
+    foreach ($packageItems as $pkgName => $items) {
+        $path = getPackagePath($userId, $characterId, $pkgName);
+        $pkg = loadJsonFile($path);
+        if (empty($pkg)) {
+            continue; // Package file doesn't exist — skip
+        }
+        $pkg[$itemType] = $items;
+        saveJsonFile($path, $pkg);
+    }
+}
+
+/**
+ * List available system packages (from data/packages/)
+ */
+function listSystemPackages(): array {
+    $packages = [];
+    if (!is_dir(PACKAGES_PATH)) {
+        return $packages;
+    }
+    foreach (scandir(PACKAGES_PATH) as $dir) {
+        if ($dir === '.' || $dir === '..') continue;
+        $manifestPath = PACKAGES_PATH . '/' . $dir . '/manifest.json';
+        if (file_exists($manifestPath)) {
+            $manifest = loadJsonFile($manifestPath);
+            $packages[] = [
+                'name' => $dir,
+                'description' => $manifest['description'] ?? '',
+                'version' => $manifest['version'] ?? 'unknown',
+                'stats' => $manifest['stats'] ?? [],
+            ];
+        }
+    }
+    return $packages;
 }

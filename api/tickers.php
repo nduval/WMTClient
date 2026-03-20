@@ -26,6 +26,9 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'list':
         $tickers = loadJsonFile(getTickersPath($userId, $characterId));
+        // Merge in package tickers
+        $packageTickers = mergePackageItems($userId, $characterId, 'tickers');
+        $tickers = array_merge($tickers, $packageTickers);
         successResponse(['tickers' => $tickers]);
         break;
 
@@ -44,7 +47,7 @@ switch ($action) {
                 continue;
             }
 
-            $validatedTickers[] = [
+            $validated = [
                 'id' => $ticker['id'] ?? generateId(),
                 'name' => sanitize($ticker['name'] ?? ''),
                 'command' => $ticker['command'],
@@ -52,9 +55,16 @@ switch ($action) {
                 'enabled' => $ticker['enabled'] ?? true,
                 'class' => $ticker['class'] ?? null
             ];
+            if (!empty($ticker['package'])) {
+                $validated['package'] = $ticker['package'];
+            }
+            $validatedTickers[] = $validated;
         }
 
-        saveJsonFile(getTickersPath($userId, $characterId), $validatedTickers);
+        // Partition: user items go to tickers.json, package items go to packages/
+        $partitioned = partitionPackageItems($validatedTickers);
+        saveJsonFile(getTickersPath($userId, $characterId), $partitioned['user']);
+        savePackageItems($userId, $characterId, 'tickers', $partitioned['packages']);
         successResponse(['tickers' => $validatedTickers]);
         break;
 
