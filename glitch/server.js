@@ -2455,14 +2455,22 @@ function processLine(session, line) {
   }
 
   // FIRST LINE OF DEFENSE: Gag MIP protocol lines
+  // MUD init can send multiple MIP messages concatenated in one TCP chunk:
+  //   #K%59828039BAD...#K%59828007DDDjump#K%59828095FFFA~2705~...
+  // Must loop through ALL matches, not just the first.
   if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
-    const mipMatch = line.match(/%(\d{5})(\d{3})([A-Z]{3})/);
-    if (mipMatch && session.mipEnabled) {
-      const len = parseInt(mipMatch[2], 10);
-      const msgType = mipMatch[3];
-      const dataStart = mipMatch.index + mipMatch[0].length;
-      const msgData = line.substring(dataStart, dataStart + len);
-      parseMipMessage(session, msgType, msgData);
+    if (session.mipEnabled) {
+      const mipRegex = /%(\d{5})(\d{3})([A-Z]{3})/g;
+      let mipMatch;
+      while ((mipMatch = mipRegex.exec(line)) !== null) {
+        const len = parseInt(mipMatch[2], 10);
+        const msgType = mipMatch[3];
+        const dataStart = mipMatch.index + mipMatch[0].length;
+        const msgData = line.substring(dataStart, dataStart + len);
+        parseMipMessage(session, msgType, msgData);
+        // Advance past the data portion so we don't re-match inside it
+        mipRegex.lastIndex = dataStart + len;
+      }
     }
     return;
   }

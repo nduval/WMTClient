@@ -1225,7 +1225,7 @@ class WMTClient {
 
         // Match patterns and split into items
         // Regex: captures "Label:[val]", "Label: val", or standalone "[...]"
-        const pattern = /(\w+:\s*\[[^\]]+\]|\w+:\s*[\w.%\/]+(?:\s+\w+)?|\[[^\]]+\])/g;
+        const pattern = /(\w+:\s*\[[^\]]+\]|\w+:\s*[\w.%\/;]+(?:\s+\w+)?|\[[^\]]+\])/g;
 
         let lastIndex = 0;
         let match;
