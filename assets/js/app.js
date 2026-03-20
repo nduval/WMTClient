@@ -9832,6 +9832,7 @@ class WMTClient {
                     case 'b': result += '\x08'; i++; break;
                     case '\\': result += '\\'; i++; break;
                     case ';': result += ';'; i++; break;
+                    case ' ': result += ' '; i++; break;
                     case 'x':
                         if (i + 3 < str.length) {
                             const hex = str.substring(i + 2, i + 4);

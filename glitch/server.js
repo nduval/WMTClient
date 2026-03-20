@@ -4021,6 +4021,7 @@ function processEscapes(str) {
       const next = str[i + 1];
       switch (next) {
         case ';':  result += ';';    i++; break;
+        case ' ':  result += ' ';    i++; break;
         case '\\': result += '\\';   i++; break;
         case 'n':  result += '\n';   i++; break;
         case 't':  result += '\t';   i++; break;
