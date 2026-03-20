@@ -5741,7 +5741,7 @@ class WMTClient {
             });
             const data = await res.json();
             if (data.success) {
-                this.appendOutput(`Package "${packageName}" imported: ${data.triggers} triggers, ${data.aliases} aliases, ${data.classes} classes (all disabled). Enable classes in the Classes panel.`, 'system');
+                this.appendOutput(`Package "${packageName}" imported: ${data.triggers} triggers, ${data.aliases} aliases, ${data.classes} classes (${data.classesEnabled} enabled, ${data.classesDisabled} guild/bot disabled). Toggle classes in the Classes panel.`, 'system');
                 this.loadPackagesList();
                 // Reload triggers/aliases/classes to include package items
                 await this.loadSettings();
