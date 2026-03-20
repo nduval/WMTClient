@@ -2360,11 +2360,11 @@ function parseFFFStats(session, data) {
         case 'N': mipStats.round = parseInt(value) || 0; break;
         case 'I':
           mipStats.gline1Raw = value;
-          mipStats.gline1 = convertMipColors(value);
+          mipStats.gline1 = convertMipColors(value.replace(/;/g, ' '));
           break;
         case 'J':
           mipStats.gline2Raw = value;
-          mipStats.gline2 = convertMipColors(value);
+          mipStats.gline2 = convertMipColors(value.replace(/;/g, ' '));
           break;
       }
       i += 2;
