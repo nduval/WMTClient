@@ -2216,30 +2216,20 @@ function parseMipMessage(session, msgType, msgData) {
         // Skip sending soul echoes ([you]:) to chatmon entirely —
         // the [To recipient]: line already covers it
         if (!isSoulEcho) {
-          sendToClient(session, {
-            type: 'mip_chat',
-            chatType: 'tell',
-            channel: channel,
-            raw: msgData,
-            rawText: rawText,
-            message: formatted,
+          // Buffer the BAB message — the next line in the TCP chunk tells us
+          // if this is a soul ("From afar, ...") or a regular tell.
+          // processLine flushes this buffer before processing the next line.
+          session._pendingBab = {
+            formatted, rawText, raw: msgData,
             outbound: isSentByUser || undefined
-          });
-
-          // Server-side Discord notification (works even when browser is closed)
-          if (rawText) {
-            const channelPrefs = session.discordChannelPrefs['tell'] || session.discordChannelPrefs['Tell'];
-            if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
-              logSessionEvent('DISCORD_SEND', {
-                token: session.token.substring(0, 8),
-                user: session.userId,
-                char: session.characterName,
-                channel: 'tell',
-                messagePreview: rawText.substring(0, 50)
-              });
-              sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
+          };
+          // Fallback: if no more lines arrive, flush as tell after 100ms
+          if (session._pendingBabTimeout) clearTimeout(session._pendingBabTimeout);
+          session._pendingBabTimeout = setTimeout(() => {
+            if (session._pendingBab) {
+              flushPendingBab(session, 'tell');
             }
-          }
+          }, 100);
         }
       }
       break;
@@ -2439,11 +2429,62 @@ function stripTrailingAnsi(text) {
 }
 
 /**
+ * Flush a buffered BAB message as either 'tell' or 'soul' channel.
+ * Called from processLine when we can inspect the next line for "From afar".
+ */
+function flushPendingBab(session, channel) {
+  const bab = session._pendingBab;
+  if (!bab) return;
+  session._pendingBab = null;
+  if (session._pendingBabTimeout) {
+    clearTimeout(session._pendingBabTimeout);
+    session._pendingBabTimeout = null;
+  }
+
+  sendToClient(session, {
+    type: 'mip_chat',
+    chatType: channel === 'soul' ? 'soul' : 'tell',
+    channel: channel,
+    raw: bab.raw,
+    rawText: bab.rawText,
+    message: bab.formatted,
+    outbound: bab.outbound
+  });
+
+  // Server-side Discord notification
+  if (bab.rawText) {
+    const channelPrefs = session.discordChannelPrefs[channel] || session.discordChannelPrefs['tell'];
+    if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+      logSessionEvent('DISCORD_SEND', {
+        token: session.token.substring(0, 8),
+        user: session.userId,
+        char: session.characterName,
+        channel: channel,
+        messagePreview: bab.rawText.substring(0, 50)
+      });
+      sendToDiscordWebhook(channelPrefs.webhookUrl, bab.rawText, session.discordUsername);
+    }
+  }
+}
+
+/**
  * Process a single line from MUD
  */
 function processLine(session, line) {
   // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
   line = line.replace(/\r/g, '');
+
+  // Flush any pending BAB tell/soul — the MUD sends the MIP BAB message
+  // on one line, then the ANSI text on the next. If the ANSI text starts
+  // with "From afar", it's a soul; otherwise it's a regular tell.
+  if (session._pendingBab) {
+    const stripped = stripAnsi(line).trim();
+    if (/^From afar,/i.test(stripped)) {
+      flushPendingBab(session, 'soul');
+    } else {
+      flushPendingBab(session, 'tell');
+    }
+  }
 
   // Collapse consecutive empty lines — allow up to 2, drop the rest
   // Use stripAnsi() because MUD often sends ANSI-only lines (e.g. \x1b[0m) that are visually empty
