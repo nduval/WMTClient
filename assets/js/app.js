@@ -7074,7 +7074,10 @@ class WMTClient {
                 break;
 
             case 'kill': {
-                // TinTin++ kill: clear all items, close if open, remove class entirely
+                // WMT: kill = disable class (items preserved, not deleted)
+                // In TinTin++ kill removes items, but WMT uses persistent storage
+                // so we disable instead. Re-opening the class re-enables it.
+                // Duplicate items are handled by cmdAction/cmdAlias/etc which update in-place.
                 if (!existing) {
                     this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
                     return;
@@ -7085,10 +7088,8 @@ class WMTClient {
                 }
                 // Remove from stack if present
                 this.classStack = this.classStack.filter(id => id !== existing.id);
-                // Delete class and all its items
-                await this.deleteClass(existing.id, true);
-                // Remove any saved snapshot
-                delete this.classSnapshots[className.toLowerCase()];
+                // Disable the class instead of deleting
+                await this.setClassEnabled(existing.id, false);
                 this.appendOutput(`#CLASS {${className}} KILLED.`, 'system');
                 break;
             }
