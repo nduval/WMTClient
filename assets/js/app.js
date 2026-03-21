@@ -328,12 +328,19 @@ class WMTClient {
         }
     }
 
+    apiUrl(url) {
+        const charId = window.WMT_CONFIG?.characterId;
+        if (!charId) return url;
+        const sep = url.includes('?') ? '&' : '?';
+        return url + sep + 'character_id=' + encodeURIComponent(charId);
+    }
+
     async syncCharacterSession() {
         const charId = window.WMT_CONFIG?.characterId;
         const csrfToken = window.WMT_CONFIG?.csrfToken;
         if (!charId || !csrfToken) return;
         try {
-            await fetch('api/characters.php?action=select', {
+            await fetch(this.apiUrl('api/characters.php?action=select'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ character_id: charId, csrf_token: csrfToken })
@@ -346,14 +353,14 @@ class WMTClient {
     async loadSettings() {
         try {
             // Load triggers
-            const triggersRes = await fetch('api/triggers.php?action=list');
+            const triggersRes = await fetch(this.apiUrl('api/triggers.php?action=list'));
             const triggersData = await triggersRes.json();
             if (triggersData.success) {
                 this.triggers = triggersData.triggers || [];
             }
 
             // Load aliases
-            const aliasesRes = await fetch('api/aliases.php?action=list');
+            const aliasesRes = await fetch(this.apiUrl('api/aliases.php?action=list'));
             const aliasesData = await aliasesRes.json();
             if (aliasesData.success) {
                 this.aliases = aliasesData.aliases || [];
@@ -371,21 +378,21 @@ class WMTClient {
             }
 
             // Load tickers
-            const tickersRes = await fetch('api/tickers.php?action=list');
+            const tickersRes = await fetch(this.apiUrl('api/tickers.php?action=list'));
             const tickersData = await tickersRes.json();
             if (tickersData.success) {
                 this.tickers = tickersData.tickers || [];
             }
 
             // Load classes
-            const classesRes = await fetch('api/classes.php?action=list');
+            const classesRes = await fetch(this.apiUrl('api/classes.php?action=list'));
             const classesData = await classesRes.json();
             if (classesData.success) {
                 this.classes = classesData.classes || [];
             }
 
             // Load preferences
-            const prefsRes = await fetch('api/preferences.php?action=get');
+            const prefsRes = await fetch(this.apiUrl('api/preferences.php?action=get'));
             const prefsData = await prefsRes.json();
             if (prefsData.success) {
                 this.preferences = prefsData.preferences || {};
@@ -394,7 +401,7 @@ class WMTClient {
             }
 
             // Load character password for auto-login
-            const pwRes = await fetch('api/characters.php?action=get_password');
+            const pwRes = await fetch(this.apiUrl('api/characters.php?action=get_password'));
             const pwData = await pwRes.json();
             if (pwData.success && pwData.password) {
                 this.characterPassword = pwData.password;
@@ -402,7 +409,7 @@ class WMTClient {
 
             // Load package variables (fill in defaults, don't overwrite existing)
             try {
-                const pkgVarsRes = await fetch('api/packages.php?action=variables');
+                const pkgVarsRes = await fetch(this.apiUrl('api/packages.php?action=variables'));
                 const pkgVarsData = await pkgVarsRes.json();
                 if (pkgVarsData.success && pkgVarsData.variables) {
                     let loaded = 0;
@@ -1853,7 +1860,7 @@ class WMTClient {
 
     async saveMipConditions() {
         try {
-            await fetch('api/preferences.php?action=save_mip_conditions', {
+            await fetch(this.apiUrl('api/preferences.php?action=save_mip_conditions'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ conditions: this.mipConditions })
@@ -1865,7 +1872,7 @@ class WMTClient {
 
     async loadMipConditions() {
         try {
-            const res = await fetch('api/preferences.php?action=get_mip_conditions');
+            const res = await fetch(this.apiUrl('api/preferences.php?action=get_mip_conditions'));
             const data = await res.json();
             if (data.success && data.conditions) {
                 this.mipConditions = data.conditions;
@@ -1903,7 +1910,7 @@ class WMTClient {
         // Save open state (desktop only)
         const isMobile = window.innerWidth <= 768;
         if (!isMobile) {
-            fetch('api/preferences.php?action=save', {
+            fetch(this.apiUrl('api/preferences.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preferences: { chatWindowOpen: this.chatWindowOpen } })
@@ -1979,7 +1986,7 @@ class WMTClient {
         // Save preference for persistence (desktop only)
         const isMobile = window.innerWidth <= 768;
         if (!isMobile && !skipSave) {
-            fetch('api/preferences.php?action=save', {
+            fetch(this.apiUrl('api/preferences.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preferences: { chatWindowMode: mode } })
@@ -2109,7 +2116,7 @@ class WMTClient {
     async saveChannelPrefs() {
         try {
             this.preferences.channelPrefs = this.channelPrefs;
-            const res = await fetch('api/preferences.php?action=save', {
+            const res = await fetch(this.apiUrl('api/preferences.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3522,7 +3529,7 @@ class WMTClient {
         }
 
         // Save preference
-        fetch('api/preferences.php?action=save', {
+        fetch(this.apiUrl('api/preferences.php?action=save'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ preferences: { mipDebug: enabled } })
@@ -3533,7 +3540,7 @@ class WMTClient {
 
     async logout() {
         try {
-            await fetch('api/auth.php?action=logout');
+            await fetch(this.apiUrl('api/auth.php?action=logout'));
             window.location.href = 'index.php';
         } catch (e) {
             console.error('Logout failed:', e);
@@ -3546,7 +3553,7 @@ class WMTClient {
         }
 
         try {
-            const res = await fetch('api/characters.php?action=select', {
+            const res = await fetch(this.apiUrl('api/characters.php?action=select'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3984,7 +3991,7 @@ class WMTClient {
 
     async renameClass(classId, newName) {
         try {
-            const res = await fetch('api/classes.php?action=update', {
+            const res = await fetch(this.apiUrl('api/classes.php?action=update'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ class_id: classId, name: newName })
@@ -4506,7 +4513,7 @@ class WMTClient {
     async saveTriggers() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
-            const res = await fetch('api/triggers.php?action=save', {
+            const res = await fetch(this.apiUrl('api/triggers.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ triggers: this.triggers })
@@ -5048,7 +5055,7 @@ class WMTClient {
     async saveAliases() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
-            const res = await fetch('api/aliases.php?action=save', {
+            const res = await fetch(this.apiUrl('api/aliases.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ aliases: this.aliases })
@@ -5071,7 +5078,7 @@ class WMTClient {
     async saveTickers() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
-            const res = await fetch('api/tickers.php?action=save', {
+            const res = await fetch(this.apiUrl('api/tickers.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tickers: this.tickers })
@@ -5521,7 +5528,7 @@ class WMTClient {
     // Does NOT read from DOM - just saves what's in this.preferences
     async saveCurrentPreferences() {
         try {
-            const res = await fetch('api/preferences.php?action=save', {
+            const res = await fetch(this.apiUrl('api/preferences.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preferences: this.preferences })
@@ -5568,7 +5575,7 @@ class WMTClient {
         };
 
         try {
-            const res = await fetch('api/preferences.php?action=save', {
+            const res = await fetch(this.apiUrl('api/preferences.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preferences: this.preferences })
@@ -5694,7 +5701,7 @@ class WMTClient {
         if (!container) return;
 
         try {
-            const res = await fetch('api/packages.php?action=status');
+            const res = await fetch(this.apiUrl('api/packages.php?action=status'));
             const data = await res.json();
 
             if (!data.success || !data.packages || data.packages.length === 0) {
@@ -5770,7 +5777,7 @@ class WMTClient {
 
     async importPackage(packageName) {
         try {
-            const res = await fetch('api/packages.php?action=import', {
+            const res = await fetch(this.apiUrl('api/packages.php?action=import'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ package: packageName })
@@ -5792,7 +5799,7 @@ class WMTClient {
 
     async updatePackage(packageName) {
         try {
-            const res = await fetch('api/packages.php?action=update', {
+            const res = await fetch(this.apiUrl('api/packages.php?action=update'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ package: packageName })
@@ -5816,7 +5823,7 @@ class WMTClient {
             return;
         }
         try {
-            const res = await fetch('api/packages.php?action=remove', {
+            const res = await fetch(this.apiUrl('api/packages.php?action=remove'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ package: packageName })
@@ -5841,7 +5848,7 @@ class WMTClient {
         if (!container) return;
 
         try {
-            const res = await fetch('api/scripts.php?action=list');
+            const res = await fetch(this.apiUrl('api/scripts.php?action=list'));
             const data = await res.json();
 
             if (!data.success || !data.scripts || data.scripts.length === 0) {
@@ -5972,7 +5979,7 @@ class WMTClient {
         }
 
         try {
-            const res = await fetch('api/scripts.php?action=mkdir', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=mkdir'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ folder: folderName })
@@ -5996,7 +6003,7 @@ class WMTClient {
         if (!confirm(`Delete folder "${folderPath}"? It must be empty.`)) return;
 
         try {
-            const res = await fetch('api/scripts.php?action=rmdir', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=rmdir'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ folder: folderPath })
@@ -6090,7 +6097,7 @@ class WMTClient {
         if (oldPath === newPath) return;
 
         try {
-            const res = await fetch('api/scripts.php?action=rename', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=rename'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ oldName: oldPath, newName: newPath })
@@ -6117,7 +6124,7 @@ class WMTClient {
     // Download a script file
     async downloadScriptFile(filename) {
         try {
-            const res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+            const res = await fetch(this.apiUrl(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`));
             const data = await res.json();
 
             if (!data.success) {
@@ -6146,7 +6153,7 @@ class WMTClient {
         if (!confirm(`Delete script file "${displayName}"?`)) return;
 
         try {
-            const res = await fetch('api/scripts.php?action=delete', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=delete'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename })
@@ -6177,7 +6184,7 @@ class WMTClient {
             this.editingScriptFilename = filename;
 
             try {
-                const res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+                const res = await fetch(this.apiUrl(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`));
                 const data = await res.json();
                 if (data.success) {
                     contentEl.value = data.content;
@@ -6217,7 +6224,7 @@ class WMTClient {
         const content = contentEl.value;
 
         try {
-            const res = await fetch('api/scripts.php?action=save', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename, content })
@@ -6258,7 +6265,7 @@ class WMTClient {
             const formData = new FormData();
             formData.append('file', file);
 
-            const res = await fetch('api/export.php?action=import&mode=replace', {
+            const res = await fetch(this.apiUrl('api/export.php?action=import&mode=replace'), {
                 method: 'POST',
                 body: formData
             });
@@ -6306,7 +6313,7 @@ class WMTClient {
         select.innerHTML = '<option value="">Loading...</option>';
 
         try {
-            const res = await fetch('api/characters.php?action=list');
+            const res = await fetch(this.apiUrl('api/characters.php?action=list'));
             const data = await res.json();
 
             if (!data.success || !data.characters) {
@@ -6341,7 +6348,7 @@ class WMTClient {
         if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
 
         try {
-            const res = await fetch(`api/export.php?action=preview_source&source_id=${encodeURIComponent(sourceId)}`);
+            const res = await fetch(this.apiUrl(`api/export.php?action=preview_source&source_id=${encodeURIComponent(sourceId)}`));
             const data = await res.json();
             if (!data.success) throw new Error(data.error || 'Failed to load preview');
 
@@ -6496,7 +6503,7 @@ class WMTClient {
                 body.script_collision = scriptCollision;
             }
 
-            const res = await fetch('api/export.php?action=copy_from', {
+            const res = await fetch(this.apiUrl('api/export.php?action=copy_from'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -7276,7 +7283,7 @@ class WMTClient {
                 }
                 const content = this.exportClassToTinTin(existing);
                 try {
-                    const res = await fetch('api/scripts.php?action=save', {
+                    const res = await fetch(this.apiUrl('api/scripts.php?action=save'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ filename, content })
@@ -7302,7 +7309,7 @@ class WMTClient {
     // Create a new class
     async createClass(name) {
         try {
-            const res = await fetch('api/classes.php?action=create', {
+            const res = await fetch(this.apiUrl('api/classes.php?action=create'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
@@ -7323,7 +7330,7 @@ class WMTClient {
     // Enable/disable a class
     async setClassEnabled(classId, enabled) {
         try {
-            const res = await fetch('api/classes.php?action=update', {
+            const res = await fetch(this.apiUrl('api/classes.php?action=update'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ class_id: classId, enabled })
@@ -7354,7 +7361,7 @@ class WMTClient {
     // Delete a class
     async deleteClass(classId, deleteItems = false) {
         try {
-            const res = await fetch('api/classes.php?action=delete', {
+            const res = await fetch(this.apiUrl('api/classes.php?action=delete'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ class_id: classId, delete_items: deleteItems })
@@ -8096,11 +8103,11 @@ class WMTClient {
         const calledFrom = this._readStack.length ? this._readStack[this._readStack.length - 1] : null;
 
         try {
-            let res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+            let res = await fetch(this.apiUrl(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`));
             // If session lost character selection, re-sync and retry once
             if (res.status === 401) {
                 await this.syncCharacterSession();
-                res = await fetch(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`);
+                res = await fetch(this.apiUrl(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`));
             }
             const data = await res.json();
 
@@ -8321,7 +8328,7 @@ class WMTClient {
 
         // Save to server
         try {
-            const res = await fetch('api/scripts.php?action=save', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename, content })
@@ -8416,7 +8423,7 @@ class WMTClient {
             const formData = new FormData();
             formData.append('file', file);
 
-            const res = await fetch('api/scripts.php?action=upload', {
+            const res = await fetch(this.apiUrl('api/scripts.php?action=upload'), {
                 method: 'POST',
                 body: formData
             });
@@ -8442,7 +8449,7 @@ class WMTClient {
     // #scripts - List available script files (with folder support)
     async cmdScripts(args) {
         try {
-            const res = await fetch('api/scripts.php?action=list');
+            const res = await fetch(this.apiUrl('api/scripts.php?action=list'));
             const data = await res.json();
 
             if (!data.success) {

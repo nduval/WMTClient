@@ -728,8 +728,20 @@ function getCurrentUsername(): ?string {
 
 /**
  * Get current character ID
+ * Prefers request param (tab-specific) over session (shared across tabs)
+ * to prevent cross-character data contamination in multi-tab usage.
  */
 function getCurrentCharacterId(): ?string {
+    $requestCharId = $_GET['character_id'] ?? null;
+    if ($requestCharId && preg_match('/^[a-f0-9]{32,64}$/', $requestCharId)) {
+        $userId = getCurrentUserId();
+        if ($userId) {
+            $charPath = getCharacterDataPath($userId, $requestCharId);
+            if (is_dir($charPath)) {
+                return $requestCharId;
+            }
+        }
+    }
     return $_SESSION['character_id'] ?? null;
 }
 
