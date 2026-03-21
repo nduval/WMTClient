@@ -2284,13 +2284,15 @@ function botProcessLine(session, strippedLine) {
     return true;
   }
 
-  // Exit marker: -X-_..._-X-
+  // Exit marker: -X-_..._-X- — always the LAST line of room display.
+  // Use it as the room-complete signal to determine bot action.
   if (strippedLine.startsWith('-X-_')) {
+    setImmediate(() => botDetermineAction(session));
     return true;
   }
 
-  // Prompt detection (> at start of line = room scan complete)
-  if (/^>\s*$/.test(strippedLine) || strippedLine === '>') {
+  // Fallback prompt detection (> at start of line)
+  if (/^>\s*$/.test(strippedLine)) {
     botDetermineAction(session);
     return false; // Don't gag the prompt
   }
