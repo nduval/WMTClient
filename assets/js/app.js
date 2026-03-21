@@ -127,6 +127,22 @@ const COMMAND_REGISTRY = [
     // --- Misc ---
     { name: 'nop',          abbrevs: [],                   handler: null,              async: false, special: 'nop',
       category: 'Misc', syntax: '#nop {comment}', description: 'No operation (comment)' },
+    { name: 'map',          abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#map', description: 'Map (not supported — silently ignored)' },
+    { name: 'screen',       abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#screen', description: 'Screen (not supported — silently ignored)' },
+    { name: 'draw',         abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#draw', description: 'Draw (not supported — silently ignored)' },
+    { name: 'script',       abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#script', description: 'Script (not supported — silently ignored)' },
+    { name: 'system',       abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#system', description: 'System (not supported — silently ignored)' },
+    { name: 'macro',        abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#macro', description: 'Macro (not supported — silently ignored)' },
+    { name: 'unmacro',      abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#unmacro', description: 'Unmacro (not supported — silently ignored)' },
+    { name: 'unsplit',      abbrevs: [],                   handler: null,              async: false, special: 'nop',
+      category: 'Misc', syntax: '#unsplit', description: 'Unsplit (not supported — silently ignored)' },
     { name: 'mip',          abbrevs: [],                   handler: 'cmdMip',          async: false,
       category: 'Misc', syntax: '#mip [reload|on|off]', description: 'MIP protocol control' },
     { name: 'grep',         abbrevs: ['buffer'],           handler: 'cmdGrep',         async: false,
@@ -7253,6 +7269,8 @@ class WMTClient {
                     return;
                 }
                 let filename = args[2];
+                // Strip path separators — WMT stores in flat scripts directory
+                filename = filename.replace(/^.*[\/\\]/, '');
                 if (!filename.match(/\.(txt|tin)$/i)) {
                     filename += '.tin';
                 }
@@ -11195,7 +11213,7 @@ class WMTClient {
                 const srcName = args[2];
                 const srcVal = this.variables[srcName];
                 if (srcVal === undefined) {
-                    this.appendOutput(`#LIST: VARIABLE {${srcName}} NOT FOUND.`, 'error');
+                    // Silently do nothing — TinTin++ doesn't error on missing list in scripts
                     return;
                 }
                 this.variables[varName] = JSON.parse(JSON.stringify(srcVal));
