@@ -1,0 +1,79 @@
+[
+  {
+    "name": "Chessboard",
+    "category": "Chaos",
+    "difficulty": "Low",
+    "path": "w;w;n;n;n;n;e;e;e;e;s;s;s;s;e;e;n;n;n;n;w;w;w;w;s;s;s;s;w;w;n;n;n;n;e;e;e;e;s;s;s;s;e;e;n;n;n;n;w;w",
+    "mobs": [
+      {"pattern": "Angry War Elephant", "target": "elephant"},
+      {"pattern": "Red Foot Soldier", "target": "soldier"},
+      {"pattern": "White Horseman", "target": "horseman"},
+      {"pattern": "Black Knight", "target": "knight"},
+      {"pattern": "Red Bishop", "target": "bishop"},
+      {"pattern": "White Rook", "target": "rook"},
+      {"pattern": "Black Pawn", "target": "pawn"}
+    ],
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Treehugger Forest",
+    "category": "Chaos",
+    "difficulty": "Low",
+    "path": "n;n;n;e;e;n;n;w;w;n;n;e;e;s;s;s;s;e;e;n;n;w;w;s;s;s;s;w;w",
+    "mobs": [
+      {"pattern": "large treant", "target": "treant"},
+      {"pattern": "ancient oak", "target": "oak"},
+      {"pattern": "woodland sprite", "target": "sprite"}
+    ],
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Orc Mines",
+    "category": "Chaos",
+    "difficulty": "Medium",
+    "path": "d;n;n;e;e;s;s;e;e;n;n;w;w;n;n;e;e;s;s;w;w;s;s;w;w;n;n;w;w;s;s;u",
+    "mobs": [
+      {"pattern": "orc miner", "target": "orc"},
+      {"pattern": "orc guard", "target": "guard"},
+      {"pattern": "orc captain", "target": "captain"},
+      {"pattern": "goblin", "target": "goblin"}
+    ],
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Undead Crypt",
+    "category": "Chaos",
+    "difficulty": "Medium",
+    "path": "d;d;n;e;e;n;n;w;w;n;e;e;s;s;w;s;s;w;s;u;u",
+    "mobs": [
+      {"pattern": "skeleton warrior", "target": "skeleton"},
+      {"pattern": "zombie", "target": "zombie"},
+      {"pattern": "ghoul", "target": "ghoul"},
+      {"pattern": "wight", "target": "wight"}
+    ],
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dark Forest",
+    "category": "Chaos",
+    "difficulty": "Low",
+    "path": "n;ne;n;nw;n;ne;e;se;s;sw;s;se;e;ne;n;nw;w;sw;s;se;s;sw;w;nw;n",
+    "mobs": [
+      {"pattern": "dark elf", "target": "elf"},
+      {"pattern": "wolf", "target": "wolf"},
+      {"pattern": "bear", "target": "bear"},
+      {"pattern": "spider", "target": "spider"}
+    ],
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  }
+]

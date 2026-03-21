@@ -1901,7 +1901,51 @@ function createSession(token) {
     // Packet patch: fixed-delay batching for complete lines (seconds, 0 = disabled)
     packetPatchMs: 250,  // Default 0.25s
     patchQueue: [],
-    patchTimeout: null
+    patchTimeout: null,
+
+    // Bot engine state
+    bot: {
+      active: false,
+      paused: false,
+      walking: false,
+      inCombat: false,
+
+      // Path
+      path: [],
+      step: 0,
+      loop: false,
+
+      // Mob targeting
+      mobs: [],
+      foundMob: null,
+
+      // Player avoidance
+      playerCheck: true,
+      whitelist: [],
+
+      // Timing
+      killDelay: 500,
+      moveDelay: 0,
+
+      // Stats
+      stats: { mobs: 0, startTime: null },
+
+      // Room parsing state
+      roomMobs: [],
+      roomPlayers: [],
+
+      // Saved aset state (restored on bot stop)
+      savedAsets: null,
+
+      // Stuck detection timer
+      stuckTimer: null,
+
+      // Kill delay timer
+      killDelayTimer: null,
+
+      // Bot name (for display)
+      name: ''
+    }
   };
 }
 
@@ -1983,6 +2027,369 @@ function clearAllTickers(session) {
   }
   session.tickerIntervals = {};
 }
+
+// ─── Bot Engine ──────────────────────────────────────────────
+
+/**
+ * Send bot status update to client
+ */
+function sendBotStatus(session) {
+  const bot = session.bot;
+  sendToClient(session, {
+    type: 'bot_status',
+    active: bot.active,
+    paused: bot.paused,
+    step: bot.step,
+    totalSteps: bot.path.length,
+    inCombat: bot.inCombat,
+    stats: bot.stats,
+    foundMob: bot.foundMob,
+    name: bot.name
+  });
+}
+
+/**
+ * Start the bot with given configuration
+ */
+function botStart(session, config) {
+  const bot = session.bot;
+
+  if (!session.mudSocket || session.mudSocket.destroyed) {
+    sendToClient(session, { type: 'bot_error', message: 'Not connected to MUD' });
+    return;
+  }
+
+  // Parse path string into array of directions
+  let path = config.path;
+  if (typeof path === 'string') {
+    path = path.split(/[;\s]+/).filter(d => d.length > 0);
+  }
+  if (!path || path.length === 0) {
+    sendToClient(session, { type: 'bot_error', message: 'No path defined' });
+    return;
+  }
+
+  bot.active = true;
+  bot.paused = false;
+  bot.walking = false;
+  bot.inCombat = false;
+  bot.path = path;
+  bot.step = config.startStep || 0;
+  bot.loop = config.loop || false;
+  bot.mobs = config.mobs || [];
+  bot.foundMob = null;
+  bot.playerCheck = config.playerCheck !== false;
+  bot.whitelist = (config.whitelist || []).map(n => n.toLowerCase());
+  bot.killDelay = Math.max(0, Math.min(10000, (config.killDelay || 0.5) * 1000));
+  bot.moveDelay = Math.max(0, Math.min(5000, (config.moveDelay || 0) * 1000));
+  bot.stats = { mobs: 0, startTime: Date.now() };
+  bot.roomMobs = [];
+  bot.roomPlayers = [];
+  bot.name = config.name || 'Custom Bot';
+
+  // Send aset commands to configure room parsing markers
+  const asetCmds = [
+    'aset look_monster_pref -M-_',
+    'aset look_player -P-_',
+    'aset room_short_pref -R-_',
+    'aset room_short_suff _-R-',
+    'aset room_exits_pref -X-_',
+    'aset room_exits_suff _-X-'
+  ];
+  asetCmds.forEach(cmd => {
+    session.mudSocket.write(cmd + '\r\n');
+  });
+
+  // Start stuck detection timer
+  botStartStuckTimer(session);
+
+  console.log(`Bot started: "${bot.name}" path=${bot.path.length} steps, mobs=${bot.mobs.length}`);
+  sendBotStatus(session);
+
+  // Send first move after a short delay for aset commands to process
+  setTimeout(() => {
+    if (bot.active && !bot.paused) {
+      botSendGlance(session);
+    }
+  }, 500);
+}
+
+/**
+ * Stop the bot
+ */
+function botStop(session) {
+  const bot = session.bot;
+  const wasActive = bot.active;
+
+  // Clear timers
+  if (bot.stuckTimer) {
+    clearInterval(bot.stuckTimer);
+    bot.stuckTimer = null;
+  }
+  if (bot.killDelayTimer) {
+    clearTimeout(bot.killDelayTimer);
+    bot.killDelayTimer = null;
+  }
+
+  const stats = { ...bot.stats };
+  if (stats.startTime) {
+    stats.elapsed = Date.now() - stats.startTime;
+  }
+
+  bot.active = false;
+  bot.paused = false;
+  bot.walking = false;
+  bot.inCombat = false;
+  bot.foundMob = null;
+  bot.roomMobs = [];
+  bot.roomPlayers = [];
+
+  if (wasActive) {
+    // Restore aset defaults
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      const resetCmds = [
+        'aset look_monster_pref',
+        'aset look_player',
+        'aset room_short_pref',
+        'aset room_short_suff',
+        'aset room_exits_pref',
+        'aset room_exits_suff'
+      ];
+      resetCmds.forEach(cmd => {
+        session.mudSocket.write(cmd + '\r\n');
+      });
+    }
+    console.log(`Bot stopped: "${bot.name}" killed=${stats.mobs}`);
+    sendToClient(session, { type: 'bot_complete', stats: stats });
+  }
+
+  sendBotStatus(session);
+}
+
+/**
+ * Pause the bot (preserves position)
+ */
+function botPause(session) {
+  const bot = session.bot;
+  if (!bot.active) return;
+  bot.paused = true;
+  console.log(`Bot paused at step ${bot.step}/${bot.path.length}`);
+  sendBotStatus(session);
+}
+
+/**
+ * Resume the bot from paused state
+ */
+function botResume(session) {
+  const bot = session.bot;
+  if (!bot.active || !bot.paused) return;
+  bot.paused = false;
+  console.log(`Bot resumed at step ${bot.step}/${bot.path.length}`);
+  sendBotStatus(session);
+  // Re-scan current room
+  botSendGlance(session);
+}
+
+/**
+ * Send glance command to scan room
+ */
+function botSendGlance(session) {
+  if (session.mudSocket && !session.mudSocket.destroyed) {
+    session.mudSocket.write('glance\r\n');
+  }
+}
+
+/**
+ * Advance to next step in the bot path and move
+ */
+function botAdvanceStep(session) {
+  const bot = session.bot;
+  if (!bot.active || bot.paused) return;
+
+  bot.step++;
+
+  if (bot.step >= bot.path.length) {
+    if (bot.loop) {
+      bot.step = 0;
+      console.log(`Bot looping path from start`);
+    } else {
+      // Path complete
+      botStop(session);
+      return;
+    }
+  }
+
+  bot.walking = true;
+  bot.roomMobs = [];
+  bot.roomPlayers = [];
+  bot.foundMob = null;
+
+  const direction = bot.path[bot.step];
+  const delay = bot.moveDelay || 0;
+
+  const doMove = () => {
+    if (!bot.active || bot.paused) return;
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      session.mudSocket.write(direction + '\r\n');
+    }
+    sendBotStatus(session);
+  };
+
+  if (delay > 0) {
+    setTimeout(doMove, delay);
+  } else {
+    doMove();
+  }
+}
+
+/**
+ * Process a line of MUD output for bot markers.
+ * Called from processLine ONLY when bot is active.
+ * Returns true if the line was a bot marker (should be gagged from display).
+ */
+function botProcessLine(session, strippedLine) {
+  const bot = session.bot;
+  if (!bot.active) return false;
+
+  // Room short marker: -R-_..._-R-
+  if (strippedLine.startsWith('-R-_') && strippedLine.endsWith('_-R-')) {
+    // New room detected — clear room state
+    bot.roomMobs = [];
+    bot.roomPlayers = [];
+    bot.foundMob = null;
+    bot.walking = false;
+    bot.inCombat = false;
+    return true;
+  }
+
+  // Mob marker: -M-_...
+  if (strippedLine.startsWith('-M-_')) {
+    const mobName = strippedLine.substring(4).trim();
+    bot.roomMobs.push(mobName);
+
+    // Check if this mob matches any target pattern
+    for (const mob of bot.mobs) {
+      if (mobName.toLowerCase().includes(mob.pattern.toLowerCase())) {
+        bot.foundMob = mob.target || mob.pattern;
+        break;
+      }
+    }
+    return true;
+  }
+
+  // Player marker: -P-_...
+  if (strippedLine.startsWith('-P-_')) {
+    const playerName = strippedLine.substring(4).trim();
+    bot.roomPlayers.push(playerName);
+    return true;
+  }
+
+  // Exit marker: -X-_..._-X-
+  if (strippedLine.startsWith('-X-_')) {
+    return true;
+  }
+
+  // Prompt detection (> at start of line = room scan complete)
+  if (/^>\s*$/.test(strippedLine) || strippedLine === '>') {
+    botDetermineAction(session);
+    return false; // Don't gag the prompt
+  }
+
+  // Kill detection: "dealt the killing blow"
+  if (bot.inCombat && strippedLine.includes('dealt the killing blow')) {
+    bot.inCombat = false;
+    bot.stats.mobs++;
+    sendBotStatus(session);
+
+    // After kill, wait killDelay then re-scan room
+    if (bot.killDelayTimer) clearTimeout(bot.killDelayTimer);
+    bot.killDelayTimer = setTimeout(() => {
+      bot.killDelayTimer = null;
+      if (bot.active && !bot.paused) {
+        botSendGlance(session);
+      }
+    }, bot.killDelay);
+    return false; // Don't gag the kill message
+  }
+
+  return false;
+}
+
+/**
+ * Decide what the bot should do based on room state.
+ * Called when prompt is received (room fully loaded).
+ */
+function botDetermineAction(session) {
+  const bot = session.bot;
+  if (!bot.active || bot.paused || bot.inCombat) return;
+
+  // Check for non-whitelisted players
+  if (bot.playerCheck && bot.roomPlayers.length > 0) {
+    const dangerousPlayers = bot.roomPlayers.filter(
+      p => !bot.whitelist.includes(p.toLowerCase())
+    );
+    if (dangerousPlayers.length > 0) {
+      // Skip room — player present
+      console.log(`Bot: skipping room (players: ${dangerousPlayers.join(', ')})`);
+      botAdvanceStep(session);
+      return;
+    }
+  }
+
+  // Check for target mob
+  if (bot.foundMob) {
+    bot.inCombat = true;
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      session.mudSocket.write('kill ' + bot.foundMob + '\r\n');
+    }
+    sendBotStatus(session);
+    return;
+  }
+
+  // No mob found, advance to next step
+  botAdvanceStep(session);
+}
+
+/**
+ * Start stuck detection timer
+ */
+function botStartStuckTimer(session) {
+  const bot = session.bot;
+  if (bot.stuckTimer) {
+    clearInterval(bot.stuckTimer);
+  }
+  bot.stuckTimer = setInterval(() => {
+    if (bot.active && !bot.paused && !bot.walking && !bot.inCombat) {
+      // Might be stuck — re-scan
+      botSendGlance(session);
+    }
+  }, 5000);
+}
+
+/**
+ * Update bot configuration while running
+ */
+function botUpdateConfig(session, config) {
+  const bot = session.bot;
+  if (config.killDelay !== undefined) {
+    bot.killDelay = Math.max(0, Math.min(10000, config.killDelay * 1000));
+  }
+  if (config.moveDelay !== undefined) {
+    bot.moveDelay = Math.max(0, Math.min(5000, config.moveDelay * 1000));
+  }
+  if (config.playerCheck !== undefined) {
+    bot.playerCheck = config.playerCheck;
+  }
+  if (config.whitelist !== undefined) {
+    bot.whitelist = config.whitelist.map(n => n.toLowerCase());
+  }
+  if (config.loop !== undefined) {
+    bot.loop = config.loop;
+  }
+  sendBotStatus(session);
+}
+
+// ─── End Bot Engine ──────────────────────────────────────────
 
 /**
  * Send a message to the browser, or buffer it if disconnected
@@ -2100,6 +2507,15 @@ function closeSession(session, reason) {
 
   // Clear all tickers
   clearAllTickers(session);
+
+  // Stop bot if active
+  if (session.bot && session.bot.active) {
+    if (session.bot.stuckTimer) clearInterval(session.bot.stuckTimer);
+    if (session.bot.killDelayTimer) clearTimeout(session.bot.killDelayTimer);
+    session.bot.stuckTimer = null;
+    session.bot.killDelayTimer = null;
+    session.bot.active = false;
+  }
 
   if (session.mudSocket && !session.mudSocket.destroyed) {
     // Graceful TCP close: end() sends FIN (like TinTin++'s shutdown(SHUT_RDWR))
@@ -2374,6 +2790,16 @@ function parseFFFStats(session, data) {
   }
 
   mipStats.guildVars = parseGuildVars(mipStats.gline1Raw, mipStats.gline2Raw);
+
+  // Bot: detect combat state via MIP round changes
+  if (session.bot && session.bot.active) {
+    if (mipStats.round > 0 && !session.bot.inCombat) {
+      session.bot.inCombat = true;
+      sendBotStatus(session);
+    } else if (mipStats.round === 0 && session.bot.inCombat) {
+      // Combat ended (mob died or fled) — handled by kill detection
+    }
+  }
 }
 
 /**
@@ -2682,6 +3108,15 @@ function processLine(session, line) {
     session.currentAnsiState = lastAnsiCode;
   } else if (line.includes('\x1b[0m')) {
     session.currentAnsiState = '';
+  }
+
+  // Bot marker processing — check BEFORE triggers so markers are gagged cleanly
+  if (session.bot && session.bot.active) {
+    const botStripped = stripAnsi(line).trim();
+    if (botProcessLine(session, botStripped)) {
+      // Line was a bot marker — gag it from display entirely
+      return;
+    }
   }
 
   // Initialize loop tracker if needed
@@ -3207,6 +3642,11 @@ wss.on('connection', (ws, req) => {
                 }
               }
             }
+
+            // Send current bot status if bot is active
+            if (session.bot && session.bot.active) {
+              sendBotStatus(session);
+            }
           } else {
             // Create new session
             session = createSession(token);
@@ -3640,6 +4080,31 @@ wss.on('connection', (ws, req) => {
               });
             }
           }
+          break;
+
+        // ─── Bot control messages ──────────────────
+        case 'bot_start':
+          botStart(session, data);
+          break;
+
+        case 'bot_stop':
+          botStop(session);
+          break;
+
+        case 'bot_pause':
+          botPause(session);
+          break;
+
+        case 'bot_resume':
+          botResume(session);
+          break;
+
+        case 'bot_config':
+          botUpdateConfig(session, data);
+          break;
+
+        case 'bot_status_request':
+          sendBotStatus(session);
           break;
 
         case 'disconnect':

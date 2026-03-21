@@ -26,9 +26,6 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'list':
         $triggers = loadJsonFile(getTriggersPath($userId, $characterId));
-        // Merge in package triggers
-        $packageTriggers = mergePackageItems($userId, $characterId, 'triggers');
-        $triggers = array_merge($triggers, $packageTriggers);
         successResponse(['triggers' => $triggers]);
         break;
 
@@ -59,10 +56,6 @@ switch ($action) {
                 'priority' => intval($trigger['priority'] ?? 0),
                 'class' => $trigger['class'] ?? null
             ];
-            // Preserve package field for package items
-            if (!empty($trigger['package'])) {
-                $validated['package'] = $trigger['package'];
-            }
             $validatedTriggers[] = $validated;
         }
 
@@ -71,10 +64,7 @@ switch ($action) {
             return $b['priority'] - $a['priority'];
         });
 
-        // Partition: user items go to triggers.json, package items go to packages/
-        $partitioned = partitionPackageItems($validatedTriggers);
-        saveJsonFile(getTriggersPath($userId, $characterId), $partitioned['user']);
-        savePackageItems($userId, $characterId, 'triggers', $partitioned['packages']);
+        saveJsonFile(getTriggersPath($userId, $characterId), $validatedTriggers);
         successResponse(['triggers' => $validatedTriggers]);
         break;
 

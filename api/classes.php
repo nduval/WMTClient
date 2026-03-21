@@ -69,20 +69,6 @@ function findClassByName($classes, $name) {
 switch ($action) {
     case 'list':
         $classes = loadClasses($classesPath);
-        // Package classes are already in classes.json (added during import)
-        // But ensure they have the 'package' field for UI identification
-        $packages = loadCharacterPackages($userId, $characterId);
-        $pkgClassIds = [];
-        foreach ($packages as $pkg) {
-            foreach ($pkg['classes'] ?? [] as $cls) {
-                $pkgClassIds[$cls['id']] = $pkg['package'];
-            }
-        }
-        foreach ($classes as &$cls) {
-            if (isset($pkgClassIds[$cls['id']])) {
-                $cls['package'] = $pkgClassIds[$cls['id']];
-            }
-        }
         successResponse(['classes' => $classes]);
         break;
 
@@ -274,22 +260,7 @@ switch ($action) {
         $classes[$found['index']]['enabled'] = !$classes[$found['index']]['enabled'];
         saveClasses($classesPath, $classes);
 
-        // If this is a package class, sync enabled state to package file
         $toggledClass = $classes[$found['index']];
-        if (!empty($toggledClass['package'])) {
-            $pkgPath = getPackagePath($userId, $characterId, $toggledClass['package']);
-            $pkg = loadJsonFile($pkgPath);
-            if (!empty($pkg['classes'])) {
-                foreach ($pkg['classes'] as &$pkgCls) {
-                    if ($pkgCls['id'] === $classId) {
-                        $pkgCls['enabled'] = $toggledClass['enabled'];
-                        break;
-                    }
-                }
-                saveJsonFile($pkgPath, $pkg);
-            }
-        }
-
         successResponse([
             'class' => $toggledClass,
             'enabled' => $toggledClass['enabled']
@@ -307,15 +278,8 @@ switch ($action) {
         $triggersPath = $characterPath . '/triggers.json';
         $aliasesPath = $characterPath . '/aliases.json';
 
-        // Load user items
         $triggers = loadJsonFile($triggersPath);
         $aliases = loadJsonFile($aliasesPath);
-
-        // Merge package items
-        $packageTriggers = mergePackageItems($userId, $characterId, 'triggers');
-        $packageAliases = mergePackageItems($userId, $characterId, 'aliases');
-        $triggers = array_merge($triggers, $packageTriggers);
-        $aliases = array_merge($aliases, $packageAliases);
 
         $classTriggers = array_values(array_filter($triggers, function($t) use ($classId) {
             return ($t['class'] ?? null) === $classId;

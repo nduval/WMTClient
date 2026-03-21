@@ -271,6 +271,16 @@ class WMTClient {
         this.mipConditionCooldown = 5000;  // Minimum ms between same condition firing
         this.pendingSubConditions = [];  // Sub-conditions being added in the modal
 
+        // Bot engine state (mirrors server-side state via bot_status messages)
+        this.botState = {
+            active: false, paused: false, step: 0, totalSteps: 0,
+            inCombat: false, stats: { mobs: 0, startTime: null },
+            foundMob: null, name: ''
+        };
+        this.botAreas = [];      // Pre-built area definitions
+        this.customBots = [];    // User-created bot definitions
+        this.botAreasLoaded = false;
+
         // Wake Lock API - keeps screen awake
         this.wakeLockSentinel = null;
         this.wakeLockVisibilityHandlerAdded = false;
@@ -405,26 +415,6 @@ class WMTClient {
             const pwData = await pwRes.json();
             if (pwData.success && pwData.password) {
                 this.characterPassword = pwData.password;
-            }
-
-            // Load package variables (fill in defaults, don't overwrite existing)
-            try {
-                const pkgVarsRes = await fetch(this.apiUrl('api/packages.php?action=variables'));
-                const pkgVarsData = await pkgVarsRes.json();
-                if (pkgVarsData.success && pkgVarsData.variables) {
-                    let loaded = 0;
-                    for (const [key, val] of Object.entries(pkgVarsData.variables)) {
-                        if (this.variables[key] === undefined) {
-                            this.variables[key] = val;
-                            loaded++;
-                        }
-                    }
-                    if (loaded > 0) {
-                        this.syncVariablesToServer();
-                    }
-                }
-            } catch (e) {
-                // Non-fatal — package variables are supplemental
             }
 
             // Load MIP conditions
@@ -1185,6 +1175,35 @@ class WMTClient {
                 if (this.mipDebug) {
                     this.appendOutput(`[MIP ${data.msgType}] ${data.msgData}`, 'system');
                 }
+                break;
+
+            case 'bot_status':
+                this.botState = {
+                    active: data.active,
+                    paused: data.paused,
+                    step: data.step,
+                    totalSteps: data.totalSteps,
+                    inCombat: data.inCombat,
+                    stats: data.stats || { mobs: 0, startTime: null },
+                    foundMob: data.foundMob,
+                    name: data.name || ''
+                };
+                this.updateBotPanel();
+                break;
+
+            case 'bot_complete':
+                this.botState.active = false;
+                this.updateBotPanel();
+                if (data.stats) {
+                    const elapsed = data.stats.elapsed ? Math.round(data.stats.elapsed / 1000) : 0;
+                    const mins = Math.floor(elapsed / 60);
+                    const secs = elapsed % 60;
+                    this.appendOutput(`Bot complete: ${data.stats.mobs} mobs killed in ${mins}m ${secs}s`, 'system');
+                }
+                break;
+
+            case 'bot_error':
+                this.appendOutput(`Bot error: ${data.message}`, 'error');
                 break;
         }
     }
@@ -2966,6 +2985,7 @@ class WMTClient {
         }
 
         document.getElementById('settings-btn')?.addEventListener('click', () => this.openPanel('settings'));
+        document.getElementById('bot-btn')?.addEventListener('click', () => this.openPanel('botcontrol'));
         document.getElementById('reconnect-btn')?.addEventListener('click', () => this.reconnect());
         document.getElementById('disconnect-btn')?.addEventListener('click', () => this.disconnect());
         document.getElementById('logout-btn')?.addEventListener('click', () => this.logout());
@@ -3603,7 +3623,8 @@ class WMTClient {
             const titles = {
                 'triggers': 'Triggers',
                 'aliases': 'Aliases',
-                'settings': 'Settings'
+                'settings': 'Settings',
+                'botcontrol': 'Bot Control'
             };
             header.textContent = titles[panelType] || panelType;
         }
@@ -4102,6 +4123,11 @@ class WMTClient {
             case 'settings':
                 content.innerHTML = this.renderSettingsPanel();
                 this.bindSettingsEvents();
+                break;
+
+            case 'botcontrol':
+                content.innerHTML = this.renderBotPanel();
+                this.bindBotEvents();
                 break;
         }
     }
@@ -5340,16 +5366,6 @@ class WMTClient {
             </div>
 
             <div class="settings-section">
-                <h4>Community Packages</h4>
-                <p style="color:#999;font-size:12px;margin:0 0 8px">
-                    Import community script packages (triggers, aliases, gags). Classes are disabled by default — enable what you need.
-                </p>
-                <div id="packages-list" style="margin-bottom:10px">
-                    <em style="color:#666">Loading...</em>
-                </div>
-            </div>
-
-            <div class="settings-section">
                 <h4>Script Files</h4>
                 <div class="form-group" style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; color: #ccc;">Startup Script (runs on connect)</label>
@@ -5519,9 +5535,6 @@ class WMTClient {
 
         // Load script files list
         this.loadScriptFilesList();
-
-        // Load community packages list
-        this.loadPackagesList();
     }
 
     // Quick save of current preferences (used by pinch-zoom, etc.)
@@ -5695,152 +5708,439 @@ class WMTClient {
         this.appendOutput(`Exported: ${exportedItems.join(', ')}`, 'system');
     }
 
-    // Load and render community packages list in settings
-    async loadPackagesList() {
-        const container = document.getElementById('packages-list');
-        if (!container) return;
+    // ─── Bot Control Panel ────────────────────────────────────
 
-        try {
-            const res = await fetch(this.apiUrl('api/packages.php?action=status'));
-            const data = await res.json();
+    renderBotPanel() {
+        const bot = this.botState;
+        const elapsed = bot.stats.startTime ? Math.round((Date.now() - bot.stats.startTime) / 1000) : 0;
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        const pct = bot.totalSteps > 0 ? Math.round((bot.step / bot.totalSteps) * 100) : 0;
 
-            if (!data.success || !data.packages || data.packages.length === 0) {
-                container.innerHTML = '<em style="color:#666">No community packages available</em>';
-                return;
+        let statusText = 'Idle';
+        let statusClass = 'bot-idle';
+        if (bot.active) {
+            if (bot.paused) {
+                statusText = 'Paused';
+                statusClass = 'bot-paused';
+            } else if (bot.inCombat) {
+                statusText = `Fighting${bot.foundMob ? ' (' + this.escapeHtml(bot.foundMob) + ')' : ''}`;
+                statusClass = 'bot-combat';
+            } else {
+                statusText = 'Running';
+                statusClass = 'bot-running';
             }
+        }
 
-            let html = '';
-            for (const pkg of data.packages) {
-                const name = this.escapeHtml(pkg.name);
-                const desc = this.escapeHtml(pkg.description || '');
-                const ver = this.escapeHtml(pkg.availableVersion || 'unknown');
+        // Area dropdown options
+        let areaOptions = '<option value="">-- Select Area --</option>';
+        for (const area of this.botAreas) {
+            areaOptions += `<option value="${this.escapeHtml(area.name)}">${this.escapeHtml(area.name)} (${this.escapeHtml(area.category || '')}${area.difficulty ? ' - ' + area.difficulty : ''})</option>`;
+        }
+        // Custom bots
+        for (const bot of this.customBots) {
+            areaOptions += `<option value="custom:${this.escapeHtml(bot.name)}">[Custom] ${this.escapeHtml(bot.name)}</option>`;
+        }
 
-                if (pkg.installed) {
-                    const iVer = this.escapeHtml(pkg.installedVersion || '');
-                    const stats = [];
-                    if (pkg.triggerCount) stats.push(`${pkg.triggerCount} triggers`);
-                    if (pkg.aliasCount) stats.push(`${pkg.aliasCount} aliases`);
-                    if (pkg.classCount) stats.push(`${pkg.classCount} classes`);
-                    const statsText = stats.length ? stats.join(', ') : '';
+        return `
+            <div class="bot-panel">
+                <div class="bot-status-bar ${statusClass}">
+                    <span class="bot-status-dot"></span>
+                    <span class="bot-status-text">${statusText}</span>
+                    ${bot.active ? `<span class="bot-name">${this.escapeHtml(bot.name)}</span>` : ''}
+                </div>
 
-                    html += `<div style="background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;padding:10px;margin-bottom:8px">
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <div>
-                                <strong style="color:#6f6">${name}</strong>
-                                <span style="color:#666;font-size:11px;margin-left:6px">v${iVer}</span>
-                                ${pkg.updateAvailable ? '<span style="color:#fa0;font-size:11px;margin-left:6px">(update available)</span>' : ''}
-                            </div>
-                            <div style="display:flex;gap:6px">
-                                ${pkg.updateAvailable ? `<button class="btn btn-secondary pkg-update-btn" data-pkg="${name}" style="font-size:11px;padding:3px 8px">Update</button>` : ''}
-                                <button class="btn btn-danger pkg-remove-btn" data-pkg="${name}" style="font-size:11px;padding:3px 8px">Remove</button>
-                            </div>
+                ${bot.active ? `
+                    <div class="bot-progress-section">
+                        <div class="bot-step-info">Step ${bot.step} / ${bot.totalSteps}</div>
+                        <div class="bot-progress-bar">
+                            <div class="bot-progress-fill" style="width:${pct}%"></div>
                         </div>
-                        ${statsText ? `<div style="color:#888;font-size:11px;margin-top:4px">${statsText}</div>` : ''}
-                    </div>`;
+                    </div>
+
+                    <div class="bot-controls">
+                        ${bot.paused ?
+                            '<button class="btn btn-primary bot-ctrl-btn" id="bot-resume-btn">Resume</button>' :
+                            '<button class="btn btn-secondary bot-ctrl-btn" id="bot-pause-btn">Pause</button>'}
+                        <button class="btn btn-danger bot-ctrl-btn" id="bot-stop-btn">Stop</button>
+                    </div>
+
+                    <div class="bot-stats-section">
+                        <div class="bot-stat"><span>Mobs killed:</span> <strong>${bot.stats.mobs}</strong></div>
+                        <div class="bot-stat"><span>Time:</span> <strong>${mins}m ${secs}s</strong></div>
+                        <div class="bot-stat"><span>Status:</span> <strong>${statusText}</strong></div>
+                    </div>
+                ` : `
+                    <div class="settings-section">
+                        <h4>Area</h4>
+                        <select id="bot-area-select" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;margin-bottom:10px">
+                            ${areaOptions}
+                        </select>
+                        <div id="bot-area-info" style="color:#888;font-size:12px;margin-bottom:10px"></div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4>Settings</h4>
+                        <div class="form-group" style="margin-bottom:10px">
+                            <label style="display:block;color:#ccc;margin-bottom:4px;font-size:13px">Kill Delay (seconds)</label>
+                            <input type="range" id="bot-kill-delay" min="0" max="100" value="5" style="width:100%">
+                            <span id="bot-kill-delay-val" style="color:#aaa;font-size:12px">0.5s</span>
+                        </div>
+                        <label style="display:flex;align-items:center;gap:8px;color:#ccc;font-size:13px;margin-bottom:8px;cursor:pointer">
+                            <input type="checkbox" id="bot-player-check" checked> Skip rooms with players
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;color:#ccc;font-size:13px;margin-bottom:8px;cursor:pointer">
+                            <input type="checkbox" id="bot-loop"> Loop when complete
+                        </label>
+                    </div>
+
+                    <div class="settings-section" id="bot-mob-list-section" style="display:none">
+                        <h4>Mobs (<span id="bot-mob-count">0</span>)</h4>
+                        <div id="bot-mob-list" style="max-height:150px;overflow-y:auto;font-size:12px;color:#ccc"></div>
+                    </div>
+
+                    <button class="btn btn-primary" id="bot-start-btn" style="width:100%;margin-top:10px" disabled>
+                        Start Bot
+                    </button>
+
+                    <div class="settings-section" style="margin-top:15px;border-top:1px solid #333;padding-top:15px">
+                        <h4>Whitelist</h4>
+                        <p style="color:#666;font-size:11px;margin:0 0 8px">Players to ignore (won't skip room)</p>
+                        <div style="display:flex;gap:6px;margin-bottom:8px">
+                            <input type="text" id="bot-whitelist-input" placeholder="Player name" style="flex:1;padding:6px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;font-size:12px">
+                            <button class="btn btn-secondary" id="bot-whitelist-add" style="font-size:11px;padding:4px 10px">+</button>
+                        </div>
+                        <div id="bot-whitelist-list" style="font-size:12px"></div>
+                    </div>
+
+                    <div class="settings-section" style="margin-top:15px;border-top:1px solid #333;padding-top:15px">
+                        <button class="btn btn-secondary" id="bot-custom-btn" style="width:100%">
+                            Custom Bot...
+                        </button>
+                        <p style="color:#666;font-size:11px;margin:4px 0 0">Define your own path &amp; mobs</p>
+                    </div>
+                `}
+            </div>
+        `;
+    }
+
+    bindBotEvents() {
+        const bot = this.botState;
+
+        // Load areas if not loaded
+        if (!this.botAreasLoaded) {
+            this.loadBotAreas();
+        }
+        // Load custom bots
+        this.loadCustomBots();
+
+        if (bot.active) {
+            // Active bot controls
+            document.getElementById('bot-pause-btn')?.addEventListener('click', () => {
+                this.connection.send('bot_pause');
+            });
+            document.getElementById('bot-resume-btn')?.addEventListener('click', () => {
+                this.connection.send('bot_resume');
+            });
+            document.getElementById('bot-stop-btn')?.addEventListener('click', () => {
+                if (confirm('Stop the bot?')) {
+                    this.connection.send('bot_stop');
+                }
+            });
+
+            // Auto-refresh stats every second while active
+            this._botStatsTimer = setInterval(() => {
+                if (this.currentPanel === 'botcontrol' && this.botState.active) {
+                    this.updateBotPanel();
                 } else {
-                    const stats = pkg.stats || {};
-                    const statParts = [];
-                    if (stats.triggers) statParts.push(`${stats.triggers} triggers`);
-                    if (stats.aliases) statParts.push(`${stats.aliases} aliases`);
-                    if (stats.classes) statParts.push(`${stats.classes} classes`);
+                    clearInterval(this._botStatsTimer);
+                }
+            }, 1000);
+        } else {
+            // Setup controls
+            const areaSelect = document.getElementById('bot-area-select');
+            const startBtn = document.getElementById('bot-start-btn');
+            const killDelay = document.getElementById('bot-kill-delay');
+            const killDelayVal = document.getElementById('bot-kill-delay-val');
 
-                    html += `<div style="background:#1a1a2a;border:1px solid #2a2a4a;border-radius:6px;padding:10px;margin-bottom:8px">
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <div>
-                                <strong style="color:#aaf">${name}</strong>
-                                <span style="color:#666;font-size:11px;margin-left:6px">v${ver}</span>
-                            </div>
-                            <button class="btn btn-primary pkg-import-btn" data-pkg="${name}" style="font-size:11px;padding:3px 10px">Import</button>
-                        </div>
-                        ${desc ? `<div style="color:#999;font-size:11px;margin-top:4px">${desc}</div>` : ''}
-                        ${statParts.length ? `<div style="color:#888;font-size:11px;margin-top:2px">${statParts.join(', ')}</div>` : ''}
-                    </div>`;
+            // Kill delay slider
+            killDelay?.addEventListener('input', () => {
+                const val = (parseInt(killDelay.value) / 10).toFixed(1);
+                if (killDelayVal) killDelayVal.textContent = val + 's';
+            });
+
+            // Area selection
+            areaSelect?.addEventListener('change', () => {
+                this.onBotAreaSelected(areaSelect.value);
+            });
+
+            // Start button
+            startBtn?.addEventListener('click', () => {
+                this.startBot();
+            });
+
+            // Whitelist
+            document.getElementById('bot-whitelist-add')?.addEventListener('click', () => {
+                this.addBotWhitelist();
+            });
+            document.getElementById('bot-whitelist-input')?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') this.addBotWhitelist();
+            });
+
+            // Custom bot button
+            document.getElementById('bot-custom-btn')?.addEventListener('click', () => {
+                this.openCustomBotModal();
+            });
+        }
+
+        // Request current bot status from server
+        this.connection.send('bot_status_request');
+    }
+
+    updateBotPanel() {
+        if (this.currentPanel !== 'botcontrol') return;
+        // Re-render the entire panel to reflect new state
+        const content = document.getElementById('panel-content');
+        if (!content) return;
+        content.innerHTML = this.renderBotPanel();
+        this.bindBotEvents();
+    }
+
+    async loadBotAreas() {
+        try {
+            const res = await fetch(this.apiUrl('api/bots.php?action=areas'));
+            const data = await res.json();
+            if (data.success && data.areas) {
+                this.botAreas = data.areas;
+                this.botAreasLoaded = true;
+                // Refresh dropdown if panel is open
+                if (this.currentPanel === 'botcontrol' && !this.botState.active) {
+                    const select = document.getElementById('bot-area-select');
+                    if (select && select.options.length <= 1) {
+                        this.updateBotPanel();
+                    }
                 }
             }
-            container.innerHTML = html;
-
-            // Bind package action buttons
-            container.querySelectorAll('.pkg-import-btn').forEach(btn => {
-                btn.addEventListener('click', () => this.importPackage(btn.dataset.pkg));
-            });
-            container.querySelectorAll('.pkg-update-btn').forEach(btn => {
-                btn.addEventListener('click', () => this.updatePackage(btn.dataset.pkg));
-            });
-            container.querySelectorAll('.pkg-remove-btn').forEach(btn => {
-                btn.addEventListener('click', () => this.removePackage(btn.dataset.pkg));
-            });
         } catch (e) {
-            console.error('Failed to load packages:', e);
-            container.innerHTML = '<em style="color:#f66">Failed to load packages</em>';
+            console.error('Failed to load bot areas:', e);
         }
     }
 
-    async importPackage(packageName) {
+    async loadCustomBots() {
         try {
-            const res = await fetch(this.apiUrl('api/packages.php?action=import'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ package: packageName })
-            });
+            const res = await fetch(this.apiUrl('api/bots.php?action=list'));
             const data = await res.json();
             if (data.success) {
-                this.appendOutput(`Package "${packageName}" imported: ${data.triggers} triggers, ${data.aliases} aliases, ${data.classes} classes (${data.classesEnabled} enabled, ${data.classesDisabled} guild/bot disabled). Toggle classes in the Classes panel.`, 'system');
-                this.loadPackagesList();
-                // Reload triggers/aliases/classes to include package items
-                await this.loadSettings();
-                this.sendFilteredTriggersAndAliases();
-            } else {
-                this.appendOutput(`Import failed: ${data.error}`, 'error');
+                this.customBots = data.bots || [];
             }
         } catch (e) {
-            this.appendOutput(`Import error: ${e.message}`, 'error');
+            // Non-fatal
         }
     }
 
-    async updatePackage(packageName) {
-        try {
-            const res = await fetch(this.apiUrl('api/packages.php?action=update'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ package: packageName })
-            });
-            const data = await res.json();
-            if (data.success) {
-                this.appendOutput(`Package "${packageName}" updated to ${data.version}. Class enable states preserved.`, 'system');
-                this.loadPackagesList();
-                await this.loadSettings();
-                this.sendFilteredTriggersAndAliases();
-            } else {
-                this.appendOutput(`Update failed: ${data.error}`, 'error');
-            }
-        } catch (e) {
-            this.appendOutput(`Update error: ${e.message}`, 'error');
-        }
-    }
+    onBotAreaSelected(value) {
+        const infoDiv = document.getElementById('bot-area-info');
+        const mobSection = document.getElementById('bot-mob-list-section');
+        const mobList = document.getElementById('bot-mob-list');
+        const mobCount = document.getElementById('bot-mob-count');
+        const startBtn = document.getElementById('bot-start-btn');
 
-    async removePackage(packageName) {
-        if (!confirm(`Remove "${packageName}" package? This will delete all its triggers, aliases, and classes from this character.`)) {
+        if (!value) {
+            if (infoDiv) infoDiv.innerHTML = '';
+            if (mobSection) mobSection.style.display = 'none';
+            if (startBtn) startBtn.disabled = true;
+            this._selectedBotDef = null;
             return;
         }
+
+        let def = null;
+        if (value.startsWith('custom:')) {
+            const name = value.substring(7);
+            def = this.customBots.find(b => b.name === name);
+        } else {
+            def = this.botAreas.find(a => a.name === value);
+        }
+
+        if (!def) {
+            if (startBtn) startBtn.disabled = true;
+            return;
+        }
+
+        this._selectedBotDef = def;
+        if (startBtn) startBtn.disabled = false;
+
+        // Show area info
+        const pathSteps = typeof def.path === 'string' ? def.path.split(/[;\s]+/).filter(d => d).length : (def.path || []).length;
+        if (infoDiv) {
+            infoDiv.innerHTML = `${pathSteps} steps${def.difficulty ? ' &middot; ' + this.escapeHtml(def.difficulty) : ''}${def.loop ? ' &middot; Loops' : ''}`;
+        }
+
+        // Show mobs
+        if (def.mobs && def.mobs.length > 0 && mobSection && mobList && mobCount) {
+            mobSection.style.display = 'block';
+            mobCount.textContent = def.mobs.length;
+            mobList.innerHTML = def.mobs.map(m =>
+                `<div style="padding:2px 0;border-bottom:1px solid #222">${this.escapeHtml(m.pattern)} <span style="color:#666">&rarr;</span> <span style="color:#8f8">${this.escapeHtml(m.target || m.pattern)}</span></div>`
+            ).join('');
+        } else if (mobSection) {
+            mobSection.style.display = 'none';
+        }
+
+        // Apply default settings from definition
+        if (def.defaultDelay !== undefined) {
+            const slider = document.getElementById('bot-kill-delay');
+            const valSpan = document.getElementById('bot-kill-delay-val');
+            if (slider) {
+                slider.value = Math.round(def.defaultDelay * 10);
+                if (valSpan) valSpan.textContent = def.defaultDelay.toFixed(1) + 's';
+            }
+        }
+        if (def.loop !== undefined) {
+            const loopCb = document.getElementById('bot-loop');
+            if (loopCb) loopCb.checked = def.loop;
+        }
+        if (def.playerCheck !== undefined) {
+            const pcCb = document.getElementById('bot-player-check');
+            if (pcCb) pcCb.checked = def.playerCheck;
+        }
+    }
+
+    startBot() {
+        const def = this._selectedBotDef;
+        if (!def) return;
+
+        const killDelay = (parseInt(document.getElementById('bot-kill-delay')?.value || '5') / 10);
+        const playerCheck = document.getElementById('bot-player-check')?.checked !== false;
+        const loop = document.getElementById('bot-loop')?.checked || false;
+
+        // Collect whitelist
+        const whitelist = [];
+        document.querySelectorAll('.bot-wl-name').forEach(el => {
+            whitelist.push(el.textContent.trim());
+        });
+
+        this.connection.send('bot_start', {
+            path: def.path,
+            mobs: def.mobs || [],
+            loop: loop,
+            playerCheck: playerCheck,
+            killDelay: killDelay,
+            name: def.name,
+            whitelist: whitelist
+        });
+    }
+
+    addBotWhitelist() {
+        const input = document.getElementById('bot-whitelist-input');
+        const list = document.getElementById('bot-whitelist-list');
+        if (!input || !list) return;
+        const name = input.value.trim();
+        if (!name) return;
+        input.value = '';
+
+        const item = document.createElement('div');
+        item.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0';
+        item.innerHTML = `<span class="bot-wl-name" style="color:#ccc">${this.escapeHtml(name)}</span>
+            <button class="btn btn-danger" style="font-size:10px;padding:1px 6px;line-height:1">&times;</button>`;
+        item.querySelector('button').addEventListener('click', () => item.remove());
+        list.appendChild(item);
+    }
+
+    openCustomBotModal() {
+        // Create modal for custom bot definition
+        let modal = document.getElementById('custom-bot-modal');
+        if (modal) modal.remove();
+
+        modal = document.createElement('div');
+        modal.id = 'custom-bot-modal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width:500px">
+                <div class="modal-header">
+                    <h3>Custom Bot</h3>
+                    <button class="modal-close" id="close-custom-bot">&times;</button>
+                </div>
+                <div class="modal-body" style="padding:15px">
+                    <div class="form-group" style="margin-bottom:12px">
+                        <label style="color:#ccc;font-size:13px;display:block;margin-bottom:4px">Name</label>
+                        <input type="text" id="custom-bot-name" placeholder="My Bot" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px">
+                    </div>
+                    <div class="form-group" style="margin-bottom:12px">
+                        <label style="color:#ccc;font-size:13px;display:block;margin-bottom:4px">Path (semicolon-separated directions)</label>
+                        <textarea id="custom-bot-path" rows="3" placeholder="n;n;e;e;s;s;w;w" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
+                    </div>
+                    <div class="form-group" style="margin-bottom:12px">
+                        <label style="color:#ccc;font-size:13px;display:block;margin-bottom:4px">Mobs (one per line: pattern &rarr; target keyword)</label>
+                        <textarea id="custom-bot-mobs" rows="4" placeholder="Red Foot Soldier > human&#10;Angry War Elephant > elephant" style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:4px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
+                    </div>
+                    <div style="display:flex;gap:10px;justify-content:flex-end">
+                        <button class="btn btn-secondary" id="custom-bot-cancel">Cancel</button>
+                        <button class="btn btn-primary" id="custom-bot-save">Save Bot</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        document.getElementById('close-custom-bot').addEventListener('click', () => modal.remove());
+        document.getElementById('custom-bot-cancel').addEventListener('click', () => modal.remove());
+        document.getElementById('custom-bot-save').addEventListener('click', () => this.saveCustomBot(modal));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    }
+
+    async saveCustomBot(modal) {
+        const name = document.getElementById('custom-bot-name')?.value.trim();
+        const pathStr = document.getElementById('custom-bot-path')?.value.trim();
+        const mobsStr = document.getElementById('custom-bot-mobs')?.value.trim();
+
+        if (!name || !pathStr) {
+            this.appendOutput('Bot name and path are required.', 'error');
+            return;
+        }
+
+        // Parse mobs: "pattern > target" or just "pattern"
+        const mobs = [];
+        if (mobsStr) {
+            for (const line of mobsStr.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                const parts = trimmed.split(/\s*[>→]\s*/);
+                mobs.push({
+                    pattern: parts[0].trim(),
+                    target: (parts[1] || parts[0]).trim()
+                });
+            }
+        }
+
+        const botDef = {
+            name: name,
+            path: pathStr,
+            mobs: mobs,
+            loop: false,
+            playerCheck: true,
+            defaultDelay: 0.5
+        };
+
         try {
-            const res = await fetch(this.apiUrl('api/packages.php?action=remove'), {
+            const res = await fetch(this.apiUrl('api/bots.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ package: packageName })
+                body: JSON.stringify({ bot: botDef })
             });
             const data = await res.json();
             if (data.success) {
-                this.appendOutput(`Package "${packageName}" removed.`, 'system');
-                this.loadPackagesList();
-                await this.loadSettings();
-                this.sendFilteredTriggersAndAliases();
+                this.appendOutput(`Custom bot "${name}" saved.`, 'system');
+                modal.remove();
+                this.loadCustomBots().then(() => this.updateBotPanel());
             } else {
-                this.appendOutput(`Remove failed: ${data.error}`, 'error');
+                this.appendOutput(`Save failed: ${data.error}`, 'error');
             }
         } catch (e) {
-            this.appendOutput(`Remove error: ${e.message}`, 'error');
+            this.appendOutput(`Save error: ${e.message}`, 'error');
         }
     }
+
+    // ─── End Bot Control Panel ────────────────────────────────
 
     // Load list of uploaded script files (with folder support)
     async loadScriptFilesList() {

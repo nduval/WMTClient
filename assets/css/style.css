@@ -3049,3 +3049,94 @@ body {
         padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     }
 }
+
+/* ─── Bot Control Panel ──────────────────────────────── */
+.bot-panel {
+    padding: 0;
+}
+
+.bot-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.bot-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.bot-idle { background: #1a1a2a; }
+.bot-idle .bot-status-dot { background: #666; }
+.bot-running { background: #1a2a1a; }
+.bot-running .bot-status-dot { background: #4f4; animation: bot-pulse 1.5s infinite; }
+.bot-paused { background: #2a2a1a; }
+.bot-paused .bot-status-dot { background: #fa0; }
+.bot-combat { background: #2a1a1a; }
+.bot-combat .bot-status-dot { background: #f44; animation: bot-pulse 0.8s infinite; }
+
+@keyframes bot-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.bot-name {
+    margin-left: auto;
+    font-weight: 400;
+    color: #999;
+    font-size: 12px;
+}
+
+.bot-progress-section {
+    margin-bottom: 12px;
+}
+.bot-step-info {
+    font-size: 12px;
+    color: #aaa;
+    margin-bottom: 4px;
+    text-align: center;
+}
+.bot-progress-bar {
+    height: 6px;
+    background: #222;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.bot-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4a4, #6f6);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.bot-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.bot-ctrl-btn {
+    flex: 1;
+    padding: 10px !important;
+    font-size: 13px !important;
+}
+
+.bot-stats-section {
+    background: #111;
+    border-radius: 6px;
+    padding: 10px 12px;
+}
+.bot-stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 13px;
+    color: #aaa;
+}
+.bot-stat strong {
+    color: #ddd;
+}
