@@ -1177,7 +1177,9 @@ class WMTClient {
                 }
                 break;
 
-            case 'bot_status':
+            case 'bot_status': {
+                const prevActive = this.botState.active;
+                const prevPaused = this.botState.paused;
                 this.botState = {
                     active: data.active,
                     paused: data.paused,
@@ -1188,8 +1190,16 @@ class WMTClient {
                     foundMob: data.foundMob,
                     name: data.name || ''
                 };
-                this.updateBotPanel();
+                // Only re-render on state transitions (active/paused changed).
+                // When active, the 1s stats timer handles incremental display updates.
+                if (data.active !== prevActive || data.paused !== prevPaused) {
+                    this.updateBotPanel();
+                } else if (data.active && this.currentPanel === 'botcontrol') {
+                    // Update just the stats display without full re-render
+                    this.updateBotStatsDisplay();
+                }
                 break;
+            }
 
             case 'bot_complete':
                 this.botState.active = false;
@@ -5824,15 +5834,17 @@ class WMTClient {
         `;
     }
 
-    bindBotEvents() {
+    bindBotEvents(skipStatusRequest = false) {
         const bot = this.botState;
 
         // Load areas if not loaded
         if (!this.botAreasLoaded) {
             this.loadBotAreas();
         }
-        // Load custom bots
-        this.loadCustomBots();
+        // Load custom bots (only on first open, not on every status update)
+        if (!skipStatusRequest) {
+            this.loadCustomBots();
+        }
 
         if (bot.active) {
             // Active bot controls
@@ -5848,12 +5860,14 @@ class WMTClient {
                 }
             });
 
-            // Auto-refresh stats every second while active
+            // Auto-refresh stats every second while active (lightweight, no re-render)
+            if (this._botStatsTimer) clearInterval(this._botStatsTimer);
             this._botStatsTimer = setInterval(() => {
                 if (this.currentPanel === 'botcontrol' && this.botState.active) {
-                    this.updateBotPanel();
+                    this.updateBotStatsDisplay();
                 } else {
                     clearInterval(this._botStatsTimer);
+                    this._botStatsTimer = null;
                 }
             }, 1000);
         } else {
@@ -5893,17 +5907,46 @@ class WMTClient {
             });
         }
 
-        // Request current bot status from server
-        this.connection.send('bot_status_request');
+        // Request current bot status from server (only on first open)
+        if (!skipStatusRequest) {
+            this.connection.send('bot_status_request');
+        }
     }
 
     updateBotPanel() {
         if (this.currentPanel !== 'botcontrol') return;
-        // Re-render the entire panel to reflect new state
         const content = document.getElementById('panel-content');
         if (!content) return;
         content.innerHTML = this.renderBotPanel();
-        this.bindBotEvents();
+        this.bindBotEvents(true); // true = skip status request (already have fresh data)
+    }
+
+    // Lightweight update: refresh stats/progress without re-rendering the whole panel
+    updateBotStatsDisplay() {
+        if (this.currentPanel !== 'botcontrol') return;
+        const bot = this.botState;
+
+        // Update progress
+        const stepInfo = document.querySelector('.bot-step-info');
+        if (stepInfo) stepInfo.textContent = `Step ${bot.step} / ${bot.totalSteps}`;
+
+        const fill = document.querySelector('.bot-progress-fill');
+        if (fill) {
+            const pct = bot.totalSteps > 0 ? Math.round((bot.step / bot.totalSteps) * 100) : 0;
+            fill.style.width = pct + '%';
+        }
+
+        // Update stats
+        const statEls = document.querySelectorAll('.bot-stat strong');
+        if (statEls.length >= 3) {
+            statEls[0].textContent = bot.stats.mobs;
+            const elapsed = bot.stats.startTime ? Math.round((Date.now() - bot.stats.startTime) / 1000) : 0;
+            statEls[1].textContent = `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+            let statusText = 'Running';
+            if (bot.paused) statusText = 'Paused';
+            else if (bot.inCombat) statusText = `Fighting${bot.foundMob ? ' (' + bot.foundMob + ')' : ''}`;
+            statEls[2].textContent = statusText;
+        }
     }
 
     async loadBotAreas() {
