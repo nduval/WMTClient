@@ -1,77 +1,6370 @@
 [
   {
+    "name": "Aegis",
+    "category": "Chaos",
+    "path": "e;e;s;e;e;s;w;s;w;w;n;e;s;s;e;s;e;n;e;s;e;e;n;w;s;w;n;n;e;e;n;w;n;w;n;e;e;d;w;n;e;w;w;s;w;w;n;w;w;w;e;s;e;e;e;e;s;e;e;e;s;w;w;w;s;w;e;n;w;n;w;w;w;w;s;e;e;e;e;e;s;e;e;s;w;s;w;n;w;w;s;w;n;w;n;e;e;s;e;d;w;s;e;w;n;w;s;n;n;n;w;s;s;n;w;w;e;e;n;w;w;e;e;n;w;w;e;e;e;n;w;w;e;e;e;e;w;w;n;w;w;e;e;e;e;w;w;s;s;e;s;s;n;n;e;s;s;n;n;e;s;s;n;n;e;s;s;n;n;n;w;n;s;e;n;e;w;s;e;e;e;w;w;w;s;e;e;e;w;w;s;e;e;w;w;s;e;e;w;w;s;w;w;e;e;e;e;w;w;s;w;e;n;n;n;n;w;n;e;d;e;e;n;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;n;n;n;n;n;n;n;n;w;w;d;e;e;n;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;n;n;n;n;n;n;n;n;w;w;d;e;e;n;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;n;n;n;n;n;n;n;n;w;w;u;u;u;w;s;w;w;w;w;s;s;s;e;e;u;e;e;e;n;n;n;n;u;w;s;s;s;w;s;w;w;n;n;n;w;w;n;w",
+    "mobs": [
+      {
+        "pattern": "Putrid zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Shambling zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "One-armed zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Wounded zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Rotting zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Bloody zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Faceless zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Vomit-splattered zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Charred zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Severely burnt zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Limping zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Bullet-ridden zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Massive zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Ravaged zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Shuffling zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Aegis Sentry Model 60-FT",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 62-CC",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 64-CC",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 65-SE",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Soldier Model 66-SO",
+        "target": "robot"
+      },
+      {
+        "pattern": "Aegis Assembler Model 68-AS",
+        "target": "robot"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Aegis #14",
+    "category": "Chaos",
+    "path": "e;e;s;e;e;s;w;s;w;w;n;e;s;s;e;s;e;n;e;s;e;e;n;w;s;w;n;n;e;e;n;w;n;w;n;e;e;d;w;n;e;w;w;s;w;w;n;w;w;w;e;s;e;e;e;e;s;e;e;e;s;w;w;w;s;w;e;n;w;n;w;w;w;w;s;e;e;e;e;e;s;e;e;s;w;s;w;n;w;w;s;w;n;w;n;e;e;s;e;d;w;s;e;w;n;w;s;n;n;n;w;s;s;n;w;w;e;e;n;w;w;e;e;n;w;w;e;e;e;n;w;w;e;e;e;e;w;w;n;w;w;e;e;e;e;w;w;s;s;e;s;s;n;n;e;s;s;n;n;e;s;s;n;n;e;s;s;n;n;n;w;n;s;e;n;e;w;s;e;e;e;w;w;w;s;e;e;e;w;w;s;e;e;w;w;s;e;e;w;w;s;w;w;e;e;e;e;w;w;s;w;e;n;n;n;n;w;n;e;d;e;e;n;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;n;n;n;n;n;n;n;n;w;w;u;w;s;w;w;w;w;s;s;s;e;e;u;e;e;e;n;n;n;n;u;w;s;s;s;w;s;w;w;n;n;n;w;w;n;w",
+    "mobs": [
+      {
+        "pattern": "Putrid zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Shambling zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "One-armed zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Wounded zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Rotting zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Bloody zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Faceless zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Vomit-splattered zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Charred zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Severely burnt zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Limping zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Bullet-ridden zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Massive zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Ravaged zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Shuffling zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Aegis Sentry Model 60-FT",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 62-CC",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 64-CC",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 65-SE",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Soldier Model 66-SO",
+        "target": "robot"
+      },
+      {
+        "pattern": "Aegis Assembler Model 68-AS",
+        "target": "robot"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Aegis #15",
+    "category": "Chaos",
+    "path": "e;e;s;e;e;s;w;s;w;w;n;e;s;s;e;s;e;n;e;s;e;e;n;w;s;w;n;n;e;e;n;w;n;w;n;e;e;d;w;n;e;w;w;s;w;w;n;w;w;w;e;s;e;e;e;e;s;e;e;e;s;w;w;w;s;w;e;n;w;n;w;w;w;w;s;e;e;e;e;e;s;e;e;s;w;s;w;n;w;w;s;w;n;w;n;e;e;s;e;d;w;s;e;w;n;w;s;n;n;n;w;s;s;n;w;w;e;e;n;w;w;e;e;n;w;w;e;e;e;n;w;w;e;e;e;e;w;w;n;w;w;e;e;e;e;w;w;s;s;e;s;s;n;n;e;s;s;n;n;e;s;s;n;n;e;s;s;n;n;n;w;n;s;e;n;e;w;s;e;e;e;w;w;w;s;e;e;e;w;w;s;e;e;w;w;s;e;e;w;w;s;w;w;e;e;e;e;w;w;s;w;e;n;n;n;n;w;n;e;d;e;e;n;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;n;n;n;n;n;n;n;n;w;w;d;e;e;n;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;n;n;n;n;n;n;n;n;w;w;u;u;w;s;w;w;w;w;s;s;s;e;e;u;e;e;e;n;n;n;n;u;w;s;s;s;w;s;w;w;n;n;n;w;w;n;w",
+    "mobs": [
+      {
+        "pattern": "Putrid zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Shambling zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "One-armed zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Wounded zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Rotting zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Bloody zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Faceless zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Vomit-splattered zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Charred zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Severely burnt zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Limping zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Bullet-ridden zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Massive zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Ravaged zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Shuffling zombie",
+        "target": "zombie"
+      },
+      {
+        "pattern": "Aegis Sentry Model 60-FT",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 62-CC",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 64-CC",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Sentry Model 65-SE",
+        "target": "sentry"
+      },
+      {
+        "pattern": "Aegis Soldier Model 66-SO",
+        "target": "robot"
+      },
+      {
+        "pattern": "Aegis Assembler Model 68-AS",
+        "target": "robot"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Anchorman",
+    "category": "Chaos",
+    "path": "ne;sw;n;n;w;e;n;e;w;n;enter;e;u;d;se;nw;w;n;w;e;n;s;s;s;s;s;s;s",
+    "mobs": [
+      {
+        "pattern": "Brick Tamland",
+        "target": "brick"
+      },
+      {
+        "pattern": "Wes Mantooth",
+        "target": "wes"
+      },
+      {
+        "pattern": "Frank Vitchard",
+        "target": "frank"
+      },
+      {
+        "pattern": "Arturo Mendes",
+        "target": "arturo"
+      },
+      {
+        "pattern": "Brian Fantana",
+        "target": "brian"
+      },
+      {
+        "pattern": "Ed Harken",
+        "target": "ed"
+      },
+      {
+        "pattern": "Champ Kind",
+        "target": "champ"
+      },
+      {
+        "pattern": "Garth Holladay",
+        "target": "garth"
+      },
+      {
+        "pattern": "Veronica Corningstone",
+        "target": "veronica"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Android",
+    "category": "Chaos",
+    "path": "n;w;n;n;w;w;s;s;e;n;s;e;e;e;e;n;s;e;n;n;w;w;s;s;w;stairs;w;n;s;e;e;n;s;w;stairs;s",
+    "mobs": [
+      {
+        "pattern": "Apple Fanboy",
+        "target": "boy"
+      },
+      {
+        "pattern": "Android",
+        "target": "android"
+      },
+      {
+        "pattern": "Development",
+        "target": "development"
+      },
+      {
+        "pattern": "Alpha",
+        "target": "alpha"
+      },
+      {
+        "pattern": "Beta",
+        "target": "beta"
+      },
+      {
+        "pattern": "Cupcake",
+        "target": "android"
+      },
+      {
+        "pattern": "Donut",
+        "target": "android"
+      },
+      {
+        "pattern": "Eclair",
+        "target": "android"
+      },
+      {
+        "pattern": "Froyo",
+        "target": "Froyo"
+      },
+      {
+        "pattern": "Gingerbread",
+        "target": "android"
+      },
+      {
+        "pattern": "Honeycomb",
+        "target": "android"
+      },
+      {
+        "pattern": "Ice Cream Sandwich",
+        "target": "android"
+      },
+      {
+        "pattern": "Jellybean",
+        "target": "android"
+      },
+      {
+        "pattern": "KitKat",
+        "target": "android"
+      },
+      {
+        "pattern": "Lollipop",
+        "target": "android"
+      },
+      {
+        "pattern": "Marshmallow",
+        "target": "android"
+      },
+      {
+        "pattern": "Nougat",
+        "target": "android"
+      },
+      {
+        "pattern": "Oreo",
+        "target": "android"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Banshees",
+    "category": "Chaos",
+    "path": "e;e;e;s;s;w;w;w;n;n;s;s;e;e;d;e;se;sw;w;nw;ne;sw;se;e;d;se;se;w;w;ne;ne;se;se;w;d;sw;sw;w;w;w;ne;ne;e;e;e;u;w;ne;ne;u;w;nw;ne;u;w;w;n;n;",
+    "mobs": [
+      {
+        "pattern": "A thin ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A scared ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A fat ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A frightened ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A young ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A loyal hound \\(undead\\)",
+        "target": "hound"
+      },
+      {
+        "pattern": "A huge elven skeleton",
+        "target": "skeleton"
+      },
+      {
+        "pattern": "A nimble elven archer \\(undead\\)",
+        "target": "archer"
+      },
+      {
+        "pattern": "Yihan, the Elven Shade",
+        "target": "shade"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Banshees #12",
+    "category": "Chaos",
+    "path": "e;e;e;s;s;w;w;w;n;n;s;s;e;e;d;e;se;sw;w;nw;ne;u;w;w;n;n;",
+    "mobs": [
+      {
+        "pattern": "A thin ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A scared ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A fat ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A frightened ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A young ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A loyal hound \\(undead\\)",
+        "target": "hound"
+      },
+      {
+        "pattern": "A huge elven skeleton",
+        "target": "skeleton"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Banshees #13",
+    "category": "Chaos",
+    "path": "e;e;e;s;s;w;w;w;n;n;s;s;e;e;d;e;se;sw;w;nw;ne;sw;se;e;d;se;se;w;w;ne;ne;u;w;nw;ne;u;w;w;n;n;",
+    "mobs": [
+      {
+        "pattern": "A thin ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A scared ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A fat ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A frightened ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A young ghost elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "A loyal hound \\(undead\\)",
+        "target": "hound"
+      },
+      {
+        "pattern": "A huge elven skeleton",
+        "target": "skeleton"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Banshees #3",
+    "category": "Chaos",
+    "path": "se;se;w;d;sw;sw;w;w;w;ne;ne;e;e;e;u;w;ne;ne;",
+    "mobs": [
+      {
+        "pattern": "A huge elven skeleton",
+        "target": "skeleton"
+      },
+      {
+        "pattern": "A nimble elven archer \\(undead\\)",
+        "target": "archer"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Carnegie Hall",
+    "category": "Chaos",
+    "path": "w;w;w;nw;ne;e;e;e;se;nw;n;e;e;out;w;w;w;w;w;nw;nw;n;e;s;se;e;e;e;e;e;ne;w;w;w;w;w;w;w;n;e;e;e;e;e;e;e;e;s;sw;sw;ne;ne;n;w;n;w;w;w;w;w;w;w;n;e;e;e;e;e;e;e;n;w;w;w;w;w;w;w;n;e;e;e;e;e;e;e;n;ne;sw;w;w;w;w;w;w;w;nw;se;s;s;s;s;s;s;se;e;s;s;sw;u;se;e;e;e;ne;nw;w;w;w;sw;u;ne;nw;nw;nw;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;e;e;e;e;e;e;e;n;n;n;n;n;n;n;e;sw;sw;se;sw;w;w;w;w;w;nw;d;d;se;e;e",
+    "mobs": [
+      {
+        "pattern": "A New Yorker \\(waiting in line\\)",
+        "target": "human"
+      },
+      {
+        "pattern": "An Usher",
+        "target": "human"
+      },
+      {
+        "pattern": "A Large Usher",
+        "target": "human"
+      },
+      {
+        "pattern": "A bodyguard \\(ex-mafia\\)",
+        "target": "human"
+      },
+      {
+        "pattern": "A Lady \\(waiting to use the toilet\\)",
+        "target": "human"
+      },
+      {
+        "pattern": "A polite audience member",
+        "target": "human"
+      },
+      {
+        "pattern": "An angry audience member",
+        "target": "human"
+      },
+      {
+        "pattern": "A member of the audience hurrying to his seat",
+        "target": "human"
+      },
+      {
+        "pattern": "A lady in a hurry to find her seat",
+        "target": "human"
+      },
+      {
+        "pattern": "A sleeping audience member",
+        "target": "human"
+      },
+      {
+        "pattern": "A New Yorker trying to find his seat",
+        "target": "human"
+      },
+      {
+        "pattern": "A New Yorker trying to find her seat",
+        "target": "human"
+      },
+      {
+        "pattern": "A member of the audience hurrying to her seat",
+        "target": "human"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Catacombs",
+    "category": "Chaos",
+    "path": "n;n;n;n;e;e;n;d;w;w;s;s;s;w;d;s;s;e;e;e;e;e;n;n;n;w;d;e;e;n;w;e;n;s;e;w;s;e;s;w;s;e;w;s;e;w;n;w;n;s;w;n;n;w;w;s;s;e;w;w;w;n;e;n;n;e;e;n;e;s;s;u;e;s;s;s;w;w;w;w;w;n;n;u;e;e;e;e;n;n;w;n;u;s;w;w;s;s;s;s",
+    "mobs": [
+      {
+        "pattern": "A Ghoul Militia",
+        "target": "ghoul"
+      },
+      {
+        "pattern": "A ghoul",
+        "target": "ghoul"
+      },
+      {
+        "pattern": "A statue of a dwarf",
+        "target": "statue"
+      },
+      {
+        "pattern": "A vampire soldier",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A Vampire",
+        "target": "vampire"
+      },
+      {
+        "pattern": "Duke of Vampires",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A wandering vampire",
+        "target": "vampire"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Catacombs (Easy)",
+    "category": "Chaos",
+    "path": "n;n;n;n;e;e;n;d;w;w;s;s;s;w;d;s;s;e;e;e;e;e;n;n;n;w;d;e;e;n;w;e;n;s;e;w;s;e;s;w;s;e;w;s;e;w;n;w;n;s;w;n;n;w;w;s;s;e;w;w;w;n;e;n;n;e;e;n;e;s;s;u;e;s;s;s;w;w;w;w;w;n;n;u;e;e;e;e;n;n;w;n;u;s;w;w;s;s;s;s",
+    "mobs": [
+      {
+        "pattern": "A Ghoul Militia",
+        "target": "ghoul"
+      },
+      {
+        "pattern": "A ghoul",
+        "target": "ghoul"
+      },
+      {
+        "pattern": "A statue of a dwarf",
+        "target": "statue"
+      },
+      {
+        "pattern": "A vampire soldier",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A Vampire",
+        "target": "vampire"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Celestial Zodiacs (Czodiacs)",
+    "category": "Chaos",
+    "path": "light;e;se;s;se;s;se;s;sw;w;nw;n;e;s;n;w;ne;sw;e;nw;w;n;ne;sw;e;nw;w;sw;s;se;s;e;se;s;n;w;nw;n;e;w;s;sw;s;se;e;d;ne;e;se;s;se;s;se;s;sw;w;nw;n;e;s;n;w;ne;sw;e;nw;w;n;ne;sw;e;nw;w;sw;s;se;s;e;se;s;n;w;nw;n;e;w;s;sw;s;se;e;ne;n;ne;n;ne;n;nw;n;u;n;ne;e;s;n;ne;e;s;n;ne;e;se;s;sw;w;n;e;w;sw;s;w;e;ne;e;w;sw;n;w;s;sw;w;e;n;s;se;e;ne;n;s;e;n;ne;s;n;e;se;s;sw;w;nw;d;se;s;w;sw;s;e;n;nw;w;n;ne;sw;s;sw;s;se;e;w;s;e;se;w;nw;sw;s;se;e;ne;n;ne;n;w;s;se;e;ne;n;nw;w;e;n;s;se;s;d;ne;e;w;sw;s;se;e;w;s;se;e;w;s;se;e;ne;n;ne;n;nw;sw;s;sw;ne;w;se;nw;n;nw;n;s;e;n;s;se;ne;n;nw;w;n;ne;e;se;s;n;u;e;ne;n;nw;w;s;sw;n;s;w;n;s;sw;w;nw;n;s;w;nw;n;ne;e;s;se;n;e;s;ne;e;ne;n;nw;w;sw;se;e;w;nw;s;n;w;u;ne;sw;w;nw;n;ne;e;se;w;nw;n;nw;n;ne;n;s;e;se;w;ne;sw;s;e;sw;ne;se;w;ne;sw;e;s;n;w;s;se;e;ne;n;nw;n;nw;n;nw;w;u;sw;w;nw;n;e;ne;n;w;s;se;e;ne;n;nw;n;ne;n;nw;n;s;w;sw;s;e;se;w;nw;sw;s;sw;nw;n;ne;e;se;s;w;n;s;e;sw;ne;w;se;s;se;nw;e;n;s;sw;w;nw;n;nw;n;ne;e;w;sw;s;se;s;d;s;n;nw;w;sw;w;sw;w;sw;s;se;e;n;ne;e;s;w;nw;se;sw;se;e;ne;n;nw;ne;nw;s;se;e;w;n;e;se;sw;s;ne;n;e;se;s;sw;w;nw;ne;n;nw;w;sw;s;w;sw;w;nw;n;enter;swim;swim",
+    "mobs": [
+      {
+        "pattern": "Lost Soul of the Zodiac",
+        "target": "soul"
+      },
+      {
+        "pattern": "Guardian of Anubis",
+        "target": "anubis"
+      },
+      {
+        "pattern": "Guardian of Bastet",
+        "target": "bastet"
+      },
+      {
+        "pattern": "Guardian of Horus",
+        "target": "horus"
+      },
+      {
+        "pattern": "Guardian of Sobek",
+        "target": "sobek"
+      },
+      {
+        "pattern": "Guardian of Ra",
+        "target": "ra"
+      },
+      {
+        "pattern": "Guardian of Ptah",
+        "target": "ptah"
+      },
+      {
+        "pattern": "Guardian of Isis",
+        "target": "isis"
+      },
+      {
+        "pattern": "Guardian of Thoth",
+        "target": "thoth"
+      },
+      {
+        "pattern": "Guardian of Sekhmet",
+        "target": "sekhmet"
+      },
+      {
+        "pattern": "Guardian of Osiris",
+        "target": "osiris"
+      },
+      {
+        "pattern": "Guardian of Ma'at",
+        "target": "guardian"
+      },
+      {
+        "pattern": "Guardian of Hathor",
+        "target": "hathor"
+      },
+      {
+        "pattern": "Deva of Brahma",
+        "target": "brahma"
+      },
+      {
+        "pattern": "Deva of Durga",
+        "target": "durga"
+      },
+      {
+        "pattern": "Deva of Vishnu",
+        "target": "vishnu"
+      },
+      {
+        "pattern": "Deva of Ganesha",
+        "target": "ganesha"
+      },
+      {
+        "pattern": "Deva of Shiva",
+        "target": "shiva"
+      },
+      {
+        "pattern": "Deva of Saraswati",
+        "target": "saraswati"
+      },
+      {
+        "pattern": "Deva of Krishna",
+        "target": "krishna"
+      },
+      {
+        "pattern": "Deva of Hanuman",
+        "target": "hanuman"
+      },
+      {
+        "pattern": "Deva of Kali",
+        "target": "kali"
+      },
+      {
+        "pattern": "Deva of Rama",
+        "target": "rama"
+      },
+      {
+        "pattern": "Deva of Lakshmi",
+        "target": "lakshmi"
+      },
+      {
+        "pattern": "Deva of Parvati",
+        "target": "parvati"
+      },
+      {
+        "pattern": "Druid of Holly",
+        "target": "holly"
+      },
+      {
+        "pattern": "Druid of Oak",
+        "target": "oak"
+      },
+      {
+        "pattern": "Druid of Alder",
+        "target": "alder"
+      },
+      {
+        "pattern": "Druid of Willow",
+        "target": "druid"
+      },
+      {
+        "pattern": "Druid of Ivy",
+        "target": "ivy"
+      },
+      {
+        "pattern": "Druid of Hazel",
+        "target": "hazel"
+      },
+      {
+        "pattern": "Druid of Hawthorn",
+        "target": "hawthorn"
+      },
+      {
+        "pattern": "Druid of Birch",
+        "target": "birch"
+      },
+      {
+        "pattern": "Druid of Rowan",
+        "target": "rowan"
+      },
+      {
+        "pattern": "Druid of Vine",
+        "target": "vine"
+      },
+      {
+        "pattern": "Druid of Ash",
+        "target": "ash"
+      },
+      {
+        "pattern": "Druid of Elder",
+        "target": "elder"
+      },
+      {
+        "pattern": "Sage of Al-'Ilm",
+        "target": "al-'ilm"
+      },
+      {
+        "pattern": "Sage of Al-Mal",
+        "target": "al-mal"
+      },
+      {
+        "pattern": "Sage of Al-Zawaj",
+        "target": "al-zawaj"
+      },
+      {
+        "pattern": "Sage of Al-Karir",
+        "target": "al-karir"
+      },
+      {
+        "pattern": "Sage of Al-Sihha",
+        "target": "al-sihha"
+      },
+      {
+        "pattern": "Sage of Al-Sa'a",
+        "target": "sage"
+      },
+      {
+        "pattern": "Sage of Al-Samt",
+        "target": "al-samt"
+      },
+      {
+        "pattern": "Sage of Al-Nasr",
+        "target": "al-nasr"
+      },
+      {
+        "pattern": "Sage of Al-Sa'ada",
+        "target": "sage"
+      },
+      {
+        "pattern": "Sage of Al-Mawt",
+        "target": "al-mawt"
+      },
+      {
+        "pattern": "Sage of Al-Qisma",
+        "target": "al-qisma"
+      },
+      {
+        "pattern": "Sage of Al-Rizq",
+        "target": "al-rizq"
+      },
+      {
+        "pattern": "Lama of the Sheep",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Yeti",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Monkey",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Tiger",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Rabbit",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Yak",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Horse",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Garuda",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Snow Lion",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Elephant",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Dragon",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Partridge",
+        "target": "lama"
+      },
+      {
+        "pattern": "Shaman of Kukulkan",
+        "target": "kukulkan"
+      },
+      {
+        "pattern": "Shaman of Itzamna",
+        "target": "itzamna"
+      },
+      {
+        "pattern": "Shaman of Hunahpu",
+        "target": "hunahpu"
+      },
+      {
+        "pattern": "Shaman of Ixtab",
+        "target": "ixtab"
+      },
+      {
+        "pattern": "Shaman of Akbal",
+        "target": "akbal"
+      },
+      {
+        "pattern": "Shaman of Ahau Can",
+        "target": "ahau can"
+      },
+      {
+        "pattern": "Shaman of K'inich Ahau",
+        "target": "k'inich ahau"
+      },
+      {
+        "pattern": "Shaman of Yum Kaax",
+        "target": "yum kaax"
+      },
+      {
+        "pattern": "Shaman of Chac",
+        "target": "chac"
+      },
+      {
+        "pattern": "Shaman of Ixchel",
+        "target": "ixchel"
+      },
+      {
+        "pattern": "Shaman of Ix",
+        "target": "shaman"
+      },
+      {
+        "pattern": "Shaman of Ah Puch",
+        "target": "ah puch"
+      },
+      {
+        "pattern": "Spirit Warrior of the Otter",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Falcon",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Beaver",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Woodpecker",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Bear",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Snake",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Raven",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Salmon",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Goose",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Owl",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Deer",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Wolf",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Snake",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Goat",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Dragon",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Rabbit",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Rooster",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Pig",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Monkey",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Horse",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Tiger",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Rat",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Dog",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Ox",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Knight of Libra",
+        "target": "libra"
+      },
+      {
+        "pattern": "Knight of Gemini",
+        "target": "gemini"
+      },
+      {
+        "pattern": "Knight of Sagittarius",
+        "target": "sagittarius"
+      },
+      {
+        "pattern": "Knight of Leo",
+        "target": "leo"
+      },
+      {
+        "pattern": "Knight of Taurus",
+        "target": "taurus"
+      },
+      {
+        "pattern": "Knight of Scorpio",
+        "target": "scorpio"
+      },
+      {
+        "pattern": "Knight of Capricorn",
+        "target": "capricorn"
+      },
+      {
+        "pattern": "Knight of Virgo",
+        "target": "virgo"
+      },
+      {
+        "pattern": "Knight of Pisces",
+        "target": "pisces"
+      },
+      {
+        "pattern": "Knight of Aquarius",
+        "target": "aquarius"
+      },
+      {
+        "pattern": "Knight of Cancer",
+        "target": "cancer"
+      },
+      {
+        "pattern": "Knight of Aries",
+        "target": "aries"
+      },
+      {
+        "pattern": "Aeonos, the Celestial Nexus",
+        "target": "aeonos"
+      },
+      {
+        "pattern": "Warrior of the Cat",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Treasure Chest of Amalgamation",
+        "target": "amalgamation"
+      },
+      {
+        "pattern": "Mimic",
+        "target": "mimic"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Celestial Zodiacs (Easy)",
+    "category": "Chaos",
+    "path": "light;e;se;s;se;s;se;s;sw;w;nw;n;e;s;n;w;ne;sw;e;nw;w;n;ne;sw;e;nw;w;sw;s;se;s;e;se;s;n;w;nw;n;e;w;s;sw;s;se;e;d;ne;e;se;s;se;s;se;s;sw;w;nw;n;e;s;n;w;ne;sw;e;nw;w;n;ne;sw;e;nw;w;sw;s;se;s;e;se;s;n;w;nw;n;e;w;s;sw;s;se;e;ne;n;ne;n;ne;n;nw;n;u;n;ne;e;s;n;ne;e;s;n;ne;e;se;s;sw;w;n;e;w;sw;s;w;e;ne;e;w;sw;n;w;s;sw;w;e;n;s;se;e;ne;n;s;e;n;ne;s;n;e;se;s;sw;w;nw;d;se;s;w;sw;s;e;n;nw;w;n;ne;sw;s;sw;s;se;e;w;s;e;se;w;nw;sw;s;se;e;ne;n;ne;n;w;s;se;e;ne;n;nw;w;e;n;s;se;s;d;ne;e;w;sw;s;se;e;w;s;se;e;w;s;se;e;ne;n;ne;n;nw;sw;s;sw;ne;w;se;nw;n;nw;n;s;e;n;s;se;ne;n;nw;w;n;ne;e;se;s;n;u;e;ne;n;nw;w;s;sw;n;s;w;n;s;sw;w;nw;n;s;w;nw;n;ne;e;s;se;n;e;s;ne;e;ne;n;nw;w;sw;se;e;w;nw;s;n;w;u;ne;sw;w;nw;n;ne;e;se;w;nw;n;nw;n;ne;n;s;e;se;w;ne;sw;s;e;sw;ne;se;w;ne;sw;e;s;n;w;s;se;e;ne;n;nw;n;nw;n;nw;w;u;sw;w;nw;n;e;ne;n;w;s;se;e;ne;n;nw;n;ne;n;nw;n;s;w;sw;s;e;se;w;nw;sw;s;sw;nw;n;ne;e;se;s;w;n;s;e;sw;ne;w;se;s;se;nw;e;n;s;sw;w;nw;n;nw;n;ne;e;w;sw;s;se;s;d;s;n;nw;w;sw;w;sw;w;sw;s;se;e;n;ne;e;s;w;nw;se;sw;se;e;ne;n;nw;ne;nw;s;se;e;w;n;e;se;sw;s;ne;n;e;se;s;sw;w;nw;ne;n;nw;w;sw;s;w;sw;w;nw;n;enter;swim;swim",
+    "mobs": [
+      {
+        "pattern": "Guardian of Anubis",
+        "target": "anubis"
+      },
+      {
+        "pattern": "Guardian of Bastet",
+        "target": "bastet"
+      },
+      {
+        "pattern": "Guardian of Horus",
+        "target": "horus"
+      },
+      {
+        "pattern": "Guardian of Sobek",
+        "target": "sobek"
+      },
+      {
+        "pattern": "Guardian of Ra",
+        "target": "ra"
+      },
+      {
+        "pattern": "Guardian of Ptah",
+        "target": "ptah"
+      },
+      {
+        "pattern": "Guardian of Isis",
+        "target": "isis"
+      },
+      {
+        "pattern": "Guardian of Thoth",
+        "target": "thoth"
+      },
+      {
+        "pattern": "Guardian of Sekhmet",
+        "target": "sekhmet"
+      },
+      {
+        "pattern": "Guardian of Osiris",
+        "target": "osiris"
+      },
+      {
+        "pattern": "Guardian of Ma'at",
+        "target": "guardian"
+      },
+      {
+        "pattern": "Guardian of Hathor",
+        "target": "hathor"
+      },
+      {
+        "pattern": "Deva of Brahma",
+        "target": "brahma"
+      },
+      {
+        "pattern": "Deva of Durga",
+        "target": "durga"
+      },
+      {
+        "pattern": "Deva of Vishnu",
+        "target": "vishnu"
+      },
+      {
+        "pattern": "Deva of Ganesha",
+        "target": "ganesha"
+      },
+      {
+        "pattern": "Deva of Shiva",
+        "target": "shiva"
+      },
+      {
+        "pattern": "Deva of Saraswati",
+        "target": "saraswati"
+      },
+      {
+        "pattern": "Deva of Krishna",
+        "target": "krishna"
+      },
+      {
+        "pattern": "Deva of Hanuman",
+        "target": "hanuman"
+      },
+      {
+        "pattern": "Deva of Kali",
+        "target": "kali"
+      },
+      {
+        "pattern": "Deva of Rama",
+        "target": "rama"
+      },
+      {
+        "pattern": "Deva of Lakshmi",
+        "target": "lakshmi"
+      },
+      {
+        "pattern": "Deva of Parvati",
+        "target": "parvati"
+      },
+      {
+        "pattern": "Druid of Holly",
+        "target": "holly"
+      },
+      {
+        "pattern": "Druid of Oak",
+        "target": "oak"
+      },
+      {
+        "pattern": "Druid of Alder",
+        "target": "alder"
+      },
+      {
+        "pattern": "Druid of Willow",
+        "target": "druid"
+      },
+      {
+        "pattern": "Druid of Ivy",
+        "target": "ivy"
+      },
+      {
+        "pattern": "Druid of Hazel",
+        "target": "hazel"
+      },
+      {
+        "pattern": "Druid of Hawthorn",
+        "target": "hawthorn"
+      },
+      {
+        "pattern": "Druid of Birch",
+        "target": "birch"
+      },
+      {
+        "pattern": "Druid of Rowan",
+        "target": "rowan"
+      },
+      {
+        "pattern": "Druid of Vine",
+        "target": "vine"
+      },
+      {
+        "pattern": "Druid of Ash",
+        "target": "ash"
+      },
+      {
+        "pattern": "Druid of Elder",
+        "target": "elder"
+      },
+      {
+        "pattern": "Sage of Al-'Ilm",
+        "target": "al-'ilm"
+      },
+      {
+        "pattern": "Sage of Al-Mal",
+        "target": "al-mal"
+      },
+      {
+        "pattern": "Sage of Al-Zawaj",
+        "target": "al-zawaj"
+      },
+      {
+        "pattern": "Sage of Al-Karir",
+        "target": "al-karir"
+      },
+      {
+        "pattern": "Sage of Al-Sihha",
+        "target": "al-sihha"
+      },
+      {
+        "pattern": "Sage of Al-Sa'a",
+        "target": "sage"
+      },
+      {
+        "pattern": "Sage of Al-Samt",
+        "target": "al-samt"
+      },
+      {
+        "pattern": "Sage of Al-Nasr",
+        "target": "al-nasr"
+      },
+      {
+        "pattern": "Sage of Al-Sa'ada",
+        "target": "sage"
+      },
+      {
+        "pattern": "Sage of Al-Mawt",
+        "target": "al-mawt"
+      },
+      {
+        "pattern": "Sage of Al-Qisma",
+        "target": "al-qisma"
+      },
+      {
+        "pattern": "Sage of Al-Rizq",
+        "target": "al-rizq"
+      },
+      {
+        "pattern": "Lama of the Sheep",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Yeti",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Monkey",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Tiger",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Rabbit",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Yak",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Horse",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Garuda",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Snow Lion",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Elephant",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Dragon",
+        "target": "lama"
+      },
+      {
+        "pattern": "Lama of the Partridge",
+        "target": "lama"
+      },
+      {
+        "pattern": "Shaman of Kukulkan",
+        "target": "kukulkan"
+      },
+      {
+        "pattern": "Shaman of Itzamna",
+        "target": "itzamna"
+      },
+      {
+        "pattern": "Shaman of Hunahpu",
+        "target": "hunahpu"
+      },
+      {
+        "pattern": "Shaman of Ixtab",
+        "target": "ixtab"
+      },
+      {
+        "pattern": "Shaman of Akbal",
+        "target": "akbal"
+      },
+      {
+        "pattern": "Shaman of Ahau Can",
+        "target": "ahau can"
+      },
+      {
+        "pattern": "Shaman of K'inich Ahau",
+        "target": "k'inich ahau"
+      },
+      {
+        "pattern": "Shaman of Yum Kaax",
+        "target": "yum kaax"
+      },
+      {
+        "pattern": "Shaman of Chac",
+        "target": "chac"
+      },
+      {
+        "pattern": "Shaman of Ixchel",
+        "target": "ixchel"
+      },
+      {
+        "pattern": "Shaman of Ix",
+        "target": "shaman"
+      },
+      {
+        "pattern": "Shaman of Ah Puch",
+        "target": "ah puch"
+      },
+      {
+        "pattern": "Spirit Warrior of the Otter",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Falcon",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Beaver",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Woodpecker",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Bear",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Snake",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Raven",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Salmon",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Goose",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Owl",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Deer",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Spirit Warrior of the Wolf",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Snake",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Goat",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Dragon",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Rabbit",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Rooster",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Pig",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Monkey",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Horse",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Tiger",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Rat",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Dog",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Warrior of the Ox",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Knight of Libra",
+        "target": "libra"
+      },
+      {
+        "pattern": "Knight of Gemini",
+        "target": "gemini"
+      },
+      {
+        "pattern": "Knight of Sagittarius",
+        "target": "sagittarius"
+      },
+      {
+        "pattern": "Knight of Leo",
+        "target": "leo"
+      },
+      {
+        "pattern": "Knight of Taurus",
+        "target": "taurus"
+      },
+      {
+        "pattern": "Knight of Scorpio",
+        "target": "scorpio"
+      },
+      {
+        "pattern": "Knight of Capricorn",
+        "target": "capricorn"
+      },
+      {
+        "pattern": "Knight of Virgo",
+        "target": "virgo"
+      },
+      {
+        "pattern": "Knight of Pisces",
+        "target": "pisces"
+      },
+      {
+        "pattern": "Knight of Aquarius",
+        "target": "aquarius"
+      },
+      {
+        "pattern": "Knight of Cancer",
+        "target": "cancer"
+      },
+      {
+        "pattern": "Knight of Aries",
+        "target": "aries"
+      },
+      {
+        "pattern": "Aeonos, the Celestial Nexus",
+        "target": "aeonos"
+      },
+      {
+        "pattern": "Warrior of the Cat",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Treasure Chest of Amalgamation",
+        "target": "amalgamation"
+      },
+      {
+        "pattern": "Mimic",
+        "target": "mimic"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Chaotic Sewers",
+    "category": "Chaos",
+    "path": "s;w;n;n;e;e;n;w;e;s;w;w;s;s;s;w;w;w;s;w;s;w;n;s;w;n;w;n;e;e;e;n;e;n;n;w;s;w;s;w;w;w;s;n;e;e;e;n;e;n;e;s;s;w;s;w;w;w;s;w;s;e;w;n;e;e;s;e;e;n;e;n;e;e;e;n;e;e;n;e;s;s;w;s;e;e;n;e;s;s;w;w;w;w;n;n;s;w;w;s;w;w;e;n;s;e;n;e;e;s;w;e;e;e;e;e;n;n;w;s;w;w;n;e;n;n;n;e;n;w;n;w;w;n;e;n;n;w;s;n;e;s;s;w;s;e;e;n;e;e;n;w;w;n;e;e;n;w;w;w;w;n;n;n;e;s;e;n;e;n;n;w;w;n;e;e;e;s;s;e;s;s;e;e;e;e;e;n;n;e;s;e;s;w;s;e;e;n;n;e;n;n;e;e;e;n;w;w;w;w;s;w;s;e;w;n;e;n;e;e;e;e;s;w;w;w;s;s;w;s;s;w;w;n;e;n;w;n;w;s;s;w;w;w;w;w;s;e;e;s;e;n;e;s;e;e;s;w;s;s;e;e;n;n;n;e;s;e;s;w;s;e;e;e;e;n;w;w;n;n;e;e;e;s;e;e;s;e;n;e;n;w;n;w;n;e;e;e;e;s;w;s;e;s;e;e;s;w;s;e;s;e;n;e;e;e;e;n;w;n;e;e;e;s;w;s;e;s;s;n;n;w;n;e;n;w;w;w;s;e;s;w;w;w;w;s;w;n;w;n;e;n;w;w;n;w;n;e;n;w;w;w;w;s;e;s;e;s;w;s;w;n;w;w;n;w;w;w;s;s;e;e;s;w;w;w;w;n;e;n;w;n;w;s;s;s;w;w;n;n;e;n;w;w;n;w;s;w;n;w;w;n;n;n;w;n;n;w;w;w;s;e;e;s;s;w;s;w;n;w;s;s;w;s;w;s;s;s;e;s;s;w;n;w;s;n;e;s;e;n;s;w;n;w;s;w;n;w;s;w;e;n;e;s;e;n;e;s;e;n;n;w;n;n;n;e;n;e;s;e;e;e;e;s;w;w;s;e;e;s;w;w;s;w;w;n;e;n;n;w;s;w;n;s;e;n;e;s;s;w;s;e;e;n;e;e;n;w;w;n;e;e;n;w;w;w;w;n;n;n;e;s;e;n;e;n;n;w;w;n;e;e;e;s;s;e;s;s;e;e;e;e;e;n;n;e;s;e;s;w;s;e;e;n;n;e;n;n;e;e;e;n;w;w;w;w;s;w;s;e;w;n;e;n;e;e;e;e;s;w;w;w;s;s;w;s;s;w;w;n;e;n;w;n;w;s;s;w;w;w;w;w;s;e;e;s;e;n;e;s;e;e;s;w;s;s;e;e;n;n;n;e;s;e;s;w;s;e;e;e;e;n;w;w;n;n;e;e;e;s;e;e;s;e;n;e;n;w;n;w;n;e;e;e;e;s;w;s;e;s;e;e;s;w;s;e;s;e;n;e;e;e;e;n;w;n;e;e;e;s;w;s;e;s;s;n;n;w;n;e;n;w;w;w;s;e;s;w;w;w;w;s;w;n;w;n;e;n;w;w;n;w;n;e;n;w;w;w;w;s;e;s;e;s;w;s;w;n;w;w;n;w;w;w;s;s;e;e;s;w;w;w;w;n;e;n;w;n;w;s;s;s;w;w;n;n;e;n;w;w;n;w;s;w;n;w;w;n;n;n;w;n;n;w;w;w;s;e;e;s;s;w;s;w;n;w;s;s;w;s;w;s;s;s;e;s;s;w;n;w;s;n;e;s;e;n;s;w;n;w;s;w;n;w;s;w;e;n;e;s;e;n;e;s;e;n;n;w;n;n;n;e;n;e;s;e;e;e;e;s;w;w;s;e;e;s;w;w;s;w;w;n;e;n;n;w;s;w;n;s;e;n;e;s;s;w;s;e;e;n;e;e;n;w;w;n;e;e;n;w;w;w;w;n;w;s;w;s;s;s;e;s;s;w;n;w;s;w;n;w;s;w;n;s;s;n;e;n;e;s;e;n;e;s;s;s;s;w;n;n;s;s;e;n;n;n;e;n;n;w;n;w;n;w;s;s;e;w;w;w;n;w;s;n;w;s;w;e;n;n;e;w;s;e;e;s;e;e;n;w;n;w;n;e;n;w;n;w;n;w;n;w;s;s;s;e;n;s;w;n;w;w;w;w;e;e;e;e;n;n;e;s;e;e;n;w;n;s;e;s;w;s;e;s;e;n;n;n;e;w;s;e;s;s;n;n;w;s;s;s;w;s;e;s;e;n;n;e;n;n;n;n;n;w;n;w;s;w;n;w;w;s;w;n;w;e;s;e;n;e;e;s;e;n;e;s;e;s;s;s;s;s;w;s;e;s;e;n;n;e;n;e;n;n;e;s;e;n;e;n;n;w;w;n;e;e;e;s;s;e;s;s;s;w;e;e;s;w;s;s;e;n;e;e;e;s;w;w;s;w;s;e;e;n;e;w;s;s;e;n;e;w;s;w;s;e;e;n;e;s;e;n;n;w;n;w;n;e;w;n;e;n;w;w;n;w;e;s;e;n;s;w;n;w;s;w;n;w;w;n;e;e;e;e;e;n;n;e;s;e;s;w;s;e;e;n;n;e;w;s;s;w;w;n;e;n;w;n;w;s;s;w;w;w;w;w;s;e;e;s;e;n;e;s;e;e;s;w;s;s;e;e;n;n;n;e;s;e;s;w;s;e;e;s;w;w;s;s;s;w;e;n;n;n;e;e;n;e;e;n;w;w;n;n;e;e;s;w;e;n;e;s;e;e;s;e;n;e;s;n;n;w;n;w;n;e;e;s;n;e;e;s;w;s;e;s;e;e;s;w;w;w;n;s;e;s;w;s;s;w;e;n;n;e;s;e;s;w;s;w;w;s;w;s;w;s;e;s;w;w;n;n;n;e;n;e;n;w;w;s;w;w;s;e;s;s;s;s;w;w;w;n;n;n;w;n;e;n;w;n;e;w;s;e;s;e;s;s;s;e;n;n;s;s;w;w;n;w;w;s;s;w;n;s;e;n;n;e;s;s;n;n;e;n;w;w;w;w;n;w;w;e;e;s;w;w;s;w;w;w;s;e;s;w;w;n;n;n;w;w;n;e;n;n;e;n;w;w;e;e;n;s;s;w;s;e;s;e;s;e;e;n;w;n;w;n;e;w;s;e;s;e;s;w;w;n;w;n;w;n;e;n;n;w;n;w;w;n;e;e;n;w;w;w;n;e;e;n;e;n;s;w;s;w;w;s;w;n;n;n;n;n;n;w;w;w;e;s;e;s;w;s;e;s;w;s;n;e;n;w;n;e;n;w;n;e;e;s;s;s;e;n;e;w;s;s;e;n;e;n;n;w;w;n;e;e;e;s;s;e;s;s;e;e;e;e;e;n;n;e;n;n;e;w;s;s;w;s;s;w;w;w;w;w;n;n;w;n;n;e;s;e;n;e;e;s;e;e;n;w;e;s;w;s;s;n;n;w;s;s;w;w;n;e;n;s;w;s;e;e;n;n;n;w;w;s;w;n;w;w;w;w;s;e;e;s;s;w;s;w;n;w;s;s;w;s;w;s;s;w;n;w;n;e;n;n;n;n;n;w;n;w;s;w;n;w;w;s;w;n;w;s;s;s;w;w;w;w;s;s;e;e;s;e;n;e;s;n;w;s;s;s;s;w;s;w;e;n;e;n;n;e;e;n;e;e;n;s;w;w;s;s;w;s;s;w;e;n;n;e;n;w;w;s;s;w;s;w;w;s;e;e;e;e;s;s;e;e;n;w;n;n;e;e;s;s;s;n;n;n;w;w;s;s;e;n;s;s;w;w;n;n;w;w;w;s;s;e;e;n;w;e;s;w;w;s;s;s;w;s;n;e;s;e;n;n;n;e;e;s;s;s;w;n;n;s;w;s;w;n;n;n;w;s;w;n;w;w;n;w;w;n;n;n;e;e;s;s;w;n;s;e;n;n;w;w;s;s;s;s;e;s;s;s;e;e;e;n;w;w;n;e;w;s;e;e;s;w;w;w;n;n;n;w;s;s;w;w;s;n;e;s;e;w;n;e;n;w;w;n;n;e;w;s;s;e;n;s;w;n;n;e;n;w;n;e;w;s;e;s;w;s;s;e;e;n;n;e;e;s;e;e;s;e;n;e;n;n;n;w;n;e;e;n;e;n;n;n;w;s;s;w;s;n;e;n;n;n;w;w;w;s;s;e;e;n;w;e;s;w;s;s;n;n;w;n;w;s;s;e;s;w;s;e;s;s;e;s;w;w;n;n;s;s;e;e;n;w;n;n;w;n;w;w;w;w;s;w;w;n;e;w;s;e;e;n;n;w;w;n;e;e;n;w;w;w;n;e;e;n;w;w;w;n;w;s;s;s;n;n;n;e;s;e;n;n;n;w;w;s;e;w;n;e;e;s;s;s;e;n;n;n;e;n;w;w;w;w;e;e;e;e;e;e;e;e;e;s;s;s;w;w;s;s;s;s;w;n;n;w;n;e;n;w;w;n;s;e;e;n;w;n;e;e;s;e;n;s;w;n;w;w;s;e;s;s;w;s;e;s;s;e;n;n;n;n;e;e;n;n;n;w;w;w;w;w;s;w;s;s;s;e;s;w;w;s;e;e;e;s;w;w;w;s;s;n;n;e;s;e;e;s;s;w;w;w;w;n;n;w;n;e;n;n;s;s;w;s;e;s;w;s;s;s;e;e;s;s;s;s;w;s;w;n;n;n;e;n;w;e;s;w;s;e;w;s;s;e;e;e;n;n;n;n;s;s;s;s;w;w;n;e;n;n;n;n;e;n;w;w;e;e;s;w;w;w;n;n;n;e;s;e;e;e;e;n;e;e;e;e;e;n;w;n;w;s;w;w;e;e;n;n;s;e;n;e;n;w;w;n;e;e;n;n;e;w;s;s;w;w;s;e;e;e;n;n;e;e;e;e;n;w;n;w;n;e;w;w;w;w;s;e;e;s;e;w;n;w;w;n;e;e;e;s;e;s;e;n;n;e;s;e;n;e;e;s;e;n;e;s;e;s;s;s;s;s;w;s;e;s;e;n;n;e;n;e;s;e;e;e;e;s;w;w;s;e;e;s;e;s;s;w;s;s;w;s;e;e;s;s;s;e;e;n;w;n;e;e;e;n;e;s;s;w;w;s;n;e;s;e;e;n;n;e;w;s;s;w;w;n;e;n;n;e;e;e;e;e;s;s;s;e;e;e;n;n;n;n;w;n;w;n;n;e;s;e;n;e;e;e;e;n;w;w;w;n;w;s;n;e;s;e;e;e;s;w;w;w;w;s;w;n;w;s;s;e;e;e;n;e;e;s;w;s;w;s;s;s;s;e;e;e;e;e;n;n;e;s;s;n;e;s;e;n;s;w;n;w;n;w;n;s;e;s;e;s;e;n;e;s;e;e;e;w;w;w;n;e;n;e;s;e;e;s;e;e;e;e;n;w;n;e;e;s;s;n;e;s;e;n;n;n;n;w;s;s;s;w;n;w;w;n;e;e;n;s;w;n;n;e;n;n;e;e;s;w;s;e;w;n;e;n;n;n;n;s;s;s;w;n;n;n;w;w;s;w;s;e;e;n;s;w;s;s;n;n;w;n;w;s;w;s;e;e;w;s;e;s;w;e;s;n;w;w;s;e;s;s;s;w;n;w;w;n;e;n;w;e;s;w;s;e;e;s;e;n;n;n;w;s;n;e;s;s;s;w;n;w;w;n;e;n;w;w;s;w;w;s;w;w;n;w;n;e;e;e;n;e;s;n;w;s;w;w;w;s;e;s;e;e;n;w;e;s;w;w;n;w;n;n;e;e;n;w;e;s;w;w;w;s;w;s;s;s;w;n;n;s;s;e;n;n;n;e;n;e;s;e;e;e;n;e;e;n;w;w;e;n;e;e;w;w;w;e;s;e;s;w;w;s;w;w;w;n;w;n;e;n;w;n;n;e;s;e;s;e;n;e;e;e;e;n;w;w;e;n;e;e;e;s;w;s;s;s;s;w;n;s;e;n;n;n;n;e;n;e;n;n;w;s;w;w;n;e;n;w;n;w;s;s;w;n;n;n;e;e;w;w;s;s;w;n;n;w;w;s;w;n;w;w;s;w;n;n;e;e;e;n;e;s;e;w;n;e;e;s;e;e;e;e;s;s;n;e;n;n;w;w;w;e;e;e;s;s;w;n;w;w;w;n;s;w;n;w;w;w;s;w;w;w;n;e;e;w;w;w;s;w;n;w;w;s;e;s;n;w;n;e;e;s;e;n;e;s;s;s;e;n;e;e;s;e;n;e;e;s;s;s;s;e;s;w;s;w;n;n;n;n;w;s;w;s;e;s;w;w;n;w;n;e;n;w;w;w;n;n;w;s;w;w;n;w;s;s;w;e;n;n;e;s;e;e;n;e;s;s;e;e;e;s;w;s;e;s;e;e;n;w;n;e;n;e;s;s;s;s;e;n;e;n;w;n;n;n;n;w;w;s;w;w;e;e;e;w;n;e;e;s;s;s;s;e;e;w;s;w;s;w;n;n;n;n;w;s;w;s;e;w;n;e;n;w;e;e;s;s;s;s;e;n;e;n;w;n;n;e;s;e;n;n;e;s;e;s;w;s;e;e;n;n;n;e;n;e;s;e;n;s;e;n;n;e;n;w;w;s;w;w;n;e;w;s;e;e;n;e;e;s;w;s;s;e;n;e;n;n;s;s;s;s;w;w;w;s;s;w;s;n;e;e;e;e;n;w;w;e;e;s;w;w;w;n;n;e;e;e;n;n;w;s;w;w;w;n;w;s;w;s;s;e;e;n;w;e;s;w;s;s;w;w;w;w;s;e;s;w;w;w;w;s;w;n;w;n;e;n;w;w;n;w;n;e;n;w;w;w;w;s;e;s;e;s;w;s;w;n;w;w;n;w;w;w;s;s;e;e;s;w;w;w;w;n;e;n;w;n;w;s;s;s;w;w;n;n;e;n;w;w;n;w;s;w;n;w;w;n;e;e;e;e;e;n;n;e;s;e;s;w;s;e;e;e;s;n;w;n;e;e;s;e;e;e;n;e;s;s;e;w;n;n;w;s;w;w;w;n;n;e;n;w;n;e;e;n;w;e;s;w;w;w;s;s;w;s;s;w;w;n;e;n;w;n;w;s;s;w;w;w;w;w;n;n;w;n;n;w;w;w;s;e;e;s;s;w;s;w;n;w;s;s;s;e;e;e;e;s;w;w;s;e;e;s;w;w;s;s;e;s;w;s;w;s;w;n",
+    "mobs": [
+      {
+        "pattern": "Slug",
+        "target": "slug"
+      },
+      {
+        "pattern": "Muck Monster",
+        "target": "monster"
+      },
+      {
+        "pattern": "Venomous sludge",
+        "target": "sludge"
+      },
+      {
+        "pattern": "Thorn beast",
+        "target": "beast"
+      },
+      {
+        "pattern": "Grimy Beast",
+        "target": "beast"
+      },
+      {
+        "pattern": "Mudman",
+        "target": "mudman"
+      },
+      {
+        "pattern": "Living Fungus",
+        "target": "fungus"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
     "name": "Chessboard",
     "category": "Chaos",
-    "difficulty": "Low",
-    "path": "w;w;n;n;n;n;e;e;e;e;s;s;s;s;e;e;n;n;n;n;w;w;w;w;s;s;s;s;w;w;n;n;n;n;e;e;e;e;s;s;s;s;e;e;n;n;n;n;w;w",
+    "path": "w;w;w;n;n;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;n;n;n;e;e;e",
     "mobs": [
-      {"pattern": "Angry War Elephant", "target": "elephant"},
-      {"pattern": "Red Foot Soldier", "target": "soldier"},
-      {"pattern": "White Horseman", "target": "horseman"},
-      {"pattern": "Black Knight", "target": "knight"},
-      {"pattern": "Red Bishop", "target": "bishop"},
-      {"pattern": "White Rook", "target": "rook"},
-      {"pattern": "Black Pawn", "target": "pawn"}
+      {
+        "pattern": "Angry War Elephant",
+        "target": "elephant"
+      },
+      {
+        "pattern": "Angry Horse",
+        "target": "angry horse"
+      },
+      {
+        "pattern": "A Refugee",
+        "target": "refugee"
+      },
+      {
+        "pattern": "A War Correspondent",
+        "target": "correspondent"
+      },
+      {
+        "pattern": "Red Cross Medic",
+        "target": "medic"
+      },
+      {
+        "pattern": "Red Charioteer",
+        "target": "human"
+      },
+      {
+        "pattern": "Red Counsellor",
+        "target": "human"
+      },
+      {
+        "pattern": "Red Foot Soldier",
+        "target": "human"
+      },
+      {
+        "pattern": "Red Horseman",
+        "target": "human"
+      },
+      {
+        "pattern": "Red King",
+        "target": "human"
+      },
+      {
+        "pattern": "Red Priest",
+        "target": "human"
+      },
+      {
+        "pattern": "White Charioteer",
+        "target": "human"
+      },
+      {
+        "pattern": "White Counsellor",
+        "target": "human"
+      },
+      {
+        "pattern": "White Foot Soldier",
+        "target": "human"
+      },
+      {
+        "pattern": "White Horseman",
+        "target": "human"
+      },
+      {
+        "pattern": "White King",
+        "target": "human"
+      },
+      {
+        "pattern": "White Priest",
+        "target": "human"
+      }
     ],
+    "startRoom": "",
     "loop": true,
     "playerCheck": true,
     "defaultDelay": 0.5
   },
   {
-    "name": "Treehugger Forest",
+    "name": "Chicken Plant",
     "category": "Chaos",
-    "difficulty": "Low",
-    "path": "n;n;n;e;e;n;n;w;w;n;n;e;e;s;s;s;s;e;e;n;n;w;w;s;s;s;s;w;w",
+    "path": "s;s;s;s;w;w;door;n;n;n;n;n;n;n;n;n;n;w;s;s;s;s;s;s;s;s;s;w;n;n;n;n;n;n;n;n;n;w;s;s;s;s;s;s;s;s;s;w;n;n;n;n;n;n;n;n;n;e;e;e;e;n;e",
     "mobs": [
-      {"pattern": "large treant", "target": "treant"},
-      {"pattern": "ancient oak", "target": "oak"},
-      {"pattern": "woodland sprite", "target": "sprite"}
+      {
+        "pattern": "Chicken Guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Chicken Foreman",
+        "target": "foreman"
+      },
+      {
+        "pattern": "Plant worker",
+        "target": "worker"
+      },
+      {
+        "pattern": "Plant work crew",
+        "target": "crew"
+      },
+      {
+        "pattern": "Workcrew member",
+        "target": "member"
+      }
     ],
+    "startRoom": "",
     "loop": true,
     "playerCheck": true,
     "defaultDelay": 0.5
   },
   {
-    "name": "Orc Mines",
+    "name": "Derthalas",
     "category": "Chaos",
-    "difficulty": "Medium",
-    "path": "d;n;n;e;e;s;s;e;e;n;n;w;w;n;n;e;e;s;s;w;w;s;s;w;w;n;n;w;w;s;s;u",
+    "path": "s;sw;s;s;s;s;sw;w;e;s;sw;s;ne;ne;s;n;sw;se;nw;s;sw;e;sw;s;e;n;s;s;ne;s;s;e;w;n;e;n;w;s;nw;w;sw;w;ne;w;w;s;s;e;w;sw;e;w;n;s;w;n;ne;n;n;n;w;s;n;ne;n;n;nw;w;s;w;w;w;e;s;w;e;e;s;e;sw;w;n;se;ne;e;s;ne;sinkhole;s;n;sinkhole;sw;e;s;s;sw;s;w;n;s;w;e;s;n;se;e;n;s;e;w;ne;e;w;sw;sw;e;s;n;sw;s;e;s;w;e;e;e;sinkhole;e;w;sinkhole;w;s;s;w;n;sw;n;w;n;w;nw;w;w;e;sinkhole;nw;se;sinkhole;s;e;e;e;s;e;w;w;w;s;w;sw;ne;se;ne;s;e;n;e;s;ne;s;e;w;s;sinkhole;se;nw;sinkhole;n;w;s;sw;n;w;w;e;s;s;e;w;w;w;w;w;w;w;w;n;w;w;w;w;n;w;w;w;w;w;w;w;w;w;s;e;w;w;w;n;w;w;w;s;w;w;e;e;e;e;e;w;w;w;w;w;s;w;e;s;e;e;e;n;e;s;e;n;e;e;e;e;e;e;e;s;e;e;e;n;w;e;e;e;s;s;w;e;s;s;s;e;e;n;n;w;n;n;n;e;s;s;n;n;e;s;s;s;s;s;e;n;n;n;n;s;s;s;e;e;s;w;e;e;e;e;e;s;e;n;n;e;n;s;s;s;e;n;n;n;s;s;s;s;e;n;n;n;e;s;e;w;s;s;e;e;s;e;e;e;e;e;e;s;w;e;e;e;w;w;s;w;s;e;e;s;w;s;w;n;w;s;n;n;n;w;s;s;n;w;n;n;w;s;s;w;s;n;n;n;n;n;w;s;s;s;s;s;s;w;n;n;n;n;w;s;s;s;s;w;n;n;n;n;s;s;w;e;s;s;w;w;s;n;n;w;n;s;s;s;w;n;n;w;w;s;s;e;w;w;w;n;n;w;s;s;n;w;n;w;s;s;s;e;s;e;e;e;e;s;e;s;e;w;s;w;n;n;w;s;s;w;n;n;n;w;s;s;s;w;n;w;n;s;s;w;s;n;n;n;n;n;n;w;s;s;s;s;s;s;w;n;n;n;n;n;n;n;n;n;n;n;e;s;e;e;w;w;w;n;n;w;s;s;s;s;s;s;s;s;w;s;s;w;s;s;e;s;w;w;s;w;w;s;n;n;w;w;n;w;w;w;n;e;w;w;n;w;w;n;e;e;e;e;n;w;w;w;e;e;e;e;e;n;n;n;w;w;w;w;w;n;n;n;n;n;n;n;n;n;n;e;n;n;n;e;e;e;e;e;e;e;e;n;e;e;e;e;s;e;e;e;e;e;e;e;e;e;e;ne;n;n;e;e;e;e;se;e;e;e;e;e;n;e;n;e;n;e;e;e;e;s;w;w;w;w;e;s;e;e;w;s;s;w;w;s;s;s;s;s;e;s;n;n;n;n;n;e;s;s;s;s;s;e;n;n;n;n;n;e;s;s;s;s;n;n;n;n;e;n;e;n;w;n;e;w;n;w;w;w;w;w;w;s;s;w;w;w;w;w;w;nw;w;n;n;n;n;w;n;ne;nw;e;n;s;ne;n;n;nw;n;e;n;n;n;n;n;n;n;w;ne;e;se;s;s;s;n;sw;w;s;e;e;s;e;ne;n;ne;n;n;n;n;ne;n",
     "mobs": [
-      {"pattern": "orc miner", "target": "orc"},
-      {"pattern": "orc guard", "target": "guard"},
-      {"pattern": "orc captain", "target": "captain"},
-      {"pattern": "goblin", "target": "goblin"}
+      {
+        "pattern": "Elven skeleton",
+        "target": "undead"
+      },
+      {
+        "pattern": "A deer",
+        "target": "undead"
+      },
+      {
+        "pattern": "Skeletal elf",
+        "target": "undead"
+      },
+      {
+        "pattern": "Elven zombie",
+        "target": "undead"
+      },
+      {
+        "pattern": "A ghoul (elvish)",
+        "target": "undead"
+      },
+      {
+        "pattern": "Undead elf",
+        "target": "undead"
+      },
+      {
+        "pattern": "An elven ghoul",
+        "target": "undead"
+      },
+      {
+        "pattern": "A bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "A skeletal bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "A zombie deer",
+        "target": "deer"
+      },
+      {
+        "pattern": "An elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "Dark treant",
+        "target": "treant"
+      },
+      {
+        "pattern": "Elven hunter",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elven Hunter-killer",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elven Huntress-killer",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elvish ghoul",
+        "target": "elf"
+      },
+      {
+        "pattern": "Mountain lion",
+        "target": "lion"
+      },
+      {
+        "pattern": "Undead mountain lion",
+        "target": "lion"
+      },
+      {
+        "pattern": "Rotted deer buck",
+        "target": "deer"
+      },
+      {
+        "pattern": "Shadow creature",
+        "target": "creature"
+      },
+      {
+        "pattern": "Skeletal bat",
+        "target": "bat"
+      },
+      {
+        "pattern": "Skeletal elven hunter",
+        "target": "elf"
+      },
+      {
+        "pattern": "Undead bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Undead elven hunter",
+        "target": "elf"
+      },
+      {
+        "pattern": "Undead elven huntress",
+        "target": "elf"
+      },
+      {
+        "pattern": "Undead wolf",
+        "target": "wolf"
+      },
+      {
+        "pattern": "Will o' wisp",
+        "target": "wisp"
+      },
+      {
+        "pattern": "Wolf beast",
+        "target": "wolf"
+      },
+      {
+        "pattern": "Wolf zombie",
+        "target": "wolf"
+      },
+      {
+        "pattern": "Zombie elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "Vampiress",
+        "target": "elf"
+      },
+      {
+        "pattern": "Vampire",
+        "target": "elf"
+      },
+      {
+        "pattern": "Dark vampiress",
+        "target": "elf"
+      },
+      {
+        "pattern": "Dark vampire",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elven vampire",
+        "target": "elf"
+      },
+      {
+        "pattern": "Black raven",
+        "target": "raven"
+      }
     ],
+    "startRoom": "",
     "loop": true,
     "playerCheck": true,
     "defaultDelay": 0.5
   },
   {
-    "name": "Undead Crypt",
+    "name": "Derthalas (Easy)",
     "category": "Chaos",
-    "difficulty": "Medium",
-    "path": "d;d;n;e;e;n;n;w;w;n;e;e;s;s;w;s;s;w;s;u;u",
+    "path": "s;sw;s;s;s;s;sw;w;e;s;sw;s;ne;ne;s;n;sw;se;nw;s;sw;e;sw;s;e;n;s;s;ne;s;s;e;w;n;e;n;w;s;nw;w;sw;w;ne;w;w;s;s;e;w;sw;e;w;n;s;w;n;ne;n;n;n;w;s;n;ne;n;n;nw;w;s;w;w;w;e;s;w;e;e;s;e;sw;w;n;se;ne;e;s;ne;sw;e;s;s;sw;s;w;n;s;w;e;s;n;se;e;n;s;e;w;ne;e;w;sw;sw;e;s;n;sw;s;e;s;w;e;e;e;w;s;s;w;n;sw;n;w;n;w;nw;w;w;e;s;e;e;e;s;e;w;w;w;s;w;sw;ne;se;ne;s;e;n;e;s;ne;s;e;w;s;n;w;s;sw;n;w;w;e;s;s;e;w;w;w;w;w;w;w;w;n;w;w;w;w;n;w;w;w;w;w;w;w;w;w;s;e;w;w;w;n;w;w;w;s;w;w;e;e;e;e;e;w;w;w;w;w;s;w;e;s;e;e;e;n;e;s;e;n;e;e;e;e;e;e;e;s;e;e;e;n;w;e;e;e;s;s;w;e;s;s;s;e;e;n;n;w;n;n;n;e;s;s;n;n;e;s;s;s;s;s;e;n;n;n;n;s;s;s;e;e;s;w;e;e;e;e;e;s;e;n;n;e;n;s;s;s;e;n;n;n;s;s;s;s;e;n;n;n;e;s;e;w;s;s;e;e;s;e;e;e;e;e;e;s;w;e;e;e;w;w;s;w;s;e;e;s;w;s;w;n;w;s;n;n;n;w;s;s;n;w;n;n;w;s;s;w;s;n;n;n;n;n;w;s;s;s;s;s;s;w;n;n;n;n;w;s;s;s;s;w;n;n;n;n;s;s;w;e;s;s;w;w;s;n;n;w;n;s;s;s;w;n;n;w;w;s;s;e;w;w;w;n;n;w;s;s;n;w;n;w;s;s;s;e;s;e;e;e;e;s;e;s;e;w;s;w;n;n;w;s;s;w;n;n;n;w;s;s;s;w;n;w;n;s;s;w;s;n;n;n;n;n;n;w;s;s;s;s;s;s;w;n;n;n;n;n;n;n;n;n;n;n;e;s;e;e;w;w;w;n;n;w;s;s;s;s;s;s;s;s;w;s;s;w;s;s;e;s;w;w;s;w;w;s;n;n;w;w;n;w;w;w;n;e;w;w;n;w;w;n;e;e;e;e;n;w;w;w;e;e;e;e;e;n;n;n;w;w;w;w;w;n;n;n;n;n;n;n;n;n;n;e;n;n;n;e;e;e;e;e;e;e;e;n;e;e;e;e;s;e;e;e;e;e;e;e;e;e;e;ne;n;n;e;e;e;e;se;e;e;e;e;e;n;e;n;e;n;e;e;e;e;s;w;w;w;w;e;s;e;e;w;s;s;w;w;s;s;s;s;s;e;s;n;n;n;n;n;e;s;s;s;s;s;e;n;n;n;n;n;e;s;s;s;s;n;n;n;n;e;n;e;n;w;n;e;w;n;w;w;w;w;w;w;s;s;w;w;w;w;w;w;nw;w;n;n;n;n;w;n;ne;nw;e;n;s;ne;n;n;nw;n;e;n;n;n;n;n;n;n;w;ne;e;se;s;s;s;n;sw;w;s;e;e;s;e;ne;n;ne;n;n;n;n;ne;n",
     "mobs": [
-      {"pattern": "skeleton warrior", "target": "skeleton"},
-      {"pattern": "zombie", "target": "zombie"},
-      {"pattern": "ghoul", "target": "ghoul"},
-      {"pattern": "wight", "target": "wight"}
+      {
+        "pattern": "Elven skeleton",
+        "target": "undead"
+      },
+      {
+        "pattern": "A deer",
+        "target": "undead"
+      },
+      {
+        "pattern": "Skeletal elf",
+        "target": "undead"
+      },
+      {
+        "pattern": "Elven zombie",
+        "target": "undead"
+      },
+      {
+        "pattern": "A ghoul (elvish)",
+        "target": "undead"
+      },
+      {
+        "pattern": "Undead elf",
+        "target": "undead"
+      },
+      {
+        "pattern": "An elven ghoul",
+        "target": "undead"
+      },
+      {
+        "pattern": "A bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "A skeletal bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "A zombie deer",
+        "target": "deer"
+      },
+      {
+        "pattern": "An elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "Dark treant",
+        "target": "treant"
+      },
+      {
+        "pattern": "Elven hunter",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elven Hunter-killer",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elven Huntress-killer",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elvish ghoul",
+        "target": "elf"
+      },
+      {
+        "pattern": "Mountain lion",
+        "target": "lion"
+      },
+      {
+        "pattern": "Undead mountain lion",
+        "target": "lion"
+      },
+      {
+        "pattern": "Rotted deer buck",
+        "target": "deer"
+      },
+      {
+        "pattern": "Shadow creature",
+        "target": "creature"
+      },
+      {
+        "pattern": "Skeletal bat",
+        "target": "bat"
+      },
+      {
+        "pattern": "Skeletal elven hunter",
+        "target": "elf"
+      },
+      {
+        "pattern": "Undead bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Undead elven hunter",
+        "target": "elf"
+      },
+      {
+        "pattern": "Undead elven huntress",
+        "target": "elf"
+      },
+      {
+        "pattern": "Undead wolf",
+        "target": "wolf"
+      },
+      {
+        "pattern": "Will o' wisp",
+        "target": "wisp"
+      },
+      {
+        "pattern": "Wolf beast",
+        "target": "wolf"
+      },
+      {
+        "pattern": "Wolf zombie",
+        "target": "wolf"
+      },
+      {
+        "pattern": "Zombie elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "Vampiress",
+        "target": "elf"
+      },
+      {
+        "pattern": "Vampire",
+        "target": "elf"
+      },
+      {
+        "pattern": "Dark vampiress",
+        "target": "elf"
+      },
+      {
+        "pattern": "Dark vampire",
+        "target": "elf"
+      },
+      {
+        "pattern": "Elven vampire",
+        "target": "elf"
+      },
+      {
+        "pattern": "Black raven",
+        "target": "raven"
+      }
     ],
+    "startRoom": "",
     "loop": true,
     "playerCheck": true,
     "defaultDelay": 0.5
   },
   {
-    "name": "Dark Forest",
+    "name": "Dundee Swamp #1",
     "category": "Chaos",
-    "difficulty": "Low",
-    "path": "n;ne;n;nw;n;ne;e;se;s;sw;s;se;e;ne;n;nw;w;sw;s;se;s;sw;w;nw;n",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w",
     "mobs": [
-      {"pattern": "dark elf", "target": "elf"},
-      {"pattern": "wolf", "target": "wolf"},
-      {"pattern": "bear", "target": "bear"},
-      {"pattern": "spider", "target": "spider"}
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      }
     ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #12",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;s;s;w;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #13",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;w;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #14",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;n;w;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #15",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;w;w;w;w;w;w;w;w;w;w;w;n;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #16",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;se;se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;w;w;w;w;w;w;w;w;w;w;n;w;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #17",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;se;se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;e;e;e;n;n;e;e;e;e;s;w;w;w;w;s;e;e;e;e;s;w;w;w;w;s;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;n;w;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #18",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;e;n;n;nw;w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e;se;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;se;se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;e;e;e;n;n;e;e;e;e;s;w;w;w;w;s;e;e;e;e;s;w;w;w;w;s;e;e;e;e;n;n;e;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;n;w;w;w;w;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      },
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #2",
+    "category": "Chaos",
+    "path": "w;n;n;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;n;n;n;n;n;e",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #3",
+    "category": "Chaos",
+    "path": "e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #4",
+    "category": "Chaos",
+    "path": "e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #5",
+    "category": "Chaos",
+    "path": "ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #6",
+    "category": "Chaos",
+    "path": "se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      },
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #63",
+    "category": "Chaos",
+    "path": "se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;w;w;w;w;w;w;w;w;w;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;n;n;n;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;e;e;e;e;e;e;e;se",
+    "mobs": [
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Drop bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #64",
+    "category": "Chaos",
+    "path": "se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;w;w;w;w;w;w;w;w;w;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;se",
+    "mobs": [
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #65",
+    "category": "Chaos",
+    "path": "se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;se",
+    "mobs": [
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #7",
+    "category": "Chaos",
+    "path": "e;e;n;n;e;e;e;e;s;w;w;w;w;s;e;e;e;e;s;w;w;w;w;s;e;e;e;e;n;n;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      },
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #73",
+    "category": "Chaos",
+    "path": "e;e;n;n;e;e;e;e;s;w;w;w;w;s;e;e;e;e;s;w;w;w;w;s;e;e;e;e;n;n;w;w;w;w;w;w;w;se;se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;w;w;w;w;w;w;w;w;w;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;n;n;n;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;e;e;e;e;e;e;e;e",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      },
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #8",
+    "category": "Chaos",
+    "path": "e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w",
+    "mobs": [
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #83",
+    "category": "Chaos",
+    "path": "e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;e;e;n;n;e;e;e;e;s;w;w;w;w;s;e;e;e;e;s;w;w;w;w;s;e;e;e;e;n;n;w;w;w;w;w;w;w;se;se;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;nw;nw;ne;ne;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;sw;sw;w;w;w;w;w;w;w;w;w;e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;n;n;n;ne;e;n;n;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;w;w;n;n;n;n;n;w;sw;s;s;s;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e",
+    "mobs": [
+      {
+        "pattern": "Red-bellied Watersnake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Drop Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Cane Toad",
+        "target": "toad"
+      },
+      {
+        "pattern": "Marbled Reed Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Swamp Sparrow",
+        "target": "sparrow"
+      },
+      {
+        "pattern": "Tricolored Heron",
+        "target": "heron"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Marsh Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Caecilian",
+        "target": "caecilian"
+      },
+      {
+        "pattern": "Anhinga",
+        "target": "anhinga"
+      },
+      {
+        "pattern": "Short-tailed Shrew",
+        "target": "shrew"
+      },
+      {
+        "pattern": "Marsh Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Marsh Frog",
+        "target": "frog"
+      },
+      {
+        "pattern": "Armadillo",
+        "target": "armadillo"
+      },
+      {
+        "pattern": "Platypus",
+        "target": "platypus"
+      },
+      {
+        "pattern": "Black-bellied Snake",
+        "target": "snake"
+      },
+      {
+        "pattern": "Osprey",
+        "target": "osprey"
+      },
+      {
+        "pattern": "Mature Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Great Egret",
+        "target": "egret"
+      },
+      {
+        "pattern": "Salamander",
+        "target": "salamander"
+      },
+      {
+        "pattern": "Crane",
+        "target": "crane"
+      },
+      {
+        "pattern": "Crikey",
+        "target": "crikey"
+      },
+      {
+        "pattern": "Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Orinoco Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Star-nosed Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "Three-toed Amphiuma",
+        "target": "amphiuma"
+      },
+      {
+        "pattern": "Golden-Crowned Snake",
+        "target": "golden-crowned snake"
+      },
+      {
+        "pattern": "Purple Swamphen",
+        "target": "swamphen"
+      },
+      {
+        "pattern": "Alligator",
+        "target": "alligator"
+      },
+      {
+        "pattern": "Butcherbird",
+        "target": "bird"
+      },
+      {
+        "pattern": "Spring Peeper",
+        "target": "peeper"
+      },
+      {
+        "pattern": "Yellow-Faced Whip Snake",
+        "target": "whip snake"
+      },
+      {
+        "pattern": "Bobcat",
+        "target": "bobcat"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      },
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Dundee Swamp #87",
+    "category": "Chaos",
+    "path": "e;e;n;n;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;e;n;n;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;e;e;n;n;e;e;e;e;s;w;w;w;w;s;e;e;e;e;s;w;w;w;w;s;e;e;e;e;n;n;w;w;w;w;w;w;e;e;e;e;e;e;e",
+    "mobs": [
+      {
+        "pattern": "Banded Bullfrog",
+        "target": "bullfrog"
+      },
+      {
+        "pattern": "Barred Owl",
+        "target": "owl"
+      },
+      {
+        "pattern": "Beaver",
+        "target": "beaver"
+      },
+      {
+        "pattern": "Brown Bear",
+        "target": "bear"
+      },
+      {
+        "pattern": "Dark-Spotted Anaconda",
+        "target": "snake"
+      },
+      {
+        "pattern": "Exotic Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Greater Siren",
+        "target": "siren"
+      },
+      {
+        "pattern": "Hippo",
+        "target": "hippo"
+      },
+      {
+        "pattern": "Swamp Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Mutated Crocodile",
+        "target": "crocodile"
+      },
+      {
+        "pattern": "Newt",
+        "target": "newt"
+      },
+      {
+        "pattern": "Red Tailed Hawk",
+        "target": "hawk"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Hippies",
+    "category": "Chaos",
+    "path": "w;door;climb tree;d;e;e;e;s;n;n;s;w;n;e;gate;barn;w;n;w;e;n;enter;w;d;u;e;n;w;e;e;w;s;e;u;w;e;e;w;s;w;e;e;w;s;n;u;n;s;d;n;d;w;n;w;door;w;ne;e;s;s;e;n;n;e;s;s;se;nw;w;w;n;n;w;sw;e;door;e;s;s;s;s;s",
+    "mobs": [
+      {
+        "pattern": "A Mole",
+        "target": "mole"
+      },
+      {
+        "pattern": "A Rabbit",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "A Mouse",
+        "target": "mouse"
+      },
+      {
+        "pattern": "A Raccoon",
+        "target": "raccoon"
+      },
+      {
+        "pattern": "A Horse",
+        "target": "horse"
+      },
+      {
+        "pattern": "A little sheepie",
+        "target": "sheepie"
+      },
+      {
+        "pattern": "A huge cow",
+        "target": "cow"
+      },
+      {
+        "pattern": "A chicken",
+        "target": "chicken"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Hotel Transylvania",
+    "category": "Chaos",
+    "path": "n;n;n;n;n;n;n;n;e;e;e;e;e;e;e;e;w;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;w;s;w;w;w;w;w;s;e;e;e;e;w;s;w;w;w;s;e;e;w;s;w;s",
+    "mobs": [
+      {
+        "pattern": "A zombie bell hop waiting to carry your things",
+        "target": "zombie"
+      },
+      {
+        "pattern": "A zombie waiter offering drinks",
+        "target": "zombie"
+      },
+      {
+        "pattern": "A zombie cook looking for something to chop",
+        "target": "zombie"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Hotel Transylvania #2",
+    "category": "Chaos",
+    "path": "e;e;e;e;e;e;e;w;se;w;w;se;e;e;se;sw;e;s;ne;e;s;w;s;w;w;se;e;e;e;e;w;w;w;w;w;w;w;w;sw;e;e;e;e;w;sw;w;w;w;w;w;nw;e;e;e;ne;n;n;e;ne;w;n;n;nw;s;w;n;w;s;s;se;n;e;s;sw;s;s;w;w;ne;w;ne;w;ne;w;n;n;n;w;s;s;s;n;n;n;n",
+    "mobs": [
+      {
+        "pattern": "An ugly vampire",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A buff vampire",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A chubby vampire",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A zombie bell hop waiting to carry your things",
+        "target": "zombie"
+      },
+      {
+        "pattern": "A zombie waiter offering drinks",
+        "target": "zombie"
+      },
+      {
+        "pattern": "A zombie cook looking for something to chop",
+        "target": "zombie"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Hotel Transylvania #3",
+    "category": "Chaos",
+    "path": "n;n;n;n;n;n;n;n;e;e;e;e;e;e;e;e;w;s;w;w;w;w;w;w;w;s;e;e;e;e;e;e;w;s;w;w;w;w;w;s;e;e;e;e;w;s;w;w;w;s;e;e;w;s;w;d;e;e;e;e;e;e;e;w;se;w;w;se;e;e;se;sw;e;s;ne;e;s;w;s;w;w;se;e;e;e;e;w;w;w;w;w;w;w;w;sw;e;e;e;e;w;sw;w;w;w;w;w;nw;e;e;e;ne;n;n;e;ne;w;n;n;nw;s;w;n;w;s;s;se;n;e;s;sw;s;s;w;w;ne;w;ne;w;ne;w;n;n;n;w;s;s;s;n;n;n;n;u;s",
+    "mobs": [
+      {
+        "pattern": "A zombie bell hop waiting to carry your things",
+        "target": "zombie"
+      },
+      {
+        "pattern": "A zombie waiter offering drinks",
+        "target": "zombie"
+      },
+      {
+        "pattern": "A zombie cook looking for something to chop",
+        "target": "zombie"
+      },
+      {
+        "pattern": "An ugly vampire",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A buff vampire",
+        "target": "vampire"
+      },
+      {
+        "pattern": "A chubby vampire",
+        "target": "vampire"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Icyblue",
+    "category": "Chaos",
+    "path": "s;s;s;s;s;s;s;w;w;n;e;n;w;n;w;w;e;s;w;s;e;s;w;e;n;w;n;e;n;e;e;n;w;n;e;n;w;n;s;e;n;n;w;w;s;w;n;s;e;s;w;s;e;s;w;e;n;w;n;e;n;n;e;e;s;s;s;w;s;e;s;w;s;e;s;w;s;e;e;e;e;n;w;e;n;e;e;s;w;s;e;w;n;e;n;w;w;n;w;n;e;n;e;s;e;s;w;e;n;w;n;e;n;w;n;e;n;w;w;w;s;e;s;w;s;n;e;n;w;n;e;e;e;s;w;s;e;s;w;w;s;w;s;e;s;s;s;w;w;n;n;n;n;n;n;n",
+    "mobs": [
+      {
+        "pattern": "Ice Man",
+        "target": "ice"
+      },
+      {
+        "pattern": "Ice Woman",
+        "target": "ice"
+      },
+      {
+        "pattern": "Ice Youth",
+        "target": "ice"
+      },
+      {
+        "pattern": "Ice Child",
+        "target": "ice"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Icyblue (Encampment)",
+    "category": "Chaos",
+    "path": "w;w;s;s;e;e;e;e;n;w;scale pile;d;w;w;scale pile;d;w;n;e;e;e;e;w;w;",
+    "mobs": [
+      {
+        "pattern": "A powerful fighter",
+        "target": "fighter"
+      },
+      {
+        "pattern": "A warrior in training",
+        "target": "warrior"
+      },
+      {
+        "pattern": "Waight",
+        "target": "waight"
+      },
+      {
+        "pattern": "A supreme combatant",
+        "target": "combatant"
+      },
+      {
+        "pattern": "Champion of the eastern hill",
+        "target": "champion"
+      },
+      {
+        "pattern": "Champion of the western hill",
+        "target": "champion"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Mahjong",
+    "category": "Chaos",
+    "path": "n;portal;w;w;w;w;n;e;e;e;e;e;e;e;e;e;n;e;w;w;w;w;w;w;w;w;w;w;w;n;e;e;e;nw;w;w;nw;e;e;nw;n;s;se;se;se;e;n;se;ne;nw;s;n;n;w;ne;se;w;s;se;s;e;e;e;e;e;n;w;w;ne;e;e;nw;n;s;s;s;s;s;sw;s;w;w;w;w;w;portal;s",
+    "mobs": [
+      {
+        "pattern": "Winged Horse",
+        "target": "winged horse"
+      },
+      {
+        "pattern": "Blue Dolphin",
+        "target": "dolphin"
+      },
+      {
+        "pattern": "Green Chinese Dragon",
+        "target": "dragon"
+      },
+      {
+        "pattern": "White Tiger",
+        "target": "tiger"
+      },
+      {
+        "pattern": "Black Tiger",
+        "target": "tiger"
+      },
+      {
+        "pattern": "Purple Butterfly",
+        "target": "butterfly"
+      },
+      {
+        "pattern": "Red Butterfly",
+        "target": "butterfly"
+      },
+      {
+        "pattern": "Sea Serpent",
+        "target": "serpent"
+      },
+      {
+        "pattern": "Golden Phoenix",
+        "target": "golden phoenix"
+      },
+      {
+        "pattern": "Leaping Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Lumbering Ox",
+        "target": "ox"
+      },
+      {
+        "pattern": "Charging Ram",
+        "target": "ram"
+      },
+      {
+        "pattern": "Jade Phoenix",
+        "target": "jade phoenix"
+      },
+      {
+        "pattern": "Red Rabbit",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Red Chinese Dragon",
+        "target": "dragon"
+      },
+      {
+        "pattern": "Black Chinese Dragon",
+        "target": "dragon"
+      },
+      {
+        "pattern": "Gold Chinese Dragon",
+        "target": "dragon"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Mahjong (Easy)",
+    "category": "Chaos",
+    "path": "n;portal;w;w;w;w;n;e;e;e;e;e;e;e;e;e;n;e;w;w;w;w;w;w;w;w;w;w;w;n;e;e;e;nw;w;w;nw;e;e;nw;n;s;se;se;se;e;n;se;ne;nw;s;n;n;w;ne;se;w;s;se;s;e;e;e;e;e;n;w;w;ne;e;e;nw;n;s;s;s;s;s;sw;s;w;w;w;w;w;portal;s",
+    "mobs": [
+      {
+        "pattern": "Winged Horse",
+        "target": "winged horse"
+      },
+      {
+        "pattern": "White Tiger",
+        "target": "tiger"
+      },
+      {
+        "pattern": "Black Tiger",
+        "target": "tiger"
+      },
+      {
+        "pattern": "Purple Butterfly",
+        "target": "butterfly"
+      },
+      {
+        "pattern": "Red Butterfly",
+        "target": "butterfly"
+      },
+      {
+        "pattern": "Leaping Rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "Lumbering Ox",
+        "target": "ox"
+      },
+      {
+        "pattern": "Charging Ram",
+        "target": "ram"
+      },
+      {
+        "pattern": "Red Rabbit",
+        "target": "rabbit"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Mahjong (Pandemonium)",
+    "category": "Chaos",
+    "path": "n;w;n;e;w;n;w;n;n;w;nw;n;ne;e;se;s;nw;n;w;ne;d",
+    "mobs": [
+      {
+        "pattern": "A huge demon",
+        "target": "demon"
+      },
+      {
+        "pattern": "Daemon guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Dagon",
+        "target": "dagon"
+      },
+      {
+        "pattern": "Kardaak",
+        "target": "kardaak"
+      },
+      {
+        "pattern": "A Hellhound",
+        "target": "hellhound"
+      },
+      {
+        "pattern": "Orus",
+        "target": "orus"
+      },
+      {
+        "pattern": "Black Guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Lucifer",
+        "target": "lucifer"
+      },
+      {
+        "pattern": "Peor",
+        "target": "peor"
+      },
+      {
+        "pattern": "Baal",
+        "target": "baal"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Night of Colour (All Mobs)",
+    "category": "Chaos",
+    "path": "n;n;w;n;n;n;s;s;s;s;s;s;sw;s;n;n;n;n;n;n;n;n;n;n;ne;climb;u;u;d;d;d;sw;s;s;s;s;s;w;n;s;s;s;s;s;sw;s;s;n;n;n;n;n;n;n;n;n;nw;s;s\n;s;s;s;s;s;s;s;n;nw;n;n;n;n;n;n;sw;s;s;s;s;nw;n;n;sw;e;e;e;e;e;e;e;e;e;s;n;n;e;s;s;s;se;n;n;n;n;n;w;n;e;n;ne;s;s;s;s;s;s;s;s;s;se;n;n;n;n;n;n;n;n;n;n;n;s;e;n;n;s;s;s;s;s;s;s;s;s;s;s;ne;n;n;n;n;n;\nn;n;n;n;se;s;s;s;s;s;s;s;ne;n;n;n;n;n;se;s;n;se;s;s;s;s;s;se;sw;ne;nw;ne;n;n;n;se;sw;s;w;n;w;w;w;w;w;w;w;w;w;n;w;s",
+    "mobs": [
+      {
+        "pattern": "Furtive",
+        "target": "furtive"
+      },
+      {
+        "pattern": "Bulwark",
+        "target": "bulwark"
+      },
+      {
+        "pattern": "Rapid",
+        "target": "rapid"
+      },
+      {
+        "pattern": "Gloom",
+        "target": "gloom"
+      },
+      {
+        "pattern": "Hostile",
+        "target": "hostile"
+      },
+      {
+        "pattern": "Dismal",
+        "target": "dismal"
+      },
+      {
+        "pattern": "Swoop",
+        "target": "swoop"
+      },
+      {
+        "pattern": "Paragon",
+        "target": "paragon"
+      },
+      {
+        "pattern": "Impediment",
+        "target": "impediment"
+      },
+      {
+        "pattern": "Timorous",
+        "target": "timorous"
+      },
+      {
+        "pattern": "Radiance",
+        "target": "radiance"
+      },
+      {
+        "pattern": "Dusky Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Darting Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Russet Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Yellowish Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Circling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Dancing Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Smoking Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Sparkling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Peace",
+        "target": "peace"
+      },
+      {
+        "pattern": "Resilient",
+        "target": "resilient"
+      },
+      {
+        "pattern": "Snare",
+        "target": "snare"
+      },
+      {
+        "pattern": "Mud",
+        "target": "mud"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Night of Colour (Colors)",
+    "category": "Chaos",
+    "path": "n;n;w;n;n;n;s;s;s;s;s;s;sw;s;n;n;n;n;n;n;n;n;n;n;ne;climb;u;u;d;d;d;sw;s;s;s;s;s;w;n;s;s;s;s;s;sw;s;s;n;n;n;n;n;n;n;n;n;nw;s;s\n;s;s;s;s;s;s;s;n;nw;n;n;n;n;n;n;sw;s;s;s;s;nw;n;n;sw;e;e;e;e;e;e;e;e;e;s;n;n;e;s;s;s;se;n;n;n;n;n;w;n;e;n;ne;s;s;s;s;s;s;s;s;s;se;n;n;n;n;n;n;n;n;n;n;n;s;e;n;n;s;s;s;s;s;s;s;s;s;s;s;ne;n;n;n;n;n;\nn;n;n;n;se;s;s;s;s;s;s;s;ne;n;n;n;n;n;se;s;n;se;s;s;s;s;s;se;sw;ne;nw;ne;n;n;n;se;sw;s;w;n;w;w;w;w;w;w;w;w;w;n;w;s",
+    "mobs": [
+      {
+        "pattern": "Furtive",
+        "target": "furtive"
+      },
+      {
+        "pattern": "Bulwark",
+        "target": "bulwark"
+      },
+      {
+        "pattern": "Rapid",
+        "target": "rapid"
+      },
+      {
+        "pattern": "Gloom",
+        "target": "gloom"
+      },
+      {
+        "pattern": "Hostile",
+        "target": "hostile"
+      },
+      {
+        "pattern": "Dismal",
+        "target": "dismal"
+      },
+      {
+        "pattern": "Swoop",
+        "target": "swoop"
+      },
+      {
+        "pattern": "Paragon",
+        "target": "paragon"
+      },
+      {
+        "pattern": "Impediment",
+        "target": "impediment"
+      },
+      {
+        "pattern": "Timorous",
+        "target": "timorous"
+      },
+      {
+        "pattern": "Radiance",
+        "target": "radiance"
+      },
+      {
+        "pattern": "Dusky Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Darting Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Russet Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Yellowish Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Circling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Dancing Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Smoking Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Sparkling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Peace",
+        "target": "peace"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Night of Colour (High Level)",
+    "category": "Chaos",
+    "path": "n;n;w;n;n;n;s;s;s;s;s;s;sw;s;n;n;n;n;n;n;n;n;n;n;ne;climb;u;u;d;d;d;sw;s;s;s;s;s;w;n;s;s;s;s;s;sw;s;s;n;n;n;n;n;n;n;n;n;nw;s;s\n;s;s;s;s;s;s;s;n;nw;n;n;n;n;n;n;sw;s;s;s;s;nw;n;n;sw;e;e;e;e;e;e;e;e;e;s;n;n;e;s;s;s;se;n;n;n;n;n;w;n;e;n;ne;s;s;s;s;s;s;s;s;s;se;n;n;n;n;n;n;n;n;n;n;n;s;e;n;n;s;s;s;s;s;s;s;s;s;s;s;ne;n;n;n;n;n;\nn;n;n;n;se;s;s;s;s;s;s;s;ne;n;n;n;n;n;se;s;n;se;s;s;s;s;s;se;sw;ne;nw;ne;n;n;n;se;sw;s;w;n;w;w;w;w;w;w;w;w;w;n;w;s",
+    "mobs": [
+      {
+        "pattern": "Furtive",
+        "target": "furtive"
+      },
+      {
+        "pattern": "Bulwark",
+        "target": "bulwark"
+      },
+      {
+        "pattern": "Impediment",
+        "target": "impediment"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Night of Colour (Most Mobs)",
+    "category": "Chaos",
+    "path": "n;n;w;n;n;n;s;s;s;s;s;s;sw;s;n;n;n;n;n;n;n;n;n;n;ne;climb;u;u;d;d;d;sw;s;s;s;s;s;w;n;s;s;s;s;s;sw;s;s;n;n;n;n;n;n;n;n;n;nw;s;s\n;s;s;s;s;s;s;s;n;nw;n;n;n;n;n;n;sw;s;s;s;s;nw;n;n;sw;e;e;e;e;e;e;e;e;e;s;n;n;e;s;s;s;se;n;n;n;n;n;w;n;e;n;ne;s;s;s;s;s;s;s;s;s;se;n;n;n;n;n;n;n;n;n;n;n;s;e;n;n;s;s;s;s;s;s;s;s;s;s;s;ne;n;n;n;n;n;\nn;n;n;n;se;s;s;s;s;s;s;s;ne;n;n;n;n;n;se;s;n;se;s;s;s;s;s;se;sw;ne;nw;ne;n;n;n;se;sw;s;w;n;w;w;w;w;w;w;w;w;w;n;w;s",
+    "mobs": [
+      {
+        "pattern": "Furtive",
+        "target": "furtive"
+      },
+      {
+        "pattern": "Bulwark",
+        "target": "bulwark"
+      },
+      {
+        "pattern": "Rapid",
+        "target": "rapid"
+      },
+      {
+        "pattern": "Gloom",
+        "target": "gloom"
+      },
+      {
+        "pattern": "Hostile",
+        "target": "hostile"
+      },
+      {
+        "pattern": "Dismal",
+        "target": "dismal"
+      },
+      {
+        "pattern": "Swoop",
+        "target": "swoop"
+      },
+      {
+        "pattern": "Paragon",
+        "target": "paragon"
+      },
+      {
+        "pattern": "Impediment",
+        "target": "impediment"
+      },
+      {
+        "pattern": "Timorous",
+        "target": "timorous"
+      },
+      {
+        "pattern": "Radiance",
+        "target": "radiance"
+      },
+      {
+        "pattern": "Dusky Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Darting Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Russet Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Yellowish Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Circling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Dancing Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Smoking Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Sparkling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Peace",
+        "target": "peace"
+      },
+      {
+        "pattern": "Resilient",
+        "target": "resilient"
+      },
+      {
+        "pattern": "Snare",
+        "target": "snare"
+      },
+      {
+        "pattern": "Mud",
+        "target": "mud"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Night of Colour (Safe)",
+    "category": "Chaos",
+    "path": "n;n;w;n;n;n;s;s;s;s;s;s;sw;s;n;n;n;n;n;n;n;n;n;n;ne;climb;u;u;d;d;d;sw;s;s;s;s;s;w;n;s;s;s;s;s;sw;s;s;n;n;n;n;n;n;n;n;n;nw;s;s\n;s;s;s;s;s;s;s;n;nw;n;n;n;n;n;n;sw;s;s;s;s;nw;n;n;sw;e;e;e;e;e;e;e;e;e;s;n;n;e;s;s;s;se;n;n;n;n;n;w;n;e;n;ne;s;s;s;s;s;s;s;s;s;se;n;n;n;n;n;n;n;n;n;n;n;s;e;n;n;s;s;s;s;s;s;s;s;s;s;s;ne;n;n;n;n;n;\nn;n;n;n;se;s;s;s;s;s;s;s;ne;n;n;n;n;n;se;s;n;se;s;s;s;s;s;se;sw;ne;nw;ne;n;n;n;se;sw;s;w;n;w;w;w;w;w;w;w;w;w;n;w;s",
+    "mobs": [
+      {
+        "pattern": "Furtive",
+        "target": "furtive"
+      },
+      {
+        "pattern": "Bulwark",
+        "target": "bulwark"
+      },
+      {
+        "pattern": "Rapid",
+        "target": "rapid"
+      },
+      {
+        "pattern": "Gloom",
+        "target": "gloom"
+      },
+      {
+        "pattern": "Hostile",
+        "target": "hostile"
+      },
+      {
+        "pattern": "Dismal",
+        "target": "dismal"
+      },
+      {
+        "pattern": "Swoop",
+        "target": "swoop"
+      },
+      {
+        "pattern": "Paragon",
+        "target": "paragon"
+      },
+      {
+        "pattern": "Impediment",
+        "target": "impediment"
+      },
+      {
+        "pattern": "Timorous",
+        "target": "timorous"
+      },
+      {
+        "pattern": "Radiance",
+        "target": "radiance"
+      },
+      {
+        "pattern": "Dusky Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Darting Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Russet Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Yellowish Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Circling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Dancing Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Smoking Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Sparkling Glimmer",
+        "target": "glimmer"
+      },
+      {
+        "pattern": "Mud",
+        "target": "mud"
+      },
+      {
+        "pattern": "Snare",
+        "target": "snare"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Portal of Life (Easy)",
+    "category": "Chaos",
+    "path": "n;n;nw;nw;nw;ne;n;n;ne;n;s;s;s;s;s;ne;n;n;n;n;ne;s;s;s;s;s;ne;n;n;n;s;s;se;ne;ne;n;nw;nw;n;nw;ne;s;s;se;n;n;ne;s;s;s;s;ne;n;n;n;se;s;s;se;se;se;nw;nw;n;n;n;n;n;n;n;n;ne;ne;sw;sw;nw;s;s;s;sw;n;n;n;n;sw;s;s;s;sw;n;n;n;sw;s;s;s;nw;n;ne;n;ne;ne;n;nw;nw;nw;s;s;s;sw;s;s;nw;n;n;n;n;n;n;n;n;s;s;sw;s;s;s;s;s;s;sw;n;ne;n;nw;n;n;n;sw;sw;sw;s;se;se;s;s;s;nw;n;n;n;nw;s;s;s;s;nw;n;n;n;n;sw;s;s;s;sw;n;n;n;nw;nw;se;se;s;s;s;s;s;se;ne;ne;se;ne;se;sw;nw;s;s;sw;s;n;n;n;n;sw;s;s;s;nw;n;n;sw;s;s;sw;sw;ne;ne;ne;se;se;se;se;se;se;se;s;s",
+    "mobs": [
+      {
+        "pattern": "Wild Stag",
+        "target": "stag"
+      },
+      {
+        "pattern": "Faerie Lizard",
+        "target": "lizard"
+      },
+      {
+        "pattern": "Baby Dragon",
+        "target": "dragon"
+      },
+      {
+        "pattern": "Rabid Wolf",
+        "target": "rabid wolf"
+      },
+      {
+        "pattern": "Ragged Peasant",
+        "target": "peasant"
+      },
+      {
+        "pattern": "Sylvan Elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "Wyvern",
+        "target": "wyvern"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Portal of Life (Pol)",
+    "category": "Chaos",
+    "path": "n;n;nw;nw;nw;ne;n;n;ne;n;s;s;s;s;s;ne;n;n;n;n;ne;s;s;s;s;s;ne;n;n;n;s;s;se;ne;ne;n;nw;nw;n;nw;ne;s;s;se;n;n;ne;s;s;s;s;ne;n;n;n;se;s;s;se;se;se;se;nw;nw;nw;n;n;n;n;n;n;n;n;ne;ne;ne;sw;sw;sw;nw;s;s;s;sw;n;n;n;n;sw;s;s;s;sw;n;n;n;sw;s;s;s;nw;n;ne;n;ne;ne;n;nw;nw;nw;s;s;s;sw;s;s;nw;n;n;n;n;n;n;n;n;n;s;s;s;sw;s;s;s;s;s;s;sw;n;ne;n;nw;n;n;n;sw;sw;sw;s;se;se;s;s;s;nw;n;n;n;nw;s;s;s;s;nw;n;n;n;n;sw;s;s;s;sw;n;n;n;nw;nw;nw;se;se;se;s;s;s;s;s;se;ne;ne;se;ne;se;sw;nw;s;s;sw;s;n;n;n;n;sw;s;s;s;nw;n;n;sw;s;s;sw;sw;sw;ne;ne;ne;ne;se;se;se;se;se;se;se;s;s",
+    "mobs": [
+      {
+        "pattern": "Wild Stag",
+        "target": "stag"
+      },
+      {
+        "pattern": "Faerie Lizard",
+        "target": "lizard"
+      },
+      {
+        "pattern": "Baby Dragon",
+        "target": "dragon"
+      },
+      {
+        "pattern": "Rabid Wolf",
+        "target": "rabid wolf"
+      },
+      {
+        "pattern": "Ragged Peasant",
+        "target": "peasant"
+      },
+      {
+        "pattern": "Sylvan Elf",
+        "target": "elf"
+      },
+      {
+        "pattern": "Wyvern",
+        "target": "wyvern"
+      },
+      {
+        "pattern": "Shadow Guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Black Patrol Leader",
+        "target": "leader"
+      },
+      {
+        "pattern": "Black Patrol Captain",
+        "target": "captain"
+      },
+      {
+        "pattern": "Black Patrol Guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Queen's Elite Guardswoman",
+        "target": "guard"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Rimalkin Cave",
+    "category": "Chaos",
+    "path": "e;ne;se;w;s;w;s;e;ne;n;se;nw;n;nw;se;s;w;s;d;n;nw;ne;sw;se;s;u;n;w;w",
+    "mobs": [
+      {
+        "pattern": "A small Rimalkin",
+        "target": "rimalkin"
+      },
+      {
+        "pattern": "A large Rimalkin",
+        "target": "rimalkin"
+      },
+      {
+        "pattern": "A very large Rimalkin",
+        "target": "rimalkin"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Section Z",
+    "category": "Chaos",
+    "path": "nw;s;s;n;e;e;n;s;s;d;w;w;s;e;w;s;e;e;u;s;s;e;e;d;n;n;se;e;nw;e;d;w;e;e;w;n;ne;w;w;u;n;n;sw;nw;s;s;u;n;e;e;s;n;nw;u;e;e;w;s;s;u;se;nw;ne;w;w;s;s;d;s;n;n;se;se;n;n;s;d;e;e;w;s;sw;e;e;d;e;e;sw;s;d;n;n;sw;w;s;d;w;w;s;s;e;e;n;w;u;w;w;e;s;s;d;s;s;e;w;ne;ne;w;e;s;s;u;w;w;n;e;n;w;e;e;u;n;n;e;sw;e;se;nw;ne;d;w;w;s;s;e;e;d;se;s;n;w;w;s;d;s;n;n;s;e;e;s;n;n;se;e;e;se;se;proceed;se;s;nw;w;s;u;e;e;sw;s;u;n;n;se;se;n;n;u;s;s;nw;sw;n;n;u;s;s;e;w;ne;ne;w;e;s;s;u;e;e;sw;w;s;e;e;d;s;e;n;n;w;w;s;s;n;u;s;s;e;e;n;n;u;e;e;sw;s;u;w;w;s;e;e;s;w;w;d;sw;s;d;n;e;se;n;n;d;e;e;w;s;s;e;w;w;d;e;ne;w;w;n;e;d;w;ne;e;w;w;s;s;e;e;d;n;ne;w;w;d;s;s;n;w;nw;s;s;d;sw;s;u;se;s;d;e;w;w;ne;w;n;e;e;d;s;n;ne;se;w;se;u;w;w;s;s;e;e;n;w;u;n;n;se;ne;s;s;d;e;w;w;s;e;sw;e;e;e;e;proceed;n;w;e;e;sw;s;e;w;w;u;w;w;s;e;sw;e;e;u;s;se;ne;w;e;n;u;w;w;s;e;w;s;e;e;d;e;e;w;w;n;e;w;n;e;e;d;s;n;n;se;se;n;n;u;e;sw;s;e;ne;sw;u;w;w;s;e;w;s;e;e;d;n;n;s;w;nw;s;s;enter portal;w;w;n;n;u;s;se;ne;n;d;w;n;e;se;nw;ne;w;w;d;se;n;n;s;w;w;s;n;n;d;w;n;n;se;se;n;n;w;d;w;w;s;e;e;s;w;w;d;n;nw;sw;e;w;s;d;sw;s;n;n;w;enter portal;e;n;w;s;w;n;n;e;e;d;e;e;w;w;s;s;e;e;d;se;w;w;n;n;e;e;w;w;s;d;n;nw;se;ne;e;e;e;se;se;e;e;ne;e;",
+    "mobs": [
+      {
+        "pattern": "A Spiral Gun",
+        "target": "gun"
+      },
+      {
+        "pattern": "A Groma",
+        "target": "groma"
+      },
+      {
+        "pattern": "A Cloud Eye",
+        "target": "eye"
+      },
+      {
+        "pattern": "A Clone Soldier",
+        "target": "soldier"
+      },
+      {
+        "pattern": "A Leago",
+        "target": "leago"
+      },
+      {
+        "pattern": "A Leeva",
+        "target": "leeva"
+      },
+      {
+        "pattern": "A Ripper",
+        "target": "ripper"
+      },
+      {
+        "pattern": "A Massive Generator",
+        "target": "generator"
+      },
+      {
+        "pattern": "Zamuza",
+        "target": "zamuza"
+      },
+      {
+        "pattern": "Balba",
+        "target": "balba"
+      },
+      {
+        "pattern": "Brain",
+        "target": "brain"
+      },
+      {
+        "pattern": "Galga",
+        "target": "galga"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Section Z #20",
+    "category": "Chaos",
+    "path": "sw;s;d;n;e;se;n;n;u;s;s;nw;nw;d;s;s;e;e;u;e;s;s;u;w;w;se;s;w;d;sw;s;d;n;e;se;n;n;d;se;s;w;d;n;n;e;d;w;s;e;e;d;n;nw;d;s;w;w;s;d;sw;s;u;se;s;d;w;ne;nw;e;e;d;e;se;d;n;e;ne;s;s;d;w;s;s;e;e;e;e;proceed;s;w;d;s;se;ne;n;u;w;w;s;s;e;e;d;n;n;e;e;d;e;se;n;n;u;s;se;d;n;w;w;s;enter portal;w;nw;n;d;s;s;e;e;u;n;w;n;d;w;n;d;w;n;n;e;d;w;s;s;w;u;w;w;enter portal;w;n;n;e;e;d;s;s;e;e;d;s;w;n;d;n;ne;e;e;e;se;se;e;e;ne;e;",
+    "mobs": [
+      {
+        "pattern": "A Spiral Gun",
+        "target": "gun"
+      },
+      {
+        "pattern": "A Groma",
+        "target": "groma"
+      },
+      {
+        "pattern": "A Cloud Eye",
+        "target": "eye"
+      },
+      {
+        "pattern": "A Clone Soldier",
+        "target": "soldier"
+      },
+      {
+        "pattern": "A Leago",
+        "target": "leago"
+      },
+      {
+        "pattern": "A Leeva",
+        "target": "leeva"
+      },
+      {
+        "pattern": "A Ripper",
+        "target": "ripper"
+      },
+      {
+        "pattern": "A Massive Generator",
+        "target": "generator"
+      },
+      {
+        "pattern": "Zamuza",
+        "target": "zamuza"
+      },
+      {
+        "pattern": "Balba",
+        "target": "balba"
+      },
+      {
+        "pattern": "Brain",
+        "target": "brain"
+      },
+      {
+        "pattern": "Galga",
+        "target": "galga"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Section Z #40",
+    "category": "Chaos",
+    "path": "s;w;d;s;se;ne;n;u;w;s;w;s;e;e;d;n;n;e;e;d;e;se;n;n;u;s;se;d;n;w;w;s;enter portal;w;nw;n;u;s;se;ne;n;d;n;w;n;d;w;n;d;w;n;n;e;d;w;s;s;w;u;w;w;enter portal;w;n;n;e;e;d;s;s;e;e;d;s;w;n;d;n;ne;e;e;e;se;se;e;e;ne;e",
+    "mobs": [
+      {
+        "pattern": "Galga",
+        "target": "galga"
+      },
+      {
+        "pattern": "A Spiral Gun",
+        "target": "gun"
+      },
+      {
+        "pattern": "A Groma",
+        "target": "groma"
+      },
+      {
+        "pattern": "A Cloud Eye",
+        "target": "eye"
+      },
+      {
+        "pattern": "A Clone Soldier",
+        "target": "soldier"
+      },
+      {
+        "pattern": "A Leago",
+        "target": "leago"
+      },
+      {
+        "pattern": "A Leeva",
+        "target": "leeva"
+      },
+      {
+        "pattern": "A Ripper",
+        "target": "ripper"
+      },
+      {
+        "pattern": "A Massive Generator",
+        "target": "generator"
+      },
+      {
+        "pattern": "Zamuza",
+        "target": "zamuza"
+      },
+      {
+        "pattern": "Balba",
+        "target": "balba"
+      },
+      {
+        "pattern": "Brain",
+        "target": "brain"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Section Z (Arcade)",
+    "category": "Chaos",
+    "path": "play;press start;nw;s;s;n;e;e;n;s;s;d;w;w;s;e;w;s;e;e;u;s;s;e;e;d;n;n;se;e;nw;e;d;w;e;e;w;n;ne;w;w;u;n;n;sw;nw;s;s;u;n;e;e;s;n;nw;u;e;e;w;s;s;u;se;nw;ne;w;w;s;s;d;s;n;n;se;se;n;n;s;d;e;e;w;s;sw;e;e;d;e;e;sw;s;d;n;n;sw;w;s;d;w;w;s;s;e;e;n;w;u;w;w;e;s;s;d;s;s;e;w;ne;ne;w;e;s;s;u;w;w;n;e;n;w;e;e;u;n;n;e;sw;e;se;nw;ne;d;w;w;s;s;e;e;d;se;s;n;w;w;s;d;s;n;n;s;e;e;s;n;n;se;e;e;se;se;proceed;se;s;nw;w;s;u;e;e;sw;s;u;n;n;se;se;n;n;u;s;s;nw;sw;n;n;u;s;s;e;w;ne;ne;w;e;s;s;u;e;e;sw;w;s;e;e;d;s;e;n;n;w;w;s;s;n;u;s;s;e;e;n;n;u;e;e;sw;s;u;w;w;s;e;e;s;w;w;d;sw;s;d;n;e;se;n;n;d;e;e;w;s;s;e;w;w;d;e;ne;w;w;n;e;d;w;ne;e;w;w;s;s;e;e;d;n;ne;w;w;d;s;s;n;w;nw;s;s;d;sw;s;u;se;s;d;e;w;w;ne;w;n;e;e;d;s;n;ne;se;w;se;u;w;w;s;s;e;e;n;w;u;n;n;se;ne;s;s;d;e;w;w;s;e;sw;e;e;e;e;proceed;n;w;e;e;sw;s;e;w;w;u;w;w;s;e;sw;e;e;u;s;se;ne;w;e;n;u;w;w;s;e;w;s;e;e;d;e;e;w;w;n;e;w;n;e;e;d;s;n;n;se;se;n;n;u;e;sw;s;e;ne;sw;u;w;w;s;e;w;s;e;e;d;n;n;s;w;nw;s;s;enter portal;w;w;n;n;u;s;se;ne;n;d;w;n;e;se;nw;ne;w;w;d;se;n;n;s;w;w;s;n;n;d;w;n;n;se;se;n;n;w;d;w;w;s;e;e;s;w;w;d;n;nw;sw;e;w;s;d;sw;s;n;n;w;enter portal;e;n;w;s;w;n;n;e;e;d;e;e;w;w;s;s;e;e;d;se;w;w;n;n;e;e;w;w;s;d;n;nw;se;ne;e;e;e;se;se;e;e;ne;e;pause game",
+    "mobs": [
+      {
+        "pattern": "A Spiral Gun",
+        "target": "gun"
+      },
+      {
+        "pattern": "A Groma",
+        "target": "groma"
+      },
+      {
+        "pattern": "A Cloud Eye",
+        "target": "eye"
+      },
+      {
+        "pattern": "A Clone Soldier",
+        "target": "soldier"
+      },
+      {
+        "pattern": "A Leago",
+        "target": "leago"
+      },
+      {
+        "pattern": "A Leeva",
+        "target": "leeva"
+      },
+      {
+        "pattern": "A Ripper",
+        "target": "ripper"
+      },
+      {
+        "pattern": "A Massive Generator",
+        "target": "generator"
+      },
+      {
+        "pattern": "Zamuza",
+        "target": "zamuza"
+      },
+      {
+        "pattern": "Balba",
+        "target": "balba"
+      },
+      {
+        "pattern": "Brain",
+        "target": "brain"
+      },
+      {
+        "pattern": "Galga",
+        "target": "galga"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Section Z (Fast)",
+    "category": "Chaos",
+    "path": "e;s;d;w;sw;se;e;d;n;n;e;e;u;n;n;sw;w;s;u;n;ne;u;se;s;d;n;se;e;u;se;s;d;n;n;sw;w;s;d;w;w;s;s;e;e;nw;u;sw;s;u;w;w;n;n;e;e;d;w;w;s;se;e;d;sw;s;d;e;e;n;se;e;e;se;se;proceed;sw;s;d;n;e;se;n;n;u;s;s;nw;nw;d;s;s;e;e;u;e;s;s;u;w;w;se;s;w;d;sw;s;d;n;e;se;n;n;d;se;s;w;d;n;n;e;d;w;s;e;e;d;n;nw;d;s;w;w;s;d;sw;s;u;se;s;d;w;ne;nw;e;e;d;e;se;d;n;e;ne;s;s;d;w;s;s;e;e;e;e;proceed;s;w;d;s;se;ne;n;u;w;w;s;s;e;e;d;n;n;e;e;d;e;se;n;n;u;s;se;d;n;w;w;s;enter portal;w;nw;n;d;s;s;e;e;u;n;w;n;d;w;n;d;w;n;n;e;d;w;s;s;w;u;w;w;enter portal;w;n;n;e;e;d;s;s;e;e;d;s;w;n;d;n;ne;e;e;e;se;se;e;e;ne;e;",
+    "mobs": [
+      {
+        "pattern": "A Spiral Gun",
+        "target": "gun"
+      },
+      {
+        "pattern": "A Groma",
+        "target": "groma"
+      },
+      {
+        "pattern": "A Cloud Eye",
+        "target": "eye"
+      },
+      {
+        "pattern": "A Clone Soldier",
+        "target": "soldier"
+      },
+      {
+        "pattern": "A Leago",
+        "target": "leago"
+      },
+      {
+        "pattern": "A Leeva",
+        "target": "leeva"
+      },
+      {
+        "pattern": "A Ripper",
+        "target": "ripper"
+      },
+      {
+        "pattern": "A Massive Generator",
+        "target": "generator"
+      },
+      {
+        "pattern": "Zamuza",
+        "target": "zamuza"
+      },
+      {
+        "pattern": "Balba",
+        "target": "balba"
+      },
+      {
+        "pattern": "Brain",
+        "target": "brain"
+      },
+      {
+        "pattern": "Galga",
+        "target": "galga"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Serinth Castle",
+    "category": "Chaos",
+    "path": "s;s;s;s;s;enter;s;s;s;s;s;s;n;n;n;u;s;s;s;n;n;n;d;s;s;s;leave;s;w;nw;n;n;ne;e;n;n;w;n;s;e;n;n",
+    "mobs": [
+      {
+        "pattern": "Castle guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Gate guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Citizen of Keyloncia",
+        "target": "citizen"
+      },
+      {
+        "pattern": "Syrena the Queen of the Knights",
+        "target": "syrena"
+      },
+      {
+        "pattern": "Salinsha Maduric, Champion of the Mirage",
+        "target": "salinsha"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Serinth Castle (Easy)",
+    "category": "Chaos",
+    "path": "s;s;s;s;s;enter;s;s;s;s;s;s;n;n;n;u;s;s;s;n;n;n;d;s;s;s;leave;s;w;nw;n;n;ne;e;n;n;n;n",
+    "mobs": [
+      {
+        "pattern": "Castle guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Gate guard",
+        "target": "guard"
+      },
+      {
+        "pattern": "Citizen of Keyloncia",
+        "target": "citizen"
+      },
+      {
+        "pattern": "Syrena the Queen of the Knights",
+        "target": "syrena"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Smurf Castle",
+    "category": "Chaos",
+    "path": "w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;s;w;e;e;w;n;e;out",
+    "mobs": [
+      {
+        "pattern": "A very large rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "A large furry spider",
+        "target": "spider"
+      },
+      {
+        "pattern": "Azreal",
+        "target": "azreal"
+      },
+      {
+        "pattern": "Gargamel",
+        "target": "gargamel"
+      },
+      {
+        "pattern": "Azrael",
+        "target": "azrael"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Smurfs",
+    "category": "Chaos",
+    "path": "s;s;s;w;e;e;w;s;w;e;e;e;w;sw;se;w;e;s;w;w;n;s;e;e;n;e;s;s;w;w;e;e;s;s;e;w;w;w;w;e;e;e;s;s;enter;w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;e;w;s;w;e;e;w;n;e;out;n",
+    "mobs": [
+      {
+        "pattern": "Smurfette",
+        "target": "smurf"
+      },
+      {
+        "pattern": "A cute and fuzzy Squirrel",
+        "target": "squirrel"
+      },
+      {
+        "pattern": "An ugly and disgusting Smurf-Eater",
+        "target": "eater"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Starcraft 2",
+    "category": "Chaos",
+    "path": "e;e;n;n;w;w;n;n;n;w;w;s;s;e;e;s;e;e;s;s;w;w",
+    "mobs": [
+      {
+        "pattern": "Terran Marine",
+        "target": "terran"
+      },
+      {
+        "pattern": "Terran Firebat",
+        "target": "terran"
+      },
+      {
+        "pattern": "Terran SCV",
+        "target": "terran"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Stonemaze",
+    "category": "Chaos",
+    "path": "ne;ne;w;n;ne;s;e;e;e;s;se;n;s;nw;sw;nw;e;n;w;w;n;sw;s;w;w;s;n;se;sw;ne;nw;nw;sw;sw;nw;se;ne;se;ne;e;e;e;sw;sw",
+    "mobs": [
+      {
+        "pattern": "Stonebound Enchantress",
+        "target": "stonebound enchantress"
+      },
+      {
+        "pattern": "Molten Shardling",
+        "target": "molten shardling"
+      },
+      {
+        "pattern": "Gargoyle Sentinel",
+        "target": "gargoyle sentinel"
+      },
+      {
+        "pattern": "Quartz Specter",
+        "target": "quartz specter"
+      },
+      {
+        "pattern": "Lurking Boulderfiend",
+        "target": "boulderfiend"
+      },
+      {
+        "pattern": "Spectral Guardian",
+        "target": "spectral guardian"
+      },
+      {
+        "pattern": "Obsidian Serpent",
+        "target": "obsidian serpent"
+      },
+      {
+        "pattern": "Stoneform Mimic",
+        "target": "stoneform mimic"
+      },
+      {
+        "pattern": "Crystalline Skulker",
+        "target": "crystalline skulker"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Summerset",
+    "category": "Chaos",
+    "path": "e;e;e;n;n;w;s;w;w;d;w;s;se;u;n;w;n;n;e;e;e;e;e;nw;n;n;n;e;e;e;s;w;w;w;s;e;e;e;e;s;w;w;w;w;se;e;e;e;s;e;w;w;w;s;e;e;e;s;w;w;w;n;n;n;e;e;n;n;n;n;n;e;e;e;s;w;w;s;e;e;s;w;w;e;e;e;s;w;s;s;ne;s;e;e;n;w;n;e;nw;e;e;e;n;w;w;w;e;e;e;e;e;e;e;e;n;w;w;w;w;n;e;e;e;e;n;w;w;w;w;n;n;w;s;e;s;s;s;s;w;w;w;w;s;s;s;s;w;w;n;n;n;n;n;n;w;w;w;s;s;s;s;s;w;w;w;w;w;w;w;w;s;s;s;",
+    "mobs": [
+      {
+        "pattern": "Cow",
+        "target": "cow"
+      },
+      {
+        "pattern": "Sheep",
+        "target": "sheep"
+      },
+      {
+        "pattern": "Duck",
+        "target": "duck"
+      },
+      {
+        "pattern": "Duckling",
+        "target": "duckling"
+      },
+      {
+        "pattern": "Chestnut",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Hainthinnang",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Silfthan",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Puffball",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Nyreem",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Centany",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Hlessinen",
+        "target": "rabbit"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Summerset #2",
+    "category": "Chaos",
+    "path": "e;e;e;n;n;w;s;w;w;d;w;s;se;u;n;w;n;n;e;e;e;e;e;nw;n;n;n;e;e;e;s;w;w;w;s;e;e;e;e;s;w;w;w;w;se;e;e;e;s;e;w;w;w;s;e;e;e;s;w;w;w;n;n;n;e;e;n;n;n;n;n;e;e;e;s;w;w;s;e;e;s;w;w;e;e;e;s;w;s;s;ne;s;e;e;n;w;n;e;nw;e;e;e;n;w;w;w;e;e;e;e;e;e;e;e;n;w;w;w;w;n;e;e;e;e;n;w;w;w;w;n;n;w;s;e;s;s;s;s;w;w;w;w;s;s;s;s;w;w;n;n;n;n;n;n;w;w;w;s;s;s;s;s;w;w;w;w;w;w;w;w;s;s;s;",
+    "mobs": [
+      {
+        "pattern": "Rabbit",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Cow",
+        "target": "cow"
+      },
+      {
+        "pattern": "Sheep",
+        "target": "sheep"
+      },
+      {
+        "pattern": "Duck",
+        "target": "duck"
+      },
+      {
+        "pattern": "Duckling",
+        "target": "duckling"
+      },
+      {
+        "pattern": "Chestnut",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Hainthinnang",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Silfthan",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Puffball",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Nyreem",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Centany",
+        "target": "rabbit"
+      },
+      {
+        "pattern": "Hlessinen",
+        "target": "rabbit"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Troopers",
+    "category": "Chaos",
+    "path": "s;w;w;w;s;e;e;e;s;w;w;w;s;e;e;e;s;w;w;w;s;e;e;e;e;e;e;e;n;w;w;w;n;e;e;e;n;w;w;w;n;e;e;e;n;w;w;w;n;w;",
+    "mobs": [
+      {
+        "pattern": "Aegis Genocide Trooper",
+        "target": "robot"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Turkey Farm",
+    "category": "Chaos",
+    "path": "n;e;e;n;w;w;n;e;e;n;w;w;n;e;e;exit;enter;n;e;e;n;w;w;n;e;e;n;w;w;n;e;e;exit;enter;n;e;e;n;w;w;n;e;e;n;w;w;n;e;e;s;s;w;w;s;s;s;out",
+    "mobs": [
+      {
+        "pattern": "A plump turkey pecking the ground",
+        "target": "turkey"
+      },
+      {
+        "pattern": "A fat turkey waddling around",
+        "target": "turkey"
+      },
+      {
+        "pattern": "An undead turkey shuffling around",
+        "target": "turkey"
+      },
+      {
+        "pattern": "A slim turkey fighting for scraps",
+        "target": "turkey"
+      },
+      {
+        "pattern": "A baby turkey",
+        "target": "turkey"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Westersea Sewer",
+    "category": "Chaos",
+    "path": "e;n;s;e;w;w;w;w;s;n;n;s;nw;w;e;s;s;w;e;nw;w;n;s;s;n;e;e;e;s;d;s;s;n;se;nw;ne;sw;e;e;e;w;w;w;n;u;n;e;e",
+    "mobs": [
+      {
+        "pattern": "A small gelatinous cube",
+        "target": "cube"
+      },
+      {
+        "pattern": "A gigantic gelatinous cube",
+        "target": "cube"
+      },
+      {
+        "pattern": "A massive ochre jelly",
+        "target": "jelly"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Westersea Sewer (Full)",
+    "category": "Chaos",
+    "path": "d;w;w;w;w;sw;se;s;se;s;w;w;w;w;nw;w;w;nw;w;w;w;nw;w;w;sw;ne;n;nw;se;s;e;e;se;e;e;e;ne;ne;e;e;e;e;ne;w;w;nw;w;nw;n;e;nw;ne;e;w;w;w;w;w;w;sw;sw;e;e;se;e;w;nw;w;w;w;w;nw;n;w;w;w;e;e;e;s;se;se;w;w;sw;sw;w;w;w;w;e;e;e;e;e;w;ne;ne;e;e;nw;e;e;ne;ne;e;e;e;e;e;sw;se;w;s;se;e;se;e;e;e;e;e;e;u",
+    "mobs": [
+      {
+        "pattern": "A small cockroach",
+        "target": "insect"
+      },
+      {
+        "pattern": "An irradiated crocodile",
+        "target": "reptile"
+      },
+      {
+        "pattern": "An oddly glowing rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "A medium sized glowing rat",
+        "target": "rat"
+      },
+      {
+        "pattern": "A furry spider",
+        "target": "spider"
+      },
+      {
+        "pattern": "A large black snake",
+        "target": "snake"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Westersea Slum",
+    "category": "Chaos",
+    "path": "in;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;w;s;s;w;e;e;e;e;e;e;e;e;e;s;w;w;w;w;w;w;w;w;e;e;e;e;e;e;e;e;s;w;w;s;w;w;w;w;w;w;w;w;e;e;ne;e;e;e;e;e;e;w;w;w;w;w;w;w;w;n;n;e;n;n;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;e;out",
+    "mobs": [
+      {
+        "pattern": "An Awgwa leader",
+        "target": "leader"
+      },
+      {
+        "pattern": "A blackened Awgwa",
+        "target": "awgwa"
+      },
+      {
+        "pattern": "A corrupted Awgwa",
+        "target": "awgwa"
+      },
+      {
+        "pattern": "Shady leader",
+        "target": "leader"
+      },
+      {
+        "pattern": "Tough looking brigand",
+        "target": "brigand"
+      },
+      {
+        "pattern": "Mischievous ruffian",
+        "target": "ruffian"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Whorehouse (Easy)",
+    "category": "Chaos",
+    "path": "n;w;n;s;e;n;e;n;s;w;n;w;w;n;curtain;e;e;n;e;w;w;e;s;s;s;s;w;w;n;n;s;s;w;u;e;n;e;w;n;n;e;n;w;e;e;w;s;e;e;n;s;w;s;w;e;s;s;w;e;e;n;n;s;s;e;u;w;w;n;enter;n;n;w;w;s;s;e;e;s;e;n;climb window;s;ndown;s;d;n;n;s;s;u;w;s;w;w;w;w;u;e;enter;out;e;n;s;w;w;d;d;e;e;e",
+    "mobs": [
+      {
+        "pattern": "A midget whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A male midget whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A mentally disturbed homeless man",
+        "target": "man"
+      },
+      {
+        "pattern": "A bitter homeless man",
+        "target": "man"
+      },
+      {
+        "pattern": "An expensive-looking whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "Guardian Whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "An awfully tough whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A big fat whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A cheap-looking whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "An old, wrinkled whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A skinny whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A naked female customer",
+        "target": "customer"
+      },
+      {
+        "pattern": "A rich customer",
+        "target": "customer"
+      },
+      {
+        "pattern": "An undressed male customer",
+        "target": "customer"
+      },
+      {
+        "pattern": "A New York pigeon",
+        "target": "bird"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Whorehouse (Whores)",
+    "category": "Chaos",
+    "path": "n;w;n;s;e;n;e;n;s;w;n;w;w;n;curtain;e;e;n;e;w;w;e;s;s;s;s;w;w;n;n;s;s;w;u;e;n;e;w;n;n;e;n;w;e;e;w;s;e;e;n;s;w;s;w;e;s;s;w;e;e;n;n;s;s;e;u;w;w;n;enter;n;n;w;w;s;s;e;e;s;e;n;climb window;s;ndown;s;d;n;n;s;s;u;w;s;w;w;w;w;u;e;enter;out;e;n;s;w;w;d;d;e;e;e",
+    "mobs": [
+      {
+        "pattern": "A midget whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A male midget whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A mentally disturbed homeless man",
+        "target": "man"
+      },
+      {
+        "pattern": "A bitter homeless man",
+        "target": "man"
+      },
+      {
+        "pattern": "An expensive-looking whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "Guardian Whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "An awfully tough whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A big fat whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A cheap-looking whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "An old, wrinkled whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A skinny whore",
+        "target": "whore"
+      },
+      {
+        "pattern": "A naked female customer",
+        "target": "customer"
+      },
+      {
+        "pattern": "A rich customer",
+        "target": "customer"
+      },
+      {
+        "pattern": "An undressed male customer",
+        "target": "customer"
+      },
+      {
+        "pattern": "Netta the CyberWhore",
+        "target": "netta"
+      },
+      {
+        "pattern": "Candi the PleasureMaster",
+        "target": "candi"
+      },
+      {
+        "pattern": "Bertolo the Master Pimp",
+        "target": "bertolo"
+      },
+      {
+        "pattern": "A New York pigeon",
+        "target": "bird"
+      },
+      {
+        "pattern": "Nigel Grant",
+        "target": "nigel"
+      },
+      {
+        "pattern": "Zachary Sheen",
+        "target": "zachary"
+      },
+      {
+        "pattern": "Savon the Adept",
+        "target": "savon"
+      }
+    ],
+    "startRoom": "",
+    "loop": true,
+    "playerCheck": true,
+    "defaultDelay": 0.5
+  },
+  {
+    "name": "Witch's Hat",
+    "category": "Chaos",
+    "path": "s;s;nw;s;s;sw;n;n;w;s;s;w;n;n;w;s;s;w;n;n;w;s;s;w;n;n;w;s;s;w;n;n;w;s;s;w;n;n;n;nw;s;s;s;s;w;n;n;n;n;n;nw;s;s;s;s;s;s;w;n;n;n;n;n;n;n;nw;s;s;s;s;s;s;s;s;w;n;n;n;n;n;n;n;n;n;nw;s;s;s;s;s;s;s;s;s;s;w;n;n;n;n;n;n;n;n;n;n;w;s;s;s;s;s;s;s;s;s;s;w;n;n;n;n;n;sw;s;s;s;s;w;n;n;n;sw;s;s;w;n;n;w;s;s;w;n;n;w;s;s;w;n;n;w;s;s;w;n;n;w;s;s;w;n;n;nw;s;s;nw;n;n;se;se;e;e;e;e;e;e;e;e;e;ne;ne;ne;ne;nw;n;n;n;w;s;s;w;n;n;w;s;s;nw;s;s;sw;n;n;e;e;e;e;e;e;e;e;e;e;se;se;se;se;se;se;e;e;e;e;e;e;e;e;e;ne;ne;",
+    "mobs": [
+      {
+        "pattern": "A small ball of fuzz",
+        "target": "fuzz"
+      },
+      {
+        "pattern": "A large ball of fuzz",
+        "target": "fuzz"
+      },
+      {
+        "pattern": "A sparking arc of electricity",
+        "target": "arc"
+      },
+      {
+        "pattern": "An arcing spark of electricity",
+        "target": "spark"
+      }
+    ],
+    "startRoom": "",
     "loop": true,
     "playerCheck": true,
     "defaultDelay": 0.5

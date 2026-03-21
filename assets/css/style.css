@@ -3140,3 +3140,16 @@ body {
 .bot-stat strong {
     color: #ddd;
 }
+
+.bot-fav-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: #555;
+    padding: 0 4px;
+    vertical-align: middle;
+    transition: color 0.15s;
+}
+.bot-fav-btn:hover { color: #e8a83c; }
+.bot-fav-btn.active { color: #e8a83c; }

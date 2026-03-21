@@ -279,6 +279,7 @@ class WMTClient {
         };
         this.botAreas = [];      // Pre-built area definitions
         this.customBots = [];    // User-created bot definitions
+        this.botFavorites = [];  // Favorite bot names (from preferences)
         this.botAreasLoaded = false;
 
         // Wake Lock API - keeps screen awake
@@ -408,6 +409,8 @@ class WMTClient {
                 this.preferences = prefsData.preferences || {};
                 // Load channel preferences (each channel can have its own webhook)
                 this.channelPrefs = this.preferences.channelPrefs || {};
+                // Load bot favorites
+                this.botFavorites = this.preferences.botFavorites || [];
             }
 
             // Load character password for auto-login
@@ -5742,14 +5745,34 @@ class WMTClient {
             }
         }
 
-        // Area dropdown options
+        // Area dropdown options — favorites first, then all areas, then custom
         let areaOptions = '<option value="">-- Select Area --</option>';
-        for (const area of this.botAreas) {
-            areaOptions += `<option value="${this.escapeHtml(area.name)}">${this.escapeHtml(area.name)} (${this.escapeHtml(area.category || '')}${area.difficulty ? ' - ' + area.difficulty : ''})</option>`;
+        const favSet = new Set(this.botFavorites);
+        const favAreas = this.botAreas.filter(a => favSet.has(a.name));
+        const nonFavAreas = this.botAreas.filter(a => !favSet.has(a.name));
+        if (favAreas.length > 0) {
+            areaOptions += '<optgroup label="★ Favorites">';
+            for (const area of favAreas) {
+                const steps = area.path ? area.path.split(';').length : 0;
+                areaOptions += `<option value="${this.escapeHtml(area.name)}">★ ${this.escapeHtml(area.name)} (${steps} steps)</option>`;
+            }
+            areaOptions += '</optgroup>';
+        }
+        if (nonFavAreas.length > 0) {
+            areaOptions += favAreas.length > 0 ? '<optgroup label="All Areas">' : '';
+            for (const area of nonFavAreas) {
+                const steps = area.path ? area.path.split(';').length : 0;
+                areaOptions += `<option value="${this.escapeHtml(area.name)}">${this.escapeHtml(area.name)} (${steps} steps)</option>`;
+            }
+            if (favAreas.length > 0) areaOptions += '</optgroup>';
         }
         // Custom bots
-        for (const bot of this.customBots) {
-            areaOptions += `<option value="custom:${this.escapeHtml(bot.name)}">[Custom] ${this.escapeHtml(bot.name)}</option>`;
+        if (this.customBots.length > 0) {
+            areaOptions += '<optgroup label="Custom Bots">';
+            for (const cbot of this.customBots) {
+                areaOptions += `<option value="custom:${this.escapeHtml(cbot.name)}">${this.escapeHtml(cbot.name)}</option>`;
+            }
+            areaOptions += '</optgroup>';
         }
 
         return `
@@ -5787,6 +5810,7 @@ class WMTClient {
                             ${areaOptions}
                         </select>
                         <div id="bot-area-info" style="color:#888;font-size:12px;margin-bottom:10px"></div>
+                        <div id="bot-start-room" style="color:#e8a83c;font-size:12px;margin-bottom:10px;display:none"></div>
                     </div>
 
                     <div class="settings-section">
@@ -5983,6 +6007,7 @@ class WMTClient {
 
     onBotAreaSelected(value) {
         const infoDiv = document.getElementById('bot-area-info');
+        const startRoomDiv = document.getElementById('bot-start-room');
         const mobSection = document.getElementById('bot-mob-list-section');
         const mobList = document.getElementById('bot-mob-list');
         const mobCount = document.getElementById('bot-mob-count');
@@ -5990,6 +6015,7 @@ class WMTClient {
 
         if (!value) {
             if (infoDiv) infoDiv.innerHTML = '';
+            if (startRoomDiv) startRoomDiv.style.display = 'none';
             if (mobSection) mobSection.style.display = 'none';
             if (startBtn) startBtn.disabled = true;
             this._selectedBotDef = null;
@@ -5997,9 +6023,11 @@ class WMTClient {
         }
 
         let def = null;
+        let isCustom = false;
         if (value.startsWith('custom:')) {
             const name = value.substring(7);
             def = this.customBots.find(b => b.name === name);
+            isCustom = true;
         } else {
             def = this.botAreas.find(a => a.name === value);
         }
@@ -6012,10 +6040,25 @@ class WMTClient {
         this._selectedBotDef = def;
         if (startBtn) startBtn.disabled = false;
 
-        // Show area info
+        // Show area info with favorite toggle
         const pathSteps = typeof def.path === 'string' ? def.path.split(/[;\s]+/).filter(d => d).length : (def.path || []).length;
+        const isFav = this.botFavorites.includes(def.name);
+        const favBtn = isCustom ? '' : `<button class="bot-fav-btn${isFav ? ' active' : ''}" id="bot-fav-toggle" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '★' : '☆'}</button>`;
         if (infoDiv) {
-            infoDiv.innerHTML = `${pathSteps} steps${def.difficulty ? ' &middot; ' + this.escapeHtml(def.difficulty) : ''}${def.loop ? ' &middot; Loops' : ''}`;
+            infoDiv.innerHTML = `${favBtn} ${pathSteps} steps${def.loop ? ' &middot; Loops' : ''}`;
+            document.getElementById('bot-fav-toggle')?.addEventListener('click', () => {
+                this.toggleBotFavorite(def.name);
+            });
+        }
+
+        // Show start room info
+        if (startRoomDiv) {
+            if (def.startRoom) {
+                startRoomDiv.textContent = 'Start in: ' + def.startRoom;
+                startRoomDiv.style.display = 'block';
+            } else {
+                startRoomDiv.style.display = 'none';
+            }
         }
 
         // Show mobs
@@ -6045,6 +6088,31 @@ class WMTClient {
         if (def.playerCheck !== undefined) {
             const pcCb = document.getElementById('bot-player-check');
             if (pcCb) pcCb.checked = def.playerCheck;
+        }
+    }
+
+    async toggleBotFavorite(name) {
+        const idx = this.botFavorites.indexOf(name);
+        if (idx >= 0) {
+            this.botFavorites.splice(idx, 1);
+        } else {
+            this.botFavorites.push(name);
+        }
+        // Save to preferences
+        try {
+            await fetch(this.apiUrl('api/preferences.php?action=save'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preferences: { botFavorites: this.botFavorites } })
+            });
+        } catch (e) { /* non-fatal */ }
+        // Re-render dropdown to move item to/from favorites group
+        this.updateBotPanel();
+        // Re-select the area
+        const select = document.getElementById('bot-area-select');
+        if (select) {
+            select.value = name;
+            this.onBotAreaSelected(name);
         }
     }
 

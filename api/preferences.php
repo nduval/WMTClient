@@ -327,6 +327,17 @@ switch ($action) {
             $validated['chatWindowOpen'] = (bool)$preferences['chatWindowOpen'];
         }
 
+        // Bot favorites (array of bot name strings, max 50)
+        if (isset($preferences['botFavorites']) && is_array($preferences['botFavorites'])) {
+            $favs = [];
+            foreach (array_slice($preferences['botFavorites'], 0, 50) as $name) {
+                if (is_string($name) && strlen($name) <= 100) {
+                    $favs[] = substr(trim($name), 0, 100);
+                }
+            }
+            $validated['botFavorites'] = $favs;
+        }
+
         // Load existing and merge
         $existing = loadJsonFile(getPreferencesPath($userId, $characterId));
         $merged = array_merge($existing, $validated);
