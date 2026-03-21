@@ -122,7 +122,7 @@ setcookie($tokenCookieName, $wsToken, [
                         <button onclick="wmtClient.openTickerModal()">Ticker</button>
                     </div>
                 </div>
-                <button class="header-btn" id="bot-btn">Bot</button>
+                <?php if ($userId === 'bd035a266e8aa6c77e69d950ba0120c0'): ?><button class="header-btn" id="bot-btn">Bot</button><?php endif; ?>
                 <button class="header-btn" id="settings-btn">Settings</button>
 
                 <!-- Hamburger Menu (visible on small screens) -->
@@ -135,7 +135,7 @@ setcookie($tokenCookieName, $wsToken, [
                     <div class="hamburger-menu" id="hamburger-menu">
                         <button onclick="wmtClient.toggleChatWindow()">ChatMon</button>
                         <button onclick="wmtClient.toggleScriptsSidebar()">Actions</button>
-                        <button onclick="wmtClient.openPanel('botcontrol')">Bot</button>
+                        <?php if ($userId === 'bd035a266e8aa6c77e69d950ba0120c0'): ?><button onclick="wmtClient.openPanel('botcontrol')">Bot</button><?php endif; ?>
                         <button onclick="wmtClient.openPanel('settings')">Settings</button>
                         <div class="menu-divider"></div>
                         <button onclick="wmtClient.openTriggerModal()">+ Trigger</button>
