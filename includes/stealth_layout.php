@@ -313,9 +313,9 @@ function stealth_header($title, $activeNav = '') {
             <h4>Resources</h4>
             <ul>
                 <li><a href="/">Client Portal</a></li>
-                <li><a href="#">Documentation</a></li>
-                <li><a href="#">API Reference</a></li>
-                <li><a href="#">System Status</a></li>
+                <li><a href="/about.php">About Us</a></li>
+                <li><a href="/solutions.php">Our Platform</a></li>
+                <li><a href="/contact.php">Get Support</a></li>
             </ul>
         </div>
     </div>
