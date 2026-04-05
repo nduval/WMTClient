@@ -30,6 +30,7 @@ IONOS_DEPLOY_FILES = [
     'privacy.php',
     'terms.php',
     'robots.txt',
+    'sitemap.xml',
     'composer.json',
     'api/',
     'assets/',
