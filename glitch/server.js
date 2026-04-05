@@ -2700,7 +2700,14 @@ function parseMipMessage(session, msgType, msgData) {
               channel: channel,
               messagePreview: rawText.substring(0, 50)
             });
-            sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, session.discordUsername);
+            // Extract speaker name from channel message for Discord username
+            // Format: "[channel] Name flaps : message" or "[channel] Name says : message"
+            let discordName = session.discordUsername;
+            const speakerMatch = rawText.match(/^\[[^\]]+\]\s+(\S+)/);
+            if (speakerMatch) {
+              discordName = speakerMatch[1];
+            }
+            sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, discordName);
           }
         }
       }
