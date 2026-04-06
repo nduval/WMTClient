@@ -28,6 +28,8 @@ $characters = $isGuest ? [] : getCharacters($userId);
 // Check if this specific character has wizard status (unlimited session timeout)
 // Note: Only wizard accounts can set character-level wizard status
 $isWizard = $isGuest ? false : isCharacterWizard($userId, $characterId);
+$isAdmin = in_array($username, ['nathan']);
+if ($isAdmin) $isWizard = true;  // Admin accounts get no session timeout
 
 // Determine MUD host/port based on character server
 $mudHost = MUD_HOST;
