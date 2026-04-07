@@ -610,7 +610,7 @@ if (in_array($username, $ADMIN_USERS)) {
             <h3>New to 3Kingdoms?</h3>
             <p class="form-help" style="margin-bottom: 15px;">Create a brand new character on the MUD. You'll go through the registration process.</p>
             <form class="new-character-form" id="create-mud-form" onsubmit="createMudCharacter(event)">
-                <input type="text" id="new-mud-character-name" placeholder="Choose a character name" maxlength="50" required pattern="[a-zA-Z]+" title="Letters only, no spaces">
+                <input type="text" id="new-mud-character-name" placeholder="Character name" maxlength="50" required pattern="[a-zA-Z]+" title="Letters only, no spaces">
                 <span class="server-toggle" id="create-mud-server-toggle" title="Select server">
                     <span class="server-option active" data-server="3k">3K</span>
                     <span class="server-option" data-server="3s">3S</span>
