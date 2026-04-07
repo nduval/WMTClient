@@ -252,6 +252,7 @@ if ($isStealth) {
         </div>
 
         <div id="login-form" class="form-container active">
+            <p style="color: #888; font-size: 0.82em; margin-bottom: 16px; line-height: 1.5;">This is your <strong style="color: #ccc;">WMT client account</strong>, not your MUD login. New here? <a href="#" style="color: #00ff00;" onclick="document.querySelector('[data-tab=register]').click(); return false;">Register first</a>, then add your MUD character after.</p>
             <div class="error-message" id="login-error"></div>
             <form id="loginForm">
                 <div class="form-group">
