@@ -554,12 +554,13 @@ if (in_array($username, $ADMIN_USERS)) {
                 <?php foreach ($characters as $char):
                     $charServer = $char['server'] ?? '3k';
                     $charIsWizard = $char['isWizard'] ?? false;
+                    $charLabel = $char['label'] ?? '';
                 ?>
                     <li class="character-item" data-id="<?= htmlspecialchars($char['id']) ?>" data-server="<?= $charServer ?>" data-wizard="<?= $charIsWizard ? '1' : '0' ?>" draggable="true">
                         <div class="character-info">
                             <span class="drag-handle" title="Drag to reorder">&#9776;</span>
                             <div>
-                                <div class="character-name"><?= htmlspecialchars($char['name']) ?><?php if ($charIsWizard): ?> <span style="color: #ffcc00;">★</span><?php endif; ?></div>
+                                <div class="character-name"><?= htmlspecialchars($char['name']) ?><?php if ($charLabel): ?> <span style="color: #aaa; font-size: 0.8em;">&mdash; <?= htmlspecialchars($charLabel) ?></span><?php endif; ?><?php if ($charIsWizard): ?> <span style="color: #ffcc00;">★</span><?php endif; ?></div>
                                 <div class="character-created">Created <?= date('M j, Y', strtotime($char['created_at'])) ?></div>
                             </div>
                         </div>
@@ -576,6 +577,7 @@ if (in_array($username, $ADMIN_USERS)) {
                             <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved - click to change' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
+                            <button class="btn-rename" onclick="editLabel('<?= $char['id'] ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();">Label</button>
                             <button class="btn-rename" onclick="renameCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Rename</button>
                             <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Delete</button>
                             <button class="btn-select" onclick="selectCharacter('<?= $char['id'] ?>'); event.stopPropagation();">Play</button>
@@ -589,13 +591,14 @@ if (in_array($username, $ADMIN_USERS)) {
             <h3>Add Character Profile</h3>
             <form class="new-character-form" id="create-form" onsubmit="createCharacter(event)">
                 <input type="text" id="new-character-name" placeholder="Character name" maxlength="50" required>
+                <input type="text" id="new-character-label" placeholder="Profile label (optional)" maxlength="50" style="width: 180px;">
                 <span class="server-toggle" id="create-server-toggle" title="Select server for this profile">
                     <span class="server-option active" data-server="3k">3K</span>
                     <span class="server-option" data-server="3s">3S</span>
                 </span>
                 <button type="submit">Add Profile</button>
             </form>
-            <p class="form-help">Creates a profile for an existing character - stores triggers, aliases, and settings.</p>
+            <p class="form-help">Creates a profile for a character - stores triggers, aliases, and settings. Use labels to create multiple profiles for the same character (e.g. "Mage", "Jedi").</p>
         </div>
 
         <div class="new-character new-mud-character">
@@ -686,18 +689,40 @@ if (in_array($username, $ADMIN_USERS)) {
             return active ? active.dataset.server : '3k';
         }
 
+        async function editLabel(characterId, currentLabel) {
+            const label = prompt('Profile label (e.g. "Mage", "Jedi"). Leave empty to remove:', currentLabel);
+            if (label === null) return;
+
+            try {
+                const res = await fetch('api/characters.php?action=set_label', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ character_id: characterId, label: label.trim(), csrf_token: csrfToken })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    showMessage(data.error || 'Failed to update label', true);
+                }
+            } catch (e) {
+                showMessage('Failed to update label', true);
+            }
+        }
+
         async function createCharacter(e) {
             e.preventDefault();
             const name = document.getElementById('new-character-name').value.trim();
             if (!name) return;
 
+            const label = (document.getElementById('new-character-label').value || '').trim();
             const server = getSelectedServer('create-server-toggle');
 
             try {
                 const res = await fetch('api/characters.php?action=create', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, server: server, csrf_token: csrfToken })
+                    body: JSON.stringify({ name: name, label: label, server: server, csrf_token: csrfToken })
                 });
                 const data = await res.json();
                 if (data.success) {

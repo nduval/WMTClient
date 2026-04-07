@@ -91,13 +91,9 @@ switch ($action) {
             $server = '3k';
         }
 
-        // Check for duplicate names on the same server
-        $existing = getCharacters($userId);
-        foreach ($existing as $char) {
-            $charServer = $char['server'] ?? '3k';
-            if (strtolower($char['name']) === strtolower($name) && $charServer === $server) {
-                errorResponse('A character with that name already exists on ' . strtoupper($server));
-            }
+        $label = trim($input['label'] ?? '');
+        if (strlen($label) > 50) {
+            errorResponse('Profile label too long (max 50 characters)');
         }
 
         // Check storage limits (character adds ~5 files: triggers, aliases, classes, preferences, etc.)
@@ -107,6 +103,10 @@ switch ($action) {
         }
 
         $character = createCharacter($userId, $name, $server);
+        if ($label) {
+            updateCharacterLabel($userId, $character['id'], $label);
+            $character['label'] = $label;
+        }
         successResponse(['character' => $character]);
         break;
 
@@ -150,17 +150,6 @@ switch ($action) {
             errorResponse('Character name too long (max 50 characters)');
         }
 
-        // Check for duplicate names on the same server (excluding current character)
-        $existing = getCharacters($userId);
-        $currentChar = getCharacter($userId, $characterId);
-        $currentServer = $currentChar['server'] ?? '3k';
-        foreach ($existing as $char) {
-            $charServer = $char['server'] ?? '3k';
-            if ($char['id'] !== $characterId && strtolower($char['name']) === strtolower($newName) && $charServer === $currentServer) {
-                errorResponse('A character with that name already exists on ' . strtoupper($currentServer));
-            }
-        }
-
         if (!renameCharacter($userId, $characterId, $newName)) {
             errorResponse('Failed to rename character');
         }
@@ -171,6 +160,31 @@ switch ($action) {
         }
 
         successResponse(['message' => 'Character renamed']);
+        break;
+
+    case 'set_label':
+        $input = json_decode(file_get_contents('php://input'), true);
+
+        if (!validateCsrfToken($input['csrf_token'] ?? null)) {
+            errorResponse('Invalid CSRF token', 403);
+        }
+
+        $characterId = $input['character_id'] ?? '';
+        $label = trim($input['label'] ?? '');
+
+        if (empty($characterId)) {
+            errorResponse('Character ID is required');
+        }
+
+        if (strlen($label) > 50) {
+            errorResponse('Profile label too long (max 50 characters)');
+        }
+
+        if (!updateCharacterLabel($userId, $characterId, $label)) {
+            errorResponse('Failed to update label');
+        }
+
+        successResponse(['message' => 'Label updated']);
         break;
 
     case 'delete':

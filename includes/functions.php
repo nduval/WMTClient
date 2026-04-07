@@ -360,6 +360,7 @@ function createCharacter(string $userId, string $characterName, string $server =
     $character = [
         'id' => $characterId,
         'name' => $characterName,
+        'label' => '',
         'password' => '',
         'server' => $server,
         'created_at' => date('c')
@@ -505,6 +506,28 @@ function renameCharacter(string $userId, string $characterId, string $newName): 
     }
 
     return $result;
+}
+
+/**
+ * Update character profile label (e.g. "Mage", "Jedi")
+ */
+function updateCharacterLabel(string $userId, string $characterId, string $label): bool {
+    $characters = getCharacters($userId);
+    $found = false;
+
+    foreach ($characters as &$char) {
+        if ($char['id'] === $characterId) {
+            $char['label'] = $label;
+            $found = true;
+            break;
+        }
+    }
+
+    if (!$found) {
+        return false;
+    }
+
+    return saveJsonFile(getCharactersListPath($userId), $characters);
 }
 
 /**
