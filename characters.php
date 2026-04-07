@@ -293,7 +293,8 @@ if (in_array($username, $ADMIN_USERS)) {
             display: flex;
             gap: 10px;
             justify-content: center;
-            max-width: 450px;
+            flex-wrap: wrap;
+            max-width: 550px;
             margin: 0 auto;
         }
 
@@ -306,6 +307,10 @@ if (in_array($username, $ADMIN_USERS)) {
             font-size: 16px;
             width: 200px;
             min-width: 0;
+        }
+
+        .new-character-form input::placeholder {
+            color: #888;
         }
 
         .new-character-form input:focus {
