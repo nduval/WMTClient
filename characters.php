@@ -191,46 +191,31 @@ if (in_array($username, $ADMIN_USERS)) {
             cursor: grabbing;
         }
 
-        .character-name {
-            font-size: 18px;
+        .profile-title {
+            font-size: 17px;
             font-weight: bold;
             color: #00ff00;
         }
 
-        .character-label {
-            color: #999;
-            font-size: 0.85em;
+        .char-name {
+            color: #ccc;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: 4px;
         }
 
         .char-rename-btn {
             color: #555;
-            font-size: 12px;
+            font-size: 11px;
             cursor: pointer;
-            padding: 2px 4px;
+            padding: 2px 3px;
             border-radius: 3px;
             transition: color 0.2s;
         }
 
         .char-rename-btn:hover {
-            color: #6699ff;
-        }
-
-        .character-header .server-badge {
-            margin-left: auto;
-            font-size: 11px;
-            font-weight: bold;
-            padding: 2px 8px;
-            border-radius: 3px;
-            flex-shrink: 0;
-        }
-
-        .server-badge.is-3k {
-            background: rgba(0, 255, 0, 0.15);
-            color: #00ff00;
-        }
-
-        .server-badge.is-3s {
-            background: rgba(102, 153, 255, 0.15);
             color: #6699ff;
         }
 
@@ -517,20 +502,31 @@ if (in_array($username, $ADMIN_USERS)) {
                 line-height: 1.6;
             }
 
-            .character-name {
-                font-size: 16px;
+            .profile-title {
+                font-size: 15px;
+            }
+
+            .character-header {
+                padding: 10px 12px;
             }
 
             .character-actions {
+                padding: 10px 12px;
                 gap: 6px;
             }
 
             .character-actions button {
-                padding: 8px 12px;
+                padding: 7px 10px;
+                font-size: 11px;
             }
 
             .btn-select {
-                min-width: 60px;
+                min-width: 50px;
+                padding: 7px 14px;
+            }
+
+            .character-footer {
+                padding: 5px 12px;
             }
 
             .new-character-form {
@@ -575,18 +571,18 @@ if (in_array($username, $ADMIN_USERS)) {
                     $charServer = $char['server'] ?? '3k';
                     $charIsWizard = $char['isWizard'] ?? false;
                     $charLabel = $char['label'] ?? '';
-                    $displayName = htmlspecialchars($char['name']);
-                    if ($charLabel) $displayName .= ' <span class="character-label">&mdash; ' . htmlspecialchars($charLabel) . '</span>';
-                    if ($charIsWizard) $displayName .= ' <span style="color: #ffcc00;">★</span>';
+                    $profileTitle = $charLabel ? htmlspecialchars($charLabel) : htmlspecialchars($char['name']) . ' &mdash; ' . strtoupper($charServer);
                 ?>
                     <li class="character-item" data-id="<?= htmlspecialchars($char['id']) ?>" data-server="<?= $charServer ?>" data-wizard="<?= $charIsWizard ? '1' : '0' ?>" draggable="true">
                         <div class="character-header" onclick="selectCharacter('<?= $char['id'] ?>')">
                             <span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation();">&#9776;</span>
-                            <span class="character-name"><?= $displayName ?></span>
-                            <span class="char-rename-btn" onclick="renameCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();" title="Change character name">&#9998;</span>
-                            <span class="server-badge is-<?= $charServer ?>"><?= strtoupper($charServer) ?></span>
+                            <span class="profile-title"><?= $profileTitle ?><?php if ($charIsWizard): ?> <span style="color: #ffcc00;">★</span><?php endif; ?></span>
                         </div>
                         <div class="character-actions">
+                            <span class="char-name">
+                                <?= htmlspecialchars($char['name']) ?>
+                                <span class="char-rename-btn" onclick="renameCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();" title="Change character name">&#9998;</span>
+                            </span>
                             <span class="server-toggle <?= $charServer === '3s' ? 'is-3s' : '' ?>" onclick="toggleServer('<?= $char['id'] ?>', '<?= $charServer ?>'); event.stopPropagation();" title="Switch server">
                                 <span class="server-option <?= $charServer === '3k' ? 'active' : '' ?>">3K</span>
                                 <span class="server-option <?= $charServer === '3s' ? 'active' : '' ?>">3S</span>
