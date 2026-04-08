@@ -585,7 +585,7 @@ if (in_array($username, $ADMIN_USERS)) {
                             <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
-                            <button class="btn-edit" onclick="editProfile('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();">Edit</button>
+                            <button class="btn-edit" onclick="editLabel('<?= $char['id'] ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();">Label</button>
                             <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Delete</button>
                             <button class="btn-select" onclick="selectCharacter('<?= $char['id'] ?>'); event.stopPropagation();">Play</button>
                         </div>
@@ -699,41 +699,25 @@ if (in_array($username, $ADMIN_USERS)) {
             return active ? active.dataset.server : '3k';
         }
 
-        async function editProfile(characterId, currentName, currentLabel) {
-            const newName = prompt('Character name:', currentName);
-            if (newName === null) return;
-            const trimName = newName.trim();
-            if (!trimName) { showMessage('Character name cannot be empty', true); return; }
+        async function editLabel(characterId, currentLabel) {
+            const label = prompt('Profile label (e.g. "Mage", "Jedi"). Leave empty to remove:', currentLabel);
+            if (label === null) return;
 
-            const newLabel = prompt('Profile label (e.g. "Mage", "Jedi"). Leave empty for none:', currentLabel);
-            if (newLabel === null) return;
-
-            let ok = true;
-            if (trimName !== currentName) {
-                try {
-                    const res = await fetch('api/characters.php?action=rename', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ character_id: characterId, name: trimName, csrf_token: csrfToken })
-                    });
-                    const data = await res.json();
-                    if (!data.success) { showMessage(data.error || 'Failed to rename', true); ok = false; }
-                } catch (e) { showMessage('Failed to rename', true); ok = false; }
+            try {
+                const res = await fetch('api/characters.php?action=set_label', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ character_id: characterId, label: label.trim(), csrf_token: csrfToken })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    showMessage(data.error || 'Failed to update label', true);
+                }
+            } catch (e) {
+                showMessage('Failed to update label', true);
             }
-
-            if (ok && newLabel.trim() !== currentLabel) {
-                try {
-                    const res = await fetch('api/characters.php?action=set_label', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ character_id: characterId, label: newLabel.trim(), csrf_token: csrfToken })
-                    });
-                    const data = await res.json();
-                    if (!data.success) { showMessage(data.error || 'Failed to update label', true); ok = false; }
-                } catch (e) { showMessage('Failed to update label', true); ok = false; }
-            }
-
-            if (ok) window.location.reload();
         }
 
         async function createCharacter(e) {
