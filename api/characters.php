@@ -187,6 +187,43 @@ switch ($action) {
         successResponse(['message' => 'Label updated']);
         break;
 
+    case 'duplicate':
+        $input = json_decode(file_get_contents('php://input'), true);
+
+        if (!validateCsrfToken($input['csrf_token'] ?? null)) {
+            errorResponse('Invalid CSRF token', 403);
+        }
+
+        $characterId = $input['character_id'] ?? '';
+        $label = trim($input['label'] ?? '');
+
+        if (empty($characterId)) {
+            errorResponse('Character ID is required');
+        }
+
+        $source = getCharacter($userId, $characterId);
+        if (!$source) {
+            errorResponse('Character not found', 404);
+        }
+
+        if (strlen($label) > 50) {
+            errorResponse('Profile label too long (max 50 characters)');
+        }
+
+        // Check storage limits
+        $limitCheck = checkUserStorageLimits($userId, 1000, 5);
+        if (!$limitCheck['allowed']) {
+            errorResponse($limitCheck['error']);
+        }
+
+        $newChar = duplicateCharacter($userId, $characterId, $label);
+        if (!$newChar) {
+            errorResponse('Failed to duplicate profile');
+        }
+
+        successResponse(['character' => $newChar]);
+        break;
+
     case 'delete':
         $input = json_decode(file_get_contents('php://input'), true);
 

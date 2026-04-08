@@ -248,6 +248,18 @@ if (in_array($username, $ADMIN_USERS)) {
             background: #00cc00;
         }
 
+        .btn-copy {
+            background: transparent;
+            color: #888;
+            border: 1px solid #444;
+        }
+
+        .btn-copy:hover {
+            border-color: #888;
+            background: #888;
+            color: #000;
+        }
+
         .btn-delete {
             background: transparent;
             color: #ff6666;
@@ -571,7 +583,7 @@ if (in_array($username, $ADMIN_USERS)) {
                     $charServer = $char['server'] ?? '3k';
                     $charIsWizard = $char['isWizard'] ?? false;
                     $charLabel = $char['label'] ?? '';
-                    $profileTitle = $charLabel ? htmlspecialchars($charLabel) : htmlspecialchars($char['name']) . ' &mdash; ' . strtoupper($charServer);
+                    $profileTitle = $charLabel ? htmlspecialchars($charLabel) : htmlspecialchars(ucfirst($char['name']));
                 ?>
                     <li class="character-item" data-id="<?= htmlspecialchars($char['id']) ?>" data-server="<?= $charServer ?>" data-wizard="<?= $charIsWizard ? '1' : '0' ?>" draggable="true">
                         <div class="character-header" onclick="selectCharacter('<?= $char['id'] ?>')">
@@ -596,6 +608,7 @@ if (in_array($username, $ADMIN_USERS)) {
                             <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
+                            <button class="btn-copy" onclick="duplicateProfile('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();" title="Duplicate this profile">Copy</button>
                             <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();" title="Delete character profile">Delete</button>
                             <button class="btn-select" onclick="selectCharacter('<?= $char['id'] ?>'); event.stopPropagation();">Play</button>
                         </div>
@@ -817,6 +830,27 @@ if (in_array($username, $ADMIN_USERS)) {
                 }
             } catch (e) {
                 showMessage('Failed to delete character', true);
+            }
+        }
+
+        async function duplicateProfile(characterId, charName) {
+            const label = prompt('Profile label for the copy (e.g. "Mage", "Jedi"):', '');
+            if (label === null) return;
+
+            try {
+                const res = await fetch('api/characters.php?action=duplicate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ character_id: characterId, label: label.trim(), csrf_token: csrfToken })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    showMessage(data.error || 'Failed to duplicate profile', true);
+                }
+            } catch (e) {
+                showMessage('Failed to duplicate profile', true);
             }
         }
 

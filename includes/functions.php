@@ -509,6 +509,60 @@ function renameCharacter(string $userId, string $characterId, string $newName): 
 }
 
 /**
+ * Duplicate a character profile (copies triggers, aliases, tickers, preferences)
+ */
+function duplicateCharacter(string $userId, string $sourceId, string $label = ''): ?array {
+    $source = getCharacter($userId, $sourceId);
+    if (!$source) return null;
+
+    $newId = generateId();
+    $newPath = getCharacterDataPath($userId, $newId);
+
+    if (!is_dir($newPath)) {
+        mkdir($newPath, 0755, true);
+    }
+
+    $newChar = [
+        'id' => $newId,
+        'name' => $source['name'],
+        'label' => $label,
+        'password' => $source['password'] ?? '',
+        'server' => $source['server'] ?? '3k',
+        'created_at' => date('c')
+    ];
+
+    // Add to characters list
+    $characters = loadJsonFile(getCharactersListPath($userId));
+    $characters[] = $newChar;
+    saveJsonFile(getCharactersListPath($userId), $characters);
+
+    // Copy data files from source
+    $sourcePath = getCharacterDataPath($userId, $sourceId);
+    $filesToCopy = ['triggers.json', 'aliases.json', 'tickers.json', 'preferences.json', 'classes.json', 'mip_conditions.json'];
+    foreach ($filesToCopy as $file) {
+        $src = $sourcePath . '/' . $file;
+        if (file_exists($src)) {
+            copy($src, $newPath . '/' . $file);
+        }
+    }
+
+    // Copy scripts directory if it exists
+    $scriptsDir = $sourcePath . '/scripts';
+    if (is_dir($scriptsDir)) {
+        $newScriptsDir = $newPath . '/scripts';
+        mkdir($newScriptsDir, 0755, true);
+        foreach (glob($scriptsDir . '/*') as $script) {
+            copy($script, $newScriptsDir . '/' . basename($script));
+        }
+    }
+
+    // Update global character index
+    updateCharacterIndex($userId, $newId, $source['name'], $source['server'] ?? '3k');
+
+    return $newChar;
+}
+
+/**
  * Update character profile label (e.g. "Mage", "Jedi")
  */
 function updateCharacterLabel(string $userId, string $characterId, string $label): bool {
