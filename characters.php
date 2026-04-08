@@ -9,6 +9,12 @@ require_once __DIR__ . '/includes/functions.php';
 initSession();
 requireAuth();
 
+// Guests have no profiles — send them to the login page
+if (isGuest()) {
+    header('Location: index.php');
+    exit;
+}
+
 $userId = getCurrentUserId();
 $username = getCurrentUsername();
 $characters = getCharacters($userId);

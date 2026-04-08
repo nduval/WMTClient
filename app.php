@@ -158,7 +158,7 @@ setcookie($tokenCookieName, $wsToken, [
                         <?= htmlspecialchars(ucfirst($characterName)) ?> ▾
                     </button>
                     <div class="character-menu" id="character-menu">
-                        <a href="characters.php">Character Selection</a>
+                        <a href="<?= $isGuest ? 'index.php' : 'characters.php' ?>">Character Selection</a>
                         <div class="menu-divider"></div>
                         <button onclick="wmtClient.reconnect()">Reconnect</button>
                         <button onclick="wmtClient.disconnect()">Disconnect</button>
