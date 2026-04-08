@@ -142,18 +142,13 @@ if (in_array($username, $ADMIN_USERS)) {
             background: #1a1a1a;
             border: 1px solid #333;
             border-radius: 8px;
-            padding: 15px 20px;
-            margin-bottom: 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-            transition: all 0.2s;
+            margin-bottom: 12px;
+            overflow: hidden;
+            transition: border-color 0.2s;
         }
 
         .character-item:hover {
             border-color: #00ff00;
-            background: #222;
         }
 
         .character-item.dragging {
@@ -167,13 +162,25 @@ if (in_array($username, $ADMIN_USERS)) {
             background: #1a2a1a;
         }
 
+        .character-header {
+            background: #222;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+
+        .character-header:hover {
+            background: #282828;
+        }
+
         .drag-handle {
             cursor: grab;
-            padding: 5px 10px;
             color: #555;
-            font-size: 16px;
+            font-size: 14px;
             user-select: none;
-            margin-right: 10px;
+            flex-shrink: 0;
         }
 
         .drag-handle:hover {
@@ -184,29 +191,50 @@ if (in_array($username, $ADMIN_USERS)) {
             cursor: grabbing;
         }
 
-        .character-info {
-            display: flex;
-            align-items: center;
-        }
-
         .character-name {
             font-size: 18px;
+            font-weight: bold;
             color: #00ff00;
         }
 
-        .character-created {
-            font-size: 12px;
-            color: #666;
+        .character-label {
+            color: #999;
+            font-size: 0.85em;
+        }
+
+        .character-header .server-badge {
+            margin-left: auto;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .server-badge.is-3k {
+            background: rgba(0, 255, 0, 0.15);
+            color: #00ff00;
+        }
+
+        .server-badge.is-3s {
+            background: rgba(102, 153, 255, 0.15);
+            color: #6699ff;
         }
 
         .character-actions {
+            padding: 10px 16px;
             display: flex;
-            gap: 10px;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
         .character-actions button {
-            padding: 5px 10px;
+            padding: 6px 12px;
             font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
         }
 
         .btn-select {
@@ -214,9 +242,8 @@ if (in_array($username, $ADMIN_USERS)) {
             color: #000;
             border: none;
             padding: 8px 20px;
-            border-radius: 4px;
-            cursor: pointer;
             font-weight: bold;
+            margin-left: auto;
         }
 
         .btn-select:hover {
@@ -226,27 +253,23 @@ if (in_array($username, $ADMIN_USERS)) {
         .btn-delete {
             background: transparent;
             color: #ff6666;
-            border: 1px solid #ff6666;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
+            border: 1px solid #444;
         }
 
         .btn-delete:hover {
+            border-color: #ff6666;
             background: #ff6666;
             color: #000;
         }
 
-        .btn-rename {
+        .btn-edit {
             background: transparent;
             color: #6699ff;
-            border: 1px solid #6699ff;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
+            border: 1px solid #444;
         }
 
-        .btn-rename:hover {
+        .btn-edit:hover {
+            border-color: #6699ff;
             background: #6699ff;
             color: #000;
         }
@@ -254,26 +277,35 @@ if (in_array($username, $ADMIN_USERS)) {
         .btn-password {
             background: transparent;
             color: #ffaa00;
-            border: 1px solid #ffaa00;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
+            border: 1px solid #444;
             font-size: 14px;
         }
 
         .btn-password:hover {
+            border-color: #ffaa00;
             background: #ffaa00;
             color: #000;
         }
 
         .btn-password.has-password {
             color: #00ff00;
-            border-color: #00ff00;
+            border-color: #444;
         }
 
         .btn-password.has-password:hover {
             background: #00ff00;
+            border-color: #00ff00;
             color: #000;
+        }
+
+        .character-footer {
+            padding: 6px 16px;
+            border-top: 1px solid #2a2a2a;
+            font-size: 11px;
+            color: #555;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .new-character {
@@ -472,30 +504,12 @@ if (in_array($username, $ADMIN_USERS)) {
                 line-height: 1.6;
             }
 
-            .character-item {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 12px;
-                padding: 12px 15px;
-            }
-
             .character-name {
                 font-size: 16px;
             }
 
-            .character-info {
-                flex: 1;
-            }
-
-            .drag-handle {
-                padding: 10px 12px;
-                font-size: 18px;
-            }
-
             .character-actions {
-                width: 100%;
-                flex-wrap: wrap;
-                gap: 8px;
+                gap: 6px;
             }
 
             .character-actions button {
@@ -503,8 +517,7 @@ if (in_array($username, $ADMIN_USERS)) {
             }
 
             .btn-select {
-                flex: 1;
-                min-width: 80px;
+                min-width: 60px;
             }
 
             .new-character-form {
@@ -519,17 +532,6 @@ if (in_array($username, $ADMIN_USERS)) {
 
             .new-character-form button {
                 width: 100% !important;
-            }
-        }
-
-        @media (max-width: 400px) {
-            .character-actions {
-                justify-content: space-between;
-            }
-
-            .btn-rename, .btn-delete {
-                font-size: 11px;
-                padding: 6px 8px;
             }
         }
     </style>
@@ -560,32 +562,35 @@ if (in_array($username, $ADMIN_USERS)) {
                     $charServer = $char['server'] ?? '3k';
                     $charIsWizard = $char['isWizard'] ?? false;
                     $charLabel = $char['label'] ?? '';
+                    $displayName = htmlspecialchars($char['name']);
+                    if ($charLabel) $displayName .= ' <span class="character-label">&mdash; ' . htmlspecialchars($charLabel) . '</span>';
+                    if ($charIsWizard) $displayName .= ' <span style="color: #ffcc00;">★</span>';
                 ?>
                     <li class="character-item" data-id="<?= htmlspecialchars($char['id']) ?>" data-server="<?= $charServer ?>" data-wizard="<?= $charIsWizard ? '1' : '0' ?>" draggable="true">
-                        <div class="character-info">
-                            <span class="drag-handle" title="Drag to reorder">&#9776;</span>
-                            <div>
-                                <div class="character-name"><?= htmlspecialchars($char['name']) ?><?php if ($charLabel): ?> <span style="color: #aaa; font-size: 0.8em;">&mdash; <?= htmlspecialchars($charLabel) ?></span><?php endif; ?><?php if ($charIsWizard): ?> <span style="color: #ffcc00;">★</span><?php endif; ?></div>
-                                <div class="character-created">Created <?= date('M j, Y', strtotime($char['created_at'])) ?></div>
-                            </div>
+                        <div class="character-header" onclick="selectCharacter('<?= $char['id'] ?>')">
+                            <span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation();">&#9776;</span>
+                            <span class="character-name"><?= $displayName ?></span>
+                            <span class="server-badge is-<?= $charServer ?>"><?= strtoupper($charServer) ?></span>
                         </div>
                         <div class="character-actions">
-                            <span class="server-toggle <?= $charServer === '3s' ? 'is-3s' : '' ?>" onclick="toggleServer('<?= $char['id'] ?>', '<?= $charServer ?>'); event.stopPropagation();" title="Click to switch server">
+                            <span class="server-toggle <?= $charServer === '3s' ? 'is-3s' : '' ?>" onclick="toggleServer('<?= $char['id'] ?>', '<?= $charServer ?>'); event.stopPropagation();" title="Switch server">
                                 <span class="server-option <?= $charServer === '3k' ? 'active' : '' ?>">3K</span>
                                 <span class="server-option <?= $charServer === '3s' ? 'active' : '' ?>">3S</span>
                             </span>
                             <?php if ($isAccountWizard): ?>
-                            <button class="btn-wizard <?= $charIsWizard ? 'is-wizard' : '' ?>" onclick="toggleCharacterWizard('<?= $char['id'] ?>', <?= $charIsWizard ? 'true' : 'false' ?>); event.stopPropagation();" title="<?= $charIsWizard ? 'Wizard session enabled - click to disable' : 'Enable wizard session (no timeout)' ?>">
+                            <button class="btn-wizard <?= $charIsWizard ? 'is-wizard' : '' ?>" onclick="toggleCharacterWizard('<?= $char['id'] ?>', <?= $charIsWizard ? 'true' : 'false' ?>); event.stopPropagation();" title="<?= $charIsWizard ? 'Wizard session enabled' : 'Enable wizard session' ?>">
                                 <?= $charIsWizard ? '★Wiz' : '☆Wiz' ?>
                             </button>
                             <?php endif; ?>
-                            <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved - click to change' : 'Set password for auto-login' ?>">
+                            <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
-                            <button class="btn-rename" onclick="editLabel('<?= $char['id'] ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();">Label</button>
-                            <button class="btn-rename" onclick="renameCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Rename</button>
+                            <button class="btn-edit" onclick="editProfile('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();">Edit</button>
                             <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Delete</button>
                             <button class="btn-select" onclick="selectCharacter('<?= $char['id'] ?>'); event.stopPropagation();">Play</button>
+                        </div>
+                        <div class="character-footer">
+                            <span>Created <?= date('M j, Y', strtotime($char['created_at'])) ?></span>
                         </div>
                     </li>
                 <?php endforeach; ?>
@@ -694,25 +699,41 @@ if (in_array($username, $ADMIN_USERS)) {
             return active ? active.dataset.server : '3k';
         }
 
-        async function editLabel(characterId, currentLabel) {
-            const label = prompt('Profile label (e.g. "Mage", "Jedi"). Leave empty to remove:', currentLabel);
-            if (label === null) return;
+        async function editProfile(characterId, currentName, currentLabel) {
+            const newName = prompt('Character name:', currentName);
+            if (newName === null) return;
+            const trimName = newName.trim();
+            if (!trimName) { showMessage('Character name cannot be empty', true); return; }
 
-            try {
-                const res = await fetch('api/characters.php?action=set_label', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ character_id: characterId, label: label.trim(), csrf_token: csrfToken })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    window.location.reload();
-                } else {
-                    showMessage(data.error || 'Failed to update label', true);
-                }
-            } catch (e) {
-                showMessage('Failed to update label', true);
+            const newLabel = prompt('Profile label (e.g. "Mage", "Jedi"). Leave empty for none:', currentLabel);
+            if (newLabel === null) return;
+
+            let ok = true;
+            if (trimName !== currentName) {
+                try {
+                    const res = await fetch('api/characters.php?action=rename', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ character_id: characterId, name: trimName, csrf_token: csrfToken })
+                    });
+                    const data = await res.json();
+                    if (!data.success) { showMessage(data.error || 'Failed to rename', true); ok = false; }
+                } catch (e) { showMessage('Failed to rename', true); ok = false; }
             }
+
+            if (ok && newLabel.trim() !== currentLabel) {
+                try {
+                    const res = await fetch('api/characters.php?action=set_label', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ character_id: characterId, label: newLabel.trim(), csrf_token: csrfToken })
+                    });
+                    const data = await res.json();
+                    if (!data.success) { showMessage(data.error || 'Failed to update label', true); ok = false; }
+                } catch (e) { showMessage('Failed to update label', true); ok = false; }
+            }
+
+            if (ok) window.location.reload();
         }
 
         async function createCharacter(e) {
@@ -805,30 +826,7 @@ if (in_array($username, $ADMIN_USERS)) {
             }
         }
 
-        async function renameCharacter(characterId, currentName) {
-            const newName = prompt('Enter new name:', currentName);
-            if (!newName || newName.trim() === currentName) return;
-
-            try {
-                const res = await fetch('api/characters.php?action=rename', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        character_id: characterId,
-                        name: newName.trim(),
-                        csrf_token: csrfToken
-                    })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    window.location.reload();
-                } else {
-                    showMessage(data.error || 'Failed to rename character', true);
-                }
-            } catch (e) {
-                showMessage('Failed to rename character', true);
-            }
-        }
+        // renameCharacter removed — folded into editProfile()
 
         async function setPassword(characterId) {
             const password = prompt('Enter MUD password for auto-login (leave empty to remove):');
