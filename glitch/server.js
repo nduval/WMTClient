@@ -42,6 +42,122 @@ let lastFlushedIndex = 0;
 let flushInProgress = false;
 const LOG_FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// ==================== IP Ban System ====================
+const IP_BANS_FILE = path.join(__dirname, 'ip_bans.json');
+
+// Load IP bans from disk
+function loadIpBans() {
+  try {
+    if (fs.existsSync(IP_BANS_FILE)) {
+      return JSON.parse(fs.readFileSync(IP_BANS_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('Failed to load IP bans:', e.message);
+  }
+  return [];
+}
+
+// Save IP bans to disk
+function saveIpBans(bans) {
+  try {
+    fs.writeFileSync(IP_BANS_FILE, JSON.stringify(bans, null, 2));
+    ipBans = bans;
+    return true;
+  } catch (e) {
+    console.error('Failed to save IP bans:', e.message);
+    return false;
+  }
+}
+
+// Check if IP matches a CIDR range
+function ipMatchesCidr(ip, cidr) {
+  const parts = cidr.split('/');
+  if (parts.length !== 2) return false;
+  const subnetLong = ip2long(parts[0]);
+  const ipLong = ip2long(ip);
+  if (subnetLong === null || ipLong === null) return false;
+  const bits = parseInt(parts[1], 10);
+  if (isNaN(bits) || bits < 0 || bits > 32) return false;
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  return (ipLong & mask) === (subnetLong & mask);
+}
+
+// Convert dotted IP to 32-bit integer
+function ip2long(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let result = 0;
+  for (let i = 0; i < 4; i++) {
+    const n = parseInt(parts[i], 10);
+    if (isNaN(n) || n < 0 || n > 255) return null;
+    result = (result * 256) + n;
+  }
+  return result >>> 0;
+}
+
+// ASN cache: ip -> { asn, fetched_at }
+const asnCache = new Map();
+const ASN_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Look up ASN for an IP (cached, async)
+async function getIpAsn(ip) {
+  const cached = asnCache.get(ip);
+  if (cached && (Date.now() - cached.fetched_at) < ASN_CACHE_TTL) {
+    return cached.asn;
+  }
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const req = https.get(`https://ipinfo.io/${ip}/json`, { timeout: 3000 }, (res) => {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          try { resolve(JSON.parse(body)); }
+          catch (e) { reject(e); }
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    });
+    // org field is like "AS12345 Company Name"
+    const asn = data.org ? data.org.split(' ')[0] : null;
+    if (asn) {
+      asnCache.set(ip, { asn, fetched_at: Date.now() });
+    }
+    return asn;
+  } catch (e) {
+    console.error('ASN lookup failed for', ip, e.message);
+    return null;
+  }
+}
+
+// Check if an IP is banned. Returns { banned: true, rule: {...} } or { banned: false }
+async function checkIpBan(ip) {
+  for (const ban of ipBans) {
+    if (ban.type === 'ip' && ban.value === ip) {
+      return { banned: true, rule: ban };
+    }
+    if (ban.type === 'cidr' && ipMatchesCidr(ip, ban.value)) {
+      return { banned: true, rule: ban };
+    }
+  }
+  // Only do ASN lookup if there are ASN bans configured
+  const asnBans = ipBans.filter(b => b.type === 'asn');
+  if (asnBans.length > 0) {
+    const asn = await getIpAsn(ip);
+    if (asn) {
+      for (const ban of asnBans) {
+        // Match "AS12345" case-insensitively
+        if (ban.value.toUpperCase() === asn.toUpperCase()) {
+          return { banned: true, rule: ban };
+        }
+      }
+    }
+  }
+  return { banned: false };
+}
+
+let ipBans = loadIpBans();
+
 // ==================== Bridge Mode ====================
 // When BRIDGE_URL is set, MUD TCP connections go through bridge.js
 // which holds them across server.js restarts (zero-downtime deploys).
@@ -1817,6 +1933,126 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true, sessions: result }));
 
+  } else if (parsedUrl.pathname === '/ip-bans' && req.method === 'GET') {
+    // Admin: list IP bans
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, bans: ipBans }));
+
+  } else if (parsedUrl.pathname === '/ip-bans' && req.method === 'POST') {
+    // Admin: add IP ban
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 10000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const type = data.type; // 'ip', 'cidr', 'asn'
+        const value = (data.value || '').trim();
+        const reason = (data.reason || '').trim();
+
+        if (!['ip', 'cidr', 'asn'].includes(type)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Type must be ip, cidr, or asn' }));
+          return;
+        }
+        if (!value) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Value is required' }));
+          return;
+        }
+
+        // Validate format
+        if (type === 'cidr' && !value.includes('/')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'CIDR must include /prefix (e.g. 10.0.0.0/8)' }));
+          return;
+        }
+        if (type === 'asn' && !value.toUpperCase().startsWith('AS')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'ASN must start with AS (e.g. AS12345)' }));
+          return;
+        }
+
+        const ban = {
+          type,
+          value: type === 'asn' ? value.toUpperCase() : value,
+          reason,
+          banned_at: new Date().toISOString(),
+          banned_by: 'admin'
+        };
+
+        const bans = loadIpBans();
+        bans.push(ban);
+        if (saveIpBans(bans)) {
+          logSessionEvent('IP_BAN_ADDED', { type, value: ban.value, reason });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, ban, total: bans.length }));
+        } else {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Failed to save' }));
+        }
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+      }
+    });
+    return; // Don't end response yet — waiting for body
+
+  } else if (parsedUrl.pathname === '/ip-bans' && req.method === 'DELETE') {
+    // Admin: remove IP ban by index or value
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 10000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const bans = loadIpBans();
+        let removed = null;
+
+        if (data.index !== undefined) {
+          const idx = parseInt(data.index, 10);
+          if (idx >= 0 && idx < bans.length) {
+            removed = bans.splice(idx, 1)[0];
+          }
+        } else if (data.value) {
+          const idx = bans.findIndex(b => b.value === data.value);
+          if (idx >= 0) {
+            removed = bans.splice(idx, 1)[0];
+          }
+        }
+
+        if (removed) {
+          saveIpBans(bans);
+          logSessionEvent('IP_BAN_REMOVED', { type: removed.type, value: removed.value });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, removed, total: bans.length }));
+        } else {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Ban not found' }));
+        }
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+      }
+    });
+    return;
+
   } else {
     res.writeHead(404);
     res.end('Not found');
@@ -3430,7 +3666,7 @@ wss.on('connection', (ws, req) => {
   let authenticated = false;
 
   // Handle messages
-  ws.on('message', (message) => {
+  ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
 
@@ -3445,6 +3681,25 @@ wss.on('connection', (ws, req) => {
 
           if (!token || token.length !== 64) {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid auth token' }));
+            ws.close();
+            return;
+          }
+
+          // Check IP ban
+          const banCheck = await checkIpBan(clientIp);
+          if (banCheck.banned) {
+            logSessionEvent('IP_BANNED_CONNECTION', {
+              ip: clientIp,
+              user: userId,
+              char: characterName || characterId,
+              banType: banCheck.rule.type,
+              banValue: banCheck.rule.value,
+              banReason: banCheck.rule.reason || ''
+            });
+            ws.send(JSON.stringify({
+              type: 'system',
+              message: 'This IP has been suspended. Please reach out to Elminster for details.'
+            }));
             ws.close();
             return;
           }
