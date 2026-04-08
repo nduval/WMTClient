@@ -5,10 +5,14 @@
 
 require_once __DIR__ . '/includes/auth.php';
 
-// Redirect if already logged in
-if (isLoggedIn()) {
+// Redirect if already logged in (but not guests — they need to see the login page)
+if (isLoggedIn() && !isGuest()) {
     header('Location: characters.php');
     exit;
+}
+// If guest, destroy their session so they start fresh
+if (isGuest()) {
+    endUserSession();
 }
 
 // Stealth domain detection
