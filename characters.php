@@ -577,6 +577,7 @@ if (in_array($username, $ADMIN_USERS)) {
                         <div class="character-header" onclick="selectCharacter('<?= $char['id'] ?>')">
                             <span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation();">&#9776;</span>
                             <span class="profile-title"><?= $profileTitle ?><?php if ($charIsWizard): ?> <span style="color: #ffcc00;">★</span><?php endif; ?></span>
+                            <span class="char-rename-btn" onclick="editLabel('<?= $char['id'] ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();" title="Edit profile title">&#9998;</span>
                         </div>
                         <div class="character-actions">
                             <span class="char-name">
@@ -595,7 +596,6 @@ if (in_array($username, $ADMIN_USERS)) {
                             <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
-                            <button class="btn-edit" onclick="editLabel('<?= $char['id'] ?>', '<?= htmlspecialchars($charLabel, ENT_QUOTES) ?>'); event.stopPropagation();">Label</button>
                             <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Delete</button>
                             <button class="btn-select" onclick="selectCharacter('<?= $char['id'] ?>'); event.stopPropagation();">Play</button>
                         </div>
