@@ -227,6 +227,17 @@ function getProfilePath(string $userId): string {
 }
 
 /**
+ * Update a single field in a user's profile.json
+ */
+function updateUserProfileField(string $userId, string $field, $value): bool {
+    $path = getProfilePath($userId);
+    $profile = loadJsonFile($path);
+    if (empty($profile)) return false;
+    $profile[$field] = $value;
+    return saveJsonFile($path, $profile);
+}
+
+/**
  * Get user's characters list file path
  */
 function getCharactersListPath(string $userId): string {
@@ -279,7 +290,7 @@ function getMipConditionsPath(string $userId, string $characterId): string {
  * Initialize user data directory with default files
  * Stores password hash in profile for recovery purposes
  */
-function initializeUserData(string $userId, string $username, string $passwordHash = '', string $email = ''): void {
+function initializeUserData(string $userId, string $username, string $passwordHash = '', string $email = '', string $ip = ''): void {
     $userPath = getUserDataPath($userId);
 
     if (!is_dir($userPath)) {
@@ -303,6 +314,10 @@ function initializeUserData(string $userId, string $username, string $passwordHa
     }
     if ($email) {
         $profile['email'] = $email;
+    }
+    if ($ip) {
+        $profile['registered_ip'] = $ip;
+        $profile['last_ip'] = $ip;
     }
     saveJsonFile(getProfilePath($userId), $profile);
 
@@ -770,6 +785,18 @@ function requireAuth(): void {
         @file_put_contents($logFile, "[$timestamp] requireAuth DENIED: no user_id in session\n", FILE_APPEND | LOCK_EX);
         if (strpos($_SERVER['REQUEST_URI'], '/api/') !== false) {
             errorResponse('Authentication required', 401);
+        } else {
+            header('Location: index.php');
+            exit;
+        }
+    }
+
+    // Check if user is banned (catches mid-session bans)
+    if (isUserBanned($_SESSION['user_id'])) {
+        @file_put_contents($logFile, "[$timestamp] requireAuth DENIED (banned): user_id={$_SESSION['user_id']}\n", FILE_APPEND | LOCK_EX);
+        session_destroy();
+        if (strpos($_SERVER['REQUEST_URI'], '/api/') !== false) {
+            errorResponse('This account has been suspended.', 403);
         } else {
             header('Location: index.php');
             exit;

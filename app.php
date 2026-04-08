@@ -73,7 +73,8 @@ $wsToken = $_SESSION['ws_tokens'][$characterId];
 $tokenShort = substr($wsToken, 0, 8) . '...';
 $hadCookie = isset($_COOKIE[$tokenCookieName]) ? 'yes' : 'no';
 $cookieLen = isset($_COOKIE[$tokenCookieName]) ? strlen($_COOKIE[$tokenCookieName]) : 0;
-authLog("TOKEN: user=$username char=$characterName token=$tokenShort source=$tokenSource hadCookie=$hadCookie cookieLen=$cookieLen wizard=" . ($isWizard ? 'yes' : 'no'));
+$clientIp = getClientIp();
+authLog("TOKEN: user=$username char=$characterName token=$tokenShort source=$tokenSource hadCookie=$hadCookie cookieLen=$cookieLen wizard=" . ($isWizard ? 'yes' : 'no') . " ip=$clientIp");
 
 // Set/refresh the token cookie (extends lifetime on each visit)
 // 30-day lifetime ensures wizard sessions can persist through long idle periods

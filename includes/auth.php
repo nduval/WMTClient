@@ -20,6 +20,22 @@ function authLog(string $message): void {
 }
 
 /**
+ * Get the client's real IP address (handles proxies)
+ */
+function getClientIp(): string {
+    // Check common proxy headers
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        // Take the first IP (original client)
+        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+        return trim($ips[0]);
+    }
+    if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+        return trim($_SERVER['HTTP_X_REAL_IP']);
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+}
+
+/**
  * Get users index file path
  */
 function getUsersIndexPath(): string {
@@ -187,7 +203,9 @@ function registerUser(string $username, string $password, string $email): array 
 
     // Initialize user data FIRST (creates directory and profile with password hash)
     // This ensures we have recovery data even if users_index save fails
-    initializeUserData($userId, $username, $hashedPassword, $email);
+    $ip = getClientIp();
+    authLog("REGISTER: user=$username, userId=$userId, email=$email, ip=$ip");
+    initializeUserData($userId, $username, $hashedPassword, $email, $ip);
 
     // Add to users index
     $users = loadUsersIndex();
@@ -341,7 +359,41 @@ function authenticateUser(string $username, string $password): array {
         return ['success' => false, 'error' => 'Invalid username or password'];
     }
 
+    // Check if user is banned
+    if (isUserBanned($user['id'])) {
+        $ip = getClientIp();
+        authLog("LOGIN BLOCKED (banned): user=$username, userId={$user['id']}, ip=$ip");
+        return ['success' => false, 'error' => 'This account has been suspended.'];
+    }
+
     return ['success' => true, 'user_id' => $user['id'], 'username' => $user['username']];
+}
+
+/**
+ * Check if a user is banned
+ */
+function isUserBanned(string $userId): bool {
+    $profile = loadJsonFile(getProfilePath($userId));
+    return !empty($profile['banned']);
+}
+
+/**
+ * Ban or unban a user
+ */
+function setUserBanned(string $userId, bool $banned, string $reason = ''): bool {
+    $path = getProfilePath($userId);
+    $profile = loadJsonFile($path);
+    if (empty($profile)) return false;
+
+    if ($banned) {
+        $profile['banned'] = true;
+        $profile['banned_at'] = date('c');
+        if ($reason) $profile['ban_reason'] = $reason;
+    } else {
+        unset($profile['banned'], $profile['banned_at'], $profile['ban_reason']);
+    }
+
+    return saveJsonFile($path, $profile);
 }
 
 /**
@@ -388,7 +440,8 @@ function initSession(): void {
  * Start user session
  */
 function startUserSession(string $userId, string $username): void {
-    authLog("LOGIN ATTEMPT: user=$username, userId=$userId");
+    $ip = getClientIp();
+    authLog("LOGIN ATTEMPT: user=$username, userId=$userId, ip=$ip");
 
     initSession();
 
@@ -441,7 +494,11 @@ function startUserSession(string $userId, string $username): void {
 
     // Verify session was saved correctly
     $verifyUserId = $_SESSION['user_id'] ?? 'NOT SET';
-    authLog("LOGIN COMPLETE: user=$username, verified_user_id=$verifyUserId, final_session_id=" . session_id());
+    authLog("LOGIN COMPLETE: user=$username, verified_user_id=$verifyUserId, final_session_id=" . session_id() . ", ip=$ip");
+
+    // Store last IP in user profile
+    updateUserProfileField($userId, 'last_ip', $ip);
+    updateUserProfileField($userId, 'last_login_at', date('c'));
 }
 
 /**

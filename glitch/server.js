@@ -3423,7 +3423,8 @@ function connectToMud(session) {
  * Handle WebSocket connection
  */
 wss.on('connection', (ws, req) => {
-  console.log('New WebSocket connection from:', req.socket.remoteAddress);
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+  console.log('New WebSocket connection from:', clientIp);
 
   let session = null;
   let authenticated = false;
@@ -3670,7 +3671,8 @@ wss.on('connection', (ws, req) => {
               token: token.substring(0, 8),
               user: userId,
               char: characterName || characterId,
-              wizard: isWizard
+              wizard: isWizard,
+              ip: clientIp
             });
             writeSessionLog(session, 'session', { event: 'new', user: userId, char: characterName || characterId });
 

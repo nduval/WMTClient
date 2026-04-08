@@ -136,6 +136,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 break;
 
+            case 'toggle_ban':
+                $targetUserId = $_POST['user_id'] ?? '';
+                $banReason = trim($_POST['ban_reason'] ?? '');
+                if ($targetUserId) {
+                    $profile = loadJsonFile(getProfilePath($targetUserId));
+                    $currentlyBanned = !empty($profile['banned']);
+                    if (setUserBanned($targetUserId, !$currentlyBanned, $banReason)) {
+                        $user = findUserById($targetUserId);
+                        $uname = $user['username'] ?? $targetUserId;
+                        $message = ($currentlyBanned ? 'Unbanned' : 'Banned') . ' user: ' . $uname;
+                        if (!$currentlyBanned) {
+                            authLog("ADMIN BAN: user=$uname, userId=$targetUserId, reason=$banReason, by=$username");
+                        } else {
+                            authLog("ADMIN UNBAN: user=$uname, userId=$targetUserId, by=$username");
+                        }
+                        $messageType = 'success';
+                    } else {
+                        $message = 'Failed to update ban status';
+                        $messageType = 'error';
+                    }
+                } else {
+                    $message = 'User ID is required';
+                    $messageType = 'error';
+                }
+                break;
+
             case 'toggle_wizard':
                 $targetUserId = $_POST['user_id'] ?? '';
                 if ($targetUserId) {
@@ -853,6 +879,22 @@ $backups = getBackupFiles();
             color: #000;
         }
 
+        .badge-banned {
+            background: #ff0000;
+            color: #fff;
+        }
+
+        .user-banned {
+            border-color: #ff0000;
+            opacity: 0.7;
+        }
+
+        .user-ip {
+            color: #888;
+            font-size: 11px;
+            font-family: monospace;
+        }
+
         .user-email {
             color: #888;
             font-size: 13px;
@@ -1044,11 +1086,18 @@ $backups = getBackupFiles();
                         $stats = getUserStorageStats($user['id']);
                         $isAdmin = in_array($user['username'], $ADMIN_USERS);
                         $isWizard = $user['isWizard'] ?? false;
+                        $profile = loadJsonFile(getProfilePath($user['id']));
+                        $isBanned = !empty($profile['banned']);
+                        $lastIp = $profile['last_ip'] ?? '';
+                        $registeredIp = $profile['registered_ip'] ?? '';
                     ?>
-                        <div class="user-card" data-user-id="<?= htmlspecialchars($user['id']) ?>">
+                        <div class="user-card <?= $isBanned ? 'user-banned' : '' ?>" data-user-id="<?= htmlspecialchars($user['id']) ?>">
                             <div class="user-row-1">
                                 <div class="user-info">
                                     <span class="user-name"><?= htmlspecialchars($user['username']) ?></span>
+                                    <?php if ($isBanned): ?>
+                                        <span class="badge badge-banned">BANNED</span>
+                                    <?php endif; ?>
                                     <?php if ($isAdmin): ?>
                                         <span class="badge badge-admin">admin</span>
                                     <?php endif; ?>
@@ -1057,6 +1106,9 @@ $backups = getBackupFiles();
                                     <?php endif; ?>
                                     <?php if (!empty($user['email'])): ?>
                                         <span class="user-email"><?= htmlspecialchars($user['email']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($lastIp): ?>
+                                        <span class="user-ip" title="Last IP<?= $registeredIp ? ' (registered from: ' . htmlspecialchars($registeredIp) . ')' : '' ?>"><?= htmlspecialchars($lastIp) ?></span>
                                     <?php endif; ?>
                                 </div>
                                 <div class="user-stats">
@@ -1099,6 +1151,15 @@ $backups = getBackupFiles();
                                         </button>
                                     </form>
                                     <?php if (!$isAdmin): ?>
+                                        <form method="post" style="margin: 0; display: inline;" onsubmit="return <?= $isBanned ? "confirm('Unban this user?')" : "confirmBan(this)" ?>;">
+                                            <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+                                            <input type="hidden" name="action" value="toggle_ban">
+                                            <input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>">
+                                            <input type="hidden" name="ban_reason" value="">
+                                            <button type="submit" class="btn btn-sm <?= $isBanned ? 'btn-warning' : 'btn-danger' ?>" title="<?= $isBanned ? 'Unban user' : 'Ban user' ?>">
+                                                <?= $isBanned ? 'Unban' : 'Ban' ?>
+                                            </button>
+                                        </form>
                                         <button type="button" class="btn btn-danger btn-sm" onclick="showDeleteModal('<?= htmlspecialchars($user['id']) ?>', '<?= htmlspecialchars($user['username']) ?>')">Del</button>
                                     <?php endif; ?>
                                 </div>
@@ -1201,6 +1262,13 @@ $backups = getBackupFiles();
     </div>
 
     <script>
+        function confirmBan(form) {
+            const reason = prompt('Ban reason (optional):');
+            if (reason === null) return false; // cancelled
+            form.querySelector('[name="ban_reason"]').value = reason;
+            return confirm('Ban this user? They will be logged out and unable to log back in.');
+        }
+
         let deleteUsername = '';
 
         function showDeleteModal(userId, username) {
