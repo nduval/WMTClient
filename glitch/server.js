@@ -262,7 +262,7 @@ function logSessionEvent(type, data) {
 // Files: /var/log/wmt/YYYY-MM-DD/CharacterName.jsonl
 
 const LOG_DIR = '/var/log/wmt';
-const LOG_RETENTION_DAYS = 3; // Keep logs on Lightsail for 3 days
+const LOG_RETENTION_DAYS = 7; // Keep logs on Lightsail for 7 days
 const LOG_USER_ID = process.env.LOG_USER_ID || null; // If set, only log this user's sessions
 const _logDirsCreated = new Set();
 
