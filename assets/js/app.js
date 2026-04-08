@@ -6743,7 +6743,8 @@ class WMTClient {
 
             select.innerHTML = others.map(c => {
                 const server = c.server === '3s' ? ' (3S)' : '';
-                return `<option value="${this.escapeHtml(c.id)}">${this.escapeHtml(c.name)}${server}</option>`;
+                const label = c.label ? ` — ${c.label}` : '';
+                return `<option value="${this.escapeHtml(c.id)}">${this.escapeHtml(c.name)}${this.escapeHtml(label)}${server}</option>`;
             }).join('');
         } catch (e) {
             select.innerHTML = '<option value="">Error loading characters</option>';
