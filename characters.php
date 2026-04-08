@@ -203,7 +203,7 @@ if (in_array($username, $ADMIN_USERS)) {
             display: flex;
             align-items: center;
             gap: 4px;
-            margin-right: 4px;
+            min-width: 140px;
         }
 
         .char-rename-btn {
@@ -596,7 +596,7 @@ if (in_array($username, $ADMIN_USERS)) {
                             <button class="btn-password <?= !empty($char['password']) ? 'has-password' : '' ?>" onclick="setPassword('<?= $char['id'] ?>'); event.stopPropagation();" title="<?= !empty($char['password']) ? 'Password saved' : 'Set password for auto-login' ?>">
                                 <?= !empty($char['password']) ? '🔐' : '🔑' ?>
                             </button>
-                            <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();">Delete</button>
+                            <button class="btn-delete" onclick="deleteCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();" title="Delete character profile">Delete</button>
                             <button class="btn-select" onclick="selectCharacter('<?= $char['id'] ?>'); event.stopPropagation();">Play</button>
                         </div>
                         <div class="character-footer">
@@ -799,7 +799,7 @@ if (in_array($username, $ADMIN_USERS)) {
         }
 
         async function deleteCharacter(characterId, characterName) {
-            if (!confirm(`Delete character "${characterName}"? This cannot be undone.`)) {
+            if (!confirm(`Delete the "${characterName}" profile from the client? This removes your saved triggers, aliases, and settings. It does NOT delete the character from the MUD.`)) {
                 return;
             }
 
