@@ -202,6 +202,19 @@ if (in_array($username, $ADMIN_USERS)) {
             font-size: 0.85em;
         }
 
+        .char-rename-btn {
+            color: #555;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 3px;
+            transition: color 0.2s;
+        }
+
+        .char-rename-btn:hover {
+            color: #6699ff;
+        }
+
         .character-header .server-badge {
             margin-left: auto;
             font-size: 11px;
@@ -570,6 +583,7 @@ if (in_array($username, $ADMIN_USERS)) {
                         <div class="character-header" onclick="selectCharacter('<?= $char['id'] ?>')">
                             <span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation();">&#9776;</span>
                             <span class="character-name"><?= $displayName ?></span>
+                            <span class="char-rename-btn" onclick="renameCharacter('<?= $char['id'] ?>', '<?= htmlspecialchars($char['name'], ENT_QUOTES) ?>'); event.stopPropagation();" title="Change character name">&#9998;</span>
                             <span class="server-badge is-<?= $charServer ?>"><?= strtoupper($charServer) ?></span>
                         </div>
                         <div class="character-actions">
@@ -810,7 +824,26 @@ if (in_array($username, $ADMIN_USERS)) {
             }
         }
 
-        // renameCharacter removed — folded into editProfile()
+        async function renameCharacter(characterId, currentName) {
+            const newName = prompt('Character name:', currentName);
+            if (!newName || newName.trim() === currentName) return;
+
+            try {
+                const res = await fetch('api/characters.php?action=rename', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ character_id: characterId, name: newName.trim(), csrf_token: csrfToken })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    showMessage(data.error || 'Failed to rename', true);
+                }
+            } catch (e) {
+                showMessage('Failed to rename', true);
+            }
+        }
 
         async function setPassword(characterId) {
             const password = prompt('Enter MUD password for auto-login (leave empty to remove):');
