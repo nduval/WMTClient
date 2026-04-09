@@ -3961,6 +3961,7 @@ wss.on('connection', (ws, req) => {
             session.isWizard = isWizard;
             session.clientIp = clientIp;
             sessions.set(token, session);
+            sendAuditLog('login', session, clientIp);
 
             logSessionEvent('SESSION_NEW', {
               token: token.substring(0, 8),

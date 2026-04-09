@@ -31,10 +31,7 @@ $isWizard = $isGuest ? false : isCharacterWizard($userId, $characterId);
 $isAdmin = in_array($username, ['nathan']);
 if ($isAdmin) $isWizard = true;  // Admin accounts get no session timeout
 
-// Log login to audit CSV
-if (!$isGuest) {
-    auditLog('login', $username, $characterName, $characterServer, getClientIp());
-}
+// Login audit is handled by server.js (knows login vs reconnect)
 
 // Determine MUD host/port based on character server
 $mudHost = MUD_HOST;
