@@ -114,9 +114,6 @@ if (in_array($username, $ADMIN_USERS)) {
         }
 
         .characters-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
             margin-bottom: 30px;
         }
 
@@ -127,7 +124,8 @@ if (in_array($username, $ADMIN_USERS)) {
 
         .user-info {
             color: #888;
-            font-size: 14px;
+            font-size: 13px;
+            margin-bottom: 10px;
         }
 
         .user-info a {
