@@ -620,6 +620,40 @@ const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
 const PHP_SESSIONS_URL = 'https://client.wemudtogether.com/api/persistent_sessions.php';
 const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
 const PHP_DISCORD_PROXY_URL = 'https://client.wemudtogether.com/api/discord_proxy.php';
+const PHP_AUDIT_LOG_URL = 'https://client.wemudtogether.com/api/audit_log.php';
+
+/**
+ * Send audit log entry to IONOS (fire and forget)
+ */
+function sendAuditLog(activity, session, ip) {
+  if (!ADMIN_KEY) return;
+  const payload = JSON.stringify({
+    activity,
+    user_id: session.userId || '',
+    character: session.characterName || '',
+    realm: session.targetHost === '3scapes.org' ? '3s' : '3k',
+    ip: ip || session.clientIp || ''
+  });
+  try {
+    const urlObj = new URL(PHP_AUDIT_LOG_URL);
+    const req = https.request({
+      hostname: urlObj.hostname,
+      port: 443,
+      path: urlObj.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Admin-Key': ADMIN_KEY,
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 3000
+    });
+    req.on('error', () => {});
+    req.on('timeout', () => req.destroy());
+    req.write(payload);
+    req.end();
+  } catch (e) {}
+}
 const PHP_LOGS_URL = 'https://client.wemudtogether.com/api/server_logs.php';
 
 /**
@@ -2742,6 +2776,7 @@ function closeSession(session, reason) {
     wizard: session.isWizard
   });
   writeSessionLog(session, 'session', { event: 'close', reason });
+  sendAuditLog('disconnect', session);
 
   // Clear all tickers
   clearAllTickers(session);
@@ -3743,6 +3778,8 @@ wss.on('connection', (ws, req) => {
               oldSession.disconnectedAt = null;
               oldSession.explicitDisconnect = false;
               oldSession.isWizard = isWizard;
+              oldSession.clientIp = clientIp;
+              sendAuditLog('reconnect', oldSession, clientIp);
               oldSession._bridgeModeInit = false;  // Clear stale flag
               oldSession._pendingBridgeResume = false;
               if (oldSession.timeoutHandle) {
@@ -3844,6 +3881,8 @@ wss.on('connection', (ws, req) => {
             session.disconnectedAt = null;
             session.explicitDisconnect = false;
             session.isWizard = isWizard;  // Update wizard status on reconnect
+            session.clientIp = clientIp;
+            sendAuditLog('reconnect', session, clientIp);
             session._bridgeModeInit = false;  // Clear stale flag — prevents duplicate session_new
             session._pendingBridgeResume = false;
             if (session.timeoutHandle) {
@@ -3920,6 +3959,7 @@ wss.on('connection', (ws, req) => {
             session.characterId = characterId;
             session.characterName = characterName;
             session.isWizard = isWizard;
+            session.clientIp = clientIp;
             sessions.set(token, session);
 
             logSessionEvent('SESSION_NEW', {

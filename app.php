@@ -33,29 +33,7 @@ if ($isAdmin) $isWizard = true;  // Admin accounts get no session timeout
 
 // Log login to audit CSV
 if (!$isGuest) {
-    $logDir = __DIR__ . '/data/logs';
-    if (!is_dir($logDir)) @mkdir($logDir, 0755, true);
-    $csvFile = $logDir . '/login_audit.csv';
-    if (!file_exists($csvFile)) {
-        @file_put_contents($csvFile, "timestamp,account,character,realm,ip,country,city,asn\n", LOCK_EX);
-    }
-    $ip = getClientIp();
-    $country = $city = $asn = '';
-    $ctx = stream_context_create(['http' => ['timeout' => 2]]);
-    $ipData = @file_get_contents("https://ipinfo.io/{$ip}/json", false, $ctx);
-    if ($ipData) {
-        $info = json_decode($ipData, true);
-        if ($info) {
-            $country = $info['country'] ?? '';
-            $city = $info['city'] ?? '';
-            $asn = $info['org'] ?? '';
-            // Strip commas from ASN org name for CSV safety
-            $asn = str_replace(',', ' ', $asn);
-            $city = str_replace(',', ' ', $city);
-        }
-    }
-    $csvLine = date('c') . ',' . $username . ',' . $characterName . ',' . strtoupper($characterServer) . ',' . $ip . ',' . $country . ',' . $city . ',' . $asn . "\n";
-    @file_put_contents($csvFile, $csvLine, FILE_APPEND | LOCK_EX);
+    auditLog('login', $username, $characterName, $characterServer, getClientIp());
 }
 
 // Determine MUD host/port based on character server

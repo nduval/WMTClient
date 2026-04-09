@@ -4,6 +4,7 @@
  */
 
 require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
 
 // Initialize session with proper cookie path
 initSession();
@@ -147,6 +148,12 @@ switch ($action) {
         break;
 
     case 'logout':
+        $logoutUser = getCurrentUsername() ?? '';
+        $logoutChar = getCurrentCharacterName() ?? '';
+        $logoutServer = getCurrentCharacterServer() ?? '3k';
+        if ($logoutUser) {
+            auditLog('logout', $logoutUser, $logoutChar, $logoutServer, getClientIp());
+        }
         endUserSession();
         successResponse(['message' => 'Logged out successfully']);
         break;

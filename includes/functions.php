@@ -6,6 +6,36 @@
 require_once __DIR__ . '/../config/config.php';
 
 /**
+ * Append a line to the login audit CSV.
+ * If IP geo data isn't provided, does an inline lookup (adds ~100ms).
+ */
+function auditLog(string $activity, string $account, string $character, string $realm, string $ip, string $country = '', string $city = '', string $asn = ''): void {
+    $logDir = __DIR__ . '/../data/logs';
+    if (!is_dir($logDir)) @mkdir($logDir, 0755, true);
+    $csvFile = $logDir . '/login_audit.csv';
+    if (!file_exists($csvFile)) {
+        @file_put_contents($csvFile, "timestamp,activity,account,character,realm,ip,country,city,asn\n", LOCK_EX);
+    }
+
+    // Enrich IP if geo data not provided
+    if ($ip && !$country && !$asn) {
+        $ctx = stream_context_create(['http' => ['timeout' => 2]]);
+        $ipData = @file_get_contents("https://ipinfo.io/{$ip}/json", false, $ctx);
+        if ($ipData) {
+            $info = json_decode($ipData, true);
+            if ($info) {
+                $country = $info['country'] ?? '';
+                $city = str_replace(',', ' ', $info['city'] ?? '');
+                $asn = str_replace(',', ' ', $info['org'] ?? '');
+            }
+        }
+    }
+
+    $csvLine = date('c') . ',' . $activity . ',' . $account . ',' . $character . ',' . strtoupper($realm) . ',' . $ip . ',' . $country . ',' . $city . ',' . $asn . "\n";
+    @file_put_contents($csvFile, $csvLine, FILE_APPEND | LOCK_EX);
+}
+
+/**
  * Generate a unique ID
  */
 function generateId(): string {
