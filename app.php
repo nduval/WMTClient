@@ -31,6 +31,19 @@ $isWizard = $isGuest ? false : isCharacterWizard($userId, $characterId);
 $isAdmin = in_array($username, ['nathan']);
 if ($isAdmin) $isWizard = true;  // Admin accounts get no session timeout
 
+// Log login to audit CSV
+if (!$isGuest) {
+    $logDir = __DIR__ . '/data/logs';
+    if (!is_dir($logDir)) @mkdir($logDir, 0755, true);
+    $csvFile = $logDir . '/login_audit.csv';
+    if (!file_exists($csvFile)) {
+        @file_put_contents($csvFile, "timestamp,account,character,realm,ip\n", LOCK_EX);
+    }
+    $ip = getClientIp();
+    $csvLine = date('c') . ',' . $username . ',' . $characterName . ',' . strtoupper($characterServer) . ',' . $ip . "\n";
+    @file_put_contents($csvFile, $csvLine, FILE_APPEND | LOCK_EX);
+}
+
 // Determine MUD host/port based on character server
 $mudHost = MUD_HOST;
 $mudPort = MUD_PORT;
