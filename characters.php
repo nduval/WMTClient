@@ -23,6 +23,7 @@ $isAccountWizard = isUserWizard($userId);
 
 // Auto-backup: create daily backup if admin user and >24 hours since last backup
 $ADMIN_USERS = ['nathan'];
+$REPORT_USERS = ['nathan']; // Users who can see the Player Report link
 if (in_array($username, $ADMIN_USERS)) {
     $backupDir = USERS_PATH . '/backups';
     if (!is_dir($backupDir)) {
@@ -566,15 +567,18 @@ if (in_array($username, $ADMIN_USERS)) {
 <body>
     <div class="characters-container">
         <div class="characters-header">
-            <h1>Select Character</h1>
             <div class="user-info">
                 Logged in as <strong><?= htmlspecialchars($username) ?></strong>
                 <?php if (in_array($username, $ADMIN_USERS)): ?>
                     | <a href="admin.php">Admin</a>
                 <?php endif; ?>
+                <?php if (in_array($username, $REPORT_USERS)): ?>
+                    | <a href="report.php">Report</a>
+                <?php endif; ?>
                 | <a href="#" onclick="showChangePassword(); return false;">Change Password</a>
                 | <a href="#" onclick="logout(); return false;">Logout</a>
             </div>
+            <h1>Select Character</h1>
         </div>
 
         <div id="message-area"></div>
