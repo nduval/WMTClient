@@ -23,6 +23,7 @@ IONOS_DEPLOY_FILES = [
     'characters.php',
     'guest.php',
     'admin.php',
+    'report.php',
     'reset-password.php',
     'about.php',
     'solutions.php',
