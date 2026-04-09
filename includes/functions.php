@@ -13,8 +13,28 @@ function auditLog(string $activity, string $account, string $character, string $
     $logDir = __DIR__ . '/../data/logs';
     if (!is_dir($logDir)) @mkdir($logDir, 0755, true);
     $csvFile = $logDir . '/login_audit.csv';
+    $expectedHeader = "timestamp,activity,account,character,realm,ip,country,city,asn";
     if (!file_exists($csvFile)) {
-        @file_put_contents($csvFile, "timestamp,activity,account,character,realm,ip,country,city,asn\n", LOCK_EX);
+        @file_put_contents($csvFile, $expectedHeader . "\n", LOCK_EX);
+    } else {
+        // Migrate old CSV header if needed
+        $firstLine = trim(fgets(fopen($csvFile, 'r')));
+        if ($firstLine && $firstLine !== $expectedHeader && strpos($firstLine, 'activity') === false) {
+            // Old format: insert activity column after timestamp
+            $contents = file_get_contents($csvFile);
+            $lines = explode("\n", $contents);
+            $lines[0] = $expectedHeader;
+            for ($i = 1; $i < count($lines); $i++) {
+                $line = trim($lines[$i]);
+                if ($line === '') continue;
+                // Insert 'login' as activity after the first comma (timestamp)
+                $pos = strpos($line, ',');
+                if ($pos !== false) {
+                    $lines[$i] = substr($line, 0, $pos) . ',login' . substr($line, $pos);
+                }
+            }
+            @file_put_contents($csvFile, implode("\n", $lines));
+        }
     }
 
     // Enrich IP if geo data not provided
