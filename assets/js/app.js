@@ -314,6 +314,9 @@ class WMTClient {
         // Format: { channelName: { sound: bool, hidden: bool, discord: bool, webhookUrl: string } }
         this.channelPrefs = {};
 
+        // Active chat filter (empty string = show all, otherwise only that channel)
+        this.chatFilterChannel = '';
+
         // Current class being filled when reading scripts
         this.currentScriptClass = null;
         // Stack of previously open classes (for TinTin++ push/pop behavior)
@@ -2074,10 +2077,16 @@ class WMTClient {
             line.dataset.channel = channelKey;
             line.innerHTML = message;
             applyChannelColors(line);
+            // Apply active channel filter so new messages obey it
+            if (this.chatFilterChannel && channelKey !== this.chatFilterChannel) {
+                line.classList.add('chat-filtered-hidden');
+            }
             chatOutput.appendChild(line);
 
-            // Auto-scroll to bottom
-            chatOutput.scrollTop = chatOutput.scrollHeight;
+            // Auto-scroll to bottom (only if the line is visible)
+            if (!line.classList.contains('chat-filtered-hidden')) {
+                chatOutput.scrollTop = chatOutput.scrollHeight;
+            }
         }
 
         // Also send to pop-out window if open
@@ -2113,6 +2122,41 @@ class WMTClient {
                 chatWindow.classList.add('has-new');
             }
         }
+    }
+
+    // Rebuild the channel filter dropdown options from the current channelPrefs.
+    // Called on focus so newly-seen channels show up without a page reload.
+    populateChatFilterOptions() {
+        const select = document.getElementById('chat-filter-select');
+        if (!select) return;
+        const current = this.chatFilterChannel || '';
+        const channels = Object.keys(this.channelPrefs).sort();
+        select.innerHTML = '<option value="">All channels</option>' +
+            channels.map(ch => {
+                const selected = ch === current ? ' selected' : '';
+                const label = ch.charAt(0).toUpperCase() + ch.slice(1);
+                return `<option value="${ch}"${selected}>${label}</option>`;
+            }).join('');
+    }
+
+    // Apply the chat filter to existing chat lines. Empty channel = show all.
+    setChatFilter(channel) {
+        this.chatFilterChannel = channel || '';
+        const select = document.getElementById('chat-filter-select');
+        if (select) {
+            select.classList.toggle('filtering', !!this.chatFilterChannel);
+        }
+        const chatOutput = document.getElementById('chat-output');
+        if (!chatOutput) return;
+        const lines = chatOutput.querySelectorAll('.chat-line');
+        lines.forEach(line => {
+            if (!this.chatFilterChannel || line.dataset.channel === this.chatFilterChannel) {
+                line.classList.remove('chat-filtered-hidden');
+            } else {
+                line.classList.add('chat-filtered-hidden');
+            }
+        });
+        chatOutput.scrollTop = chatOutput.scrollHeight;
     }
 
 
@@ -2901,6 +2945,13 @@ class WMTClient {
         document.getElementById('chat-float-btn')?.addEventListener('click', () => this.setChatMode('floating'));
         document.getElementById('chat-popout-btn')?.addEventListener('click', () => this.popOutChatWindow());
         document.getElementById('chat-close-btn')?.addEventListener('click', () => this.toggleChatWindow());
+
+        // Channel filter dropdown — rebuild options on focus (catches newly-seen channels), apply on change
+        const chatFilterSelect = document.getElementById('chat-filter-select');
+        if (chatFilterSelect) {
+            chatFilterSelect.addEventListener('focus', () => this.populateChatFilterOptions());
+            chatFilterSelect.addEventListener('change', (e) => this.setChatFilter(e.target.value));
+        }
 
         // Clear notification when clicking on chat window
         document.getElementById('chat-window')?.addEventListener('click', () => {

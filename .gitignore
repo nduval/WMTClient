@@ -19,6 +19,10 @@ node_modules/
 # System packages (deployed separately via SFTP — too large for git)
 /data/packages/
 
+# Login audit CSV (contains real IPs, account names, geo data — PII)
+# Runtime file at data/logs/login_audit.csv is managed by PHP on IONOS
+login_audit.csv
+
 # IDE
 .idea/
 .vscode/

@@ -2688,10 +2688,41 @@ body {
     cursor: default;
 }
 
+.chat-title-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .chat-title {
     font-weight: bold;
     color: var(--primary-color);
     font-size: 0.95em;
+}
+
+.chat-filter-select {
+    background: var(--bg-main);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-size: 0.85em;
+    font-family: inherit;
+    cursor: pointer;
+    max-width: 140px;
+}
+
+.chat-filter-select:hover {
+    border-color: var(--primary-color);
+}
+
+.chat-filter-select.filtering {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.chat-output .chat-line.chat-filtered-hidden {
+    display: none;
 }
 
 .chat-controls {
