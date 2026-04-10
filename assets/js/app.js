@@ -723,7 +723,7 @@ class WMTClient {
         this.syncVariablesToServer();
         this.syncFunctionsToServer();
         // Send packet_patch preference to server
-        const ppVal = this.preferences.packetPatch ?? 0.25;
+        const ppVal = this.preferences.packetPatch ?? 1.0;
         this.connection.send('set_packet_patch', { value: ppVal });
     }
 
@@ -749,7 +749,7 @@ class WMTClient {
             characterId: characterId,
             characterName: characterName,
             isWizard: isWizard,
-            packetPatch: this.preferences.packetPatch ?? 0.25,
+            packetPatch: this.preferences.packetPatch ?? 1.0,
             onConnect: (bridgeMode) => this.onConnect(bridgeMode),
             onDisconnect: () => this.onDisconnect(),
             onMessage: (data) => this.onMessage(data),
@@ -5568,7 +5568,7 @@ class WMTClient {
             notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
             notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30,
             startupScript: document.getElementById('pref-startup-script')?.value || this.preferences.startupScript || '',
-            packetPatch: this.preferences.packetPatch ?? 0.25
+            packetPatch: this.preferences.packetPatch ?? 1.0
         };
 
         try {
@@ -11864,7 +11864,7 @@ class WMTClient {
             const deadmanStatus = this.preferences.idleDisconnectMinutes
                 ? `ON (${this.preferences.idleDisconnectMinutes} min)`
                 : 'OFF';
-            const ppVal = this.preferences.packetPatch ?? 0.25;
+            const ppVal = this.preferences.packetPatch ?? 1.0;
             const ppStatus = ppVal > 0 ? `${ppVal}s` : 'OFF';
             this.appendOutput('Configuration:', 'system');
             this.appendOutput(`  SPEEDWALK: ${this.speedwalkEnabled ? 'ON' : 'OFF'}`, 'system');
@@ -11928,7 +11928,7 @@ class WMTClient {
                     this.connection.send('set_packet_patch', { value: 0 });
                     this.appendOutput('Packet patch disabled', 'system');
                 } else if (value === null) {
-                    const ppVal = this.preferences.packetPatch ?? 0.25;
+                    const ppVal = this.preferences.packetPatch ?? 1.0;
                     this.appendOutput(`PACKET_PATCH: ${ppVal > 0 ? ppVal + 's' : 'OFF'}`, 'system');
                 } else {
                     const seconds = parseFloat(value);

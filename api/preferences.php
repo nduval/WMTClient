@@ -304,6 +304,12 @@ switch ($action) {
             $validated['debugIf'] = (bool)$preferences['debugIf'];
         }
 
+        // Packet patch delay in seconds (0-2, 0 = off)
+        if (isset($preferences['packetPatch'])) {
+            $pp = floatval($preferences['packetPatch']);
+            $validated['packetPatch'] = max(0, min(2, $pp));
+        }
+
         // Notification sound (whitelist allowed values)
         $allowedSounds = ['classic', 'ping', 'double', 'chime', 'alert', 'gentle'];
         if (isset($preferences['notificationSound']) && in_array($preferences['notificationSound'], $allowedSounds)) {

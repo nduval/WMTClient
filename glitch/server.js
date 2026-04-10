@@ -2135,7 +2135,7 @@ function createSession(token) {
     chatBuffer: [],
 
     // Packet patch: fixed-delay batching for complete lines (seconds, 0 = disabled)
-    packetPatchMs: 250,  // Default 0.25s
+    packetPatchMs: 1000,  // Default 1.0s
     patchQueue: [],
     patchTimeout: null,
 

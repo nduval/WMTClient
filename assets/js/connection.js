@@ -13,7 +13,7 @@ class MudConnection {
         this.isWizard = options.isWizard || false;  // Wizard flag (no session timeout)
         // Packet patch preference sent in auth so server has it BEFORE opening MUD socket
         // (eliminates race where first bytes of MUD data use default instead of user's value)
-        this.packetPatch = options.packetPatch ?? 0.25;
+        this.packetPatch = options.packetPatch ?? 1.0;
         this.socket = null;
         this.connected = false;
         this.authenticated = false;  // Have we completed auth handshake?
