@@ -1951,44 +1951,34 @@ class WMTClient {
         chatWindow.classList.remove('docked', 'docked-left', 'docked-right', 'floating');
         terminalArea?.classList.remove('chat-docked', 'chat-docked-left', 'chat-docked-right');
 
-        // Update button states
-        document.getElementById('chat-dock-btn')?.classList.remove('active');
-        document.getElementById('chat-float-btn')?.classList.remove('active');
-
         this.chatWindowMode = mode;
 
         if (mode === 'docked') {
             chatWindow.classList.add('docked');
             terminalArea?.classList.add('chat-docked');
-            document.getElementById('chat-dock-btn')?.classList.add('active');
-            this.updateDockButtonTitle('top');
-            // Reset position for docked mode
             chatWindow.style.top = '';
             chatWindow.style.left = '';
             chatWindow.style.width = '';
         } else if (mode === 'docked-left') {
             chatWindow.classList.add('docked-left');
             terminalArea?.classList.add('chat-docked-left');
-            document.getElementById('chat-dock-btn')?.classList.add('active');
-            this.updateDockButtonTitle('left');
-            // Reset position for docked mode
             chatWindow.style.top = '';
             chatWindow.style.left = '';
             chatWindow.style.height = '';
         } else if (mode === 'docked-right') {
             chatWindow.classList.add('docked-right');
             terminalArea?.classList.add('chat-docked-right');
-            document.getElementById('chat-dock-btn')?.classList.add('active');
-            this.updateDockButtonTitle('right');
-            // Reset position for docked mode
             chatWindow.style.top = '';
             chatWindow.style.left = '';
             chatWindow.style.height = '';
         } else if (mode === 'floating') {
             chatWindow.classList.add('floating');
-            document.getElementById('chat-float-btn')?.classList.add('active');
-            this.updateDockButtonTitle('none');
         }
+
+        // Highlight the active position in the overflow menu's position picker
+        document.querySelectorAll('.chat-pos-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === mode);
+        });
 
         // Save preference for persistence (desktop only)
         const isMobile = window.innerWidth <= 768;
@@ -2001,34 +1991,35 @@ class WMTClient {
         }
     }
 
-    // Cycle through dock positions: floating -> top -> left -> right -> floating
-    cycleDockPosition() {
-        // Only cycle docked positions on desktop
-        const isMobile = window.innerWidth <= 768;
-        if (isMobile) {
-            // On mobile, just toggle docked
-            this.setChatMode(this.chatWindowMode === 'docked' ? 'floating' : 'docked');
-            return;
+    // Open/close the chat overflow menu popover
+    toggleChatOverflowMenu(force) {
+        const menu = document.getElementById('chat-overflow-menu');
+        if (!menu) return;
+        const willShow = force !== undefined ? force : menu.classList.contains('hidden');
+        menu.classList.toggle('hidden', !willShow);
+        if (willShow) {
+            // Bind a one-shot outside-click handler to close the menu.
+            // Defer to next tick so the click that opened the menu doesn't immediately close it.
+            setTimeout(() => {
+                const onOutside = (e) => {
+                    if (!menu.contains(e.target) && e.target.id !== 'chat-overflow-btn'
+                        && !document.getElementById('chat-overflow-btn')?.contains(e.target)) {
+                        this.toggleChatOverflowMenu(false);
+                        document.removeEventListener('click', onOutside);
+                        document.removeEventListener('keydown', onEsc);
+                    }
+                };
+                const onEsc = (e) => {
+                    if (e.key === 'Escape') {
+                        this.toggleChatOverflowMenu(false);
+                        document.removeEventListener('click', onOutside);
+                        document.removeEventListener('keydown', onEsc);
+                    }
+                };
+                document.addEventListener('click', onOutside);
+                document.addEventListener('keydown', onEsc);
+            }, 0);
         }
-
-        const positions = ['floating', 'docked', 'docked-left', 'docked-right'];
-        const currentIndex = positions.indexOf(this.chatWindowMode);
-        const nextIndex = (currentIndex + 1) % positions.length;
-        this.setChatMode(positions[nextIndex]);
-    }
-
-    // Update dock button tooltip based on current position
-    updateDockButtonTitle(position) {
-        const dockBtn = document.getElementById('chat-dock-btn');
-        if (!dockBtn) return;
-
-        const titles = {
-            'none': 'Dock to top',
-            'top': 'Dock to left',
-            'left': 'Dock to right',
-            'right': 'Float window'
-        };
-        dockBtn.title = titles[position] || 'Dock window';
     }
 
     appendChatMessage(message, chatType = 'channel', channel = '', rawText = '', options = {}) {
@@ -3015,11 +3006,27 @@ class WMTClient {
 
         // Chat window buttons
         document.getElementById('chat-toggle-btn')?.addEventListener('click', () => this.toggleChatWindow());
-        document.getElementById('chat-settings-btn')?.addEventListener('click', () => this.openChannelSettingsModal());
-        document.getElementById('chat-dock-btn')?.addEventListener('click', () => this.cycleDockPosition());
-        document.getElementById('chat-float-btn')?.addEventListener('click', () => this.setChatMode('floating'));
-        document.getElementById('chat-popout-btn')?.addEventListener('click', () => this.popOutChatWindow());
         document.getElementById('chat-close-btn')?.addEventListener('click', () => this.toggleChatWindow());
+
+        // Overflow menu: single entry point for settings, dock position, float, popout
+        document.getElementById('chat-overflow-btn')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleChatOverflowMenu();
+        });
+        document.querySelectorAll('.chat-pos-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.setChatMode(btn.dataset.mode);
+                this.toggleChatOverflowMenu(false);
+            });
+        });
+        document.getElementById('chat-menu-popout')?.addEventListener('click', () => {
+            this.popOutChatWindow();
+            this.toggleChatOverflowMenu(false);
+        });
+        document.getElementById('chat-menu-settings')?.addEventListener('click', () => {
+            this.openChannelSettingsModal();
+            this.toggleChatOverflowMenu(false);
+        });
 
         // Channel filter dropdown — rebuild options on focus (catches newly-seen channels), apply on change
         const chatFilterSelect = document.getElementById('chat-filter-select');

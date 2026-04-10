@@ -189,21 +189,40 @@ setcookie($tokenCookieName, $wsToken, [
                         </select>
                     </div>
                     <div class="chat-controls">
-                        <button class="chat-btn" id="chat-settings-btn" title="Channel settings">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-                        </button>
-                        <button class="chat-btn" id="chat-dock-btn" title="Dock to top">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5v-7h14v7z"/></svg>
-                        </button>
-                        <button class="chat-btn" id="chat-float-btn" title="Float window">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14z"/></svg>
-                        </button>
-                        <button class="chat-btn" id="chat-popout-btn" title="Pop out to new window">
-                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 19H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+                        <button class="chat-btn" id="chat-overflow-btn" title="More options">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
                         </button>
                         <button class="chat-btn chat-close" id="chat-close-btn" title="Close chat window">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                         </button>
+                        <div id="chat-overflow-menu" class="chat-overflow-menu hidden">
+                            <div class="chat-menu-section">
+                                <div class="chat-menu-label">Position</div>
+                                <div class="chat-position-picker">
+                                    <button class="chat-pos-btn" data-mode="docked" title="Dock top">
+                                        <svg viewBox="0 0 24 24" width="24" height="24"><rect x="3" y="4" width="18" height="5" rx="1" fill="currentColor"/><rect x="3" y="11" width="18" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                                    </button>
+                                    <button class="chat-pos-btn" data-mode="docked-left" title="Dock left">
+                                        <svg viewBox="0 0 24 24" width="24" height="24"><rect x="3" y="4" width="7" height="16" rx="1" fill="currentColor"/><rect x="12" y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                                    </button>
+                                    <button class="chat-pos-btn" data-mode="docked-right" title="Dock right">
+                                        <svg viewBox="0 0 24 24" width="24" height="24"><rect x="3" y="4" width="9" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="4" width="7" height="16" rx="1" fill="currentColor"/></svg>
+                                    </button>
+                                    <button class="chat-pos-btn" data-mode="floating" title="Floating">
+                                        <svg viewBox="0 0 24 24" width="24" height="24"><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="7" y="8" width="10" height="8" rx="1" fill="currentColor"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="chat-menu-divider"></div>
+                            <button class="chat-menu-item" id="chat-menu-popout">
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 19H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+                                <span>Pop out to new window</span>
+                            </button>
+                            <button class="chat-menu-item" id="chat-menu-settings">
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                                <span>Channel settings</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="chat-output" id="chat-output"></div>

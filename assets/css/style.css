@@ -2529,10 +2529,7 @@ body {
         max-height: 45vh;
     }
 
-    /* Simplify chat controls on mobile */
-    .chat-controls .chat-btn:not(.chat-close) {
-        display: none;
-    }
+    /* On mobile the overflow menu contains what used to be visible, so no button hiding needed */
 
     /* Full-screen modals on mobile - no keyboard fighting */
     .modal-overlay {
@@ -2728,6 +2725,99 @@ body {
 .chat-controls {
     display: flex;
     gap: 4px;
+    position: relative;  /* Anchor for the overflow menu popover */
+}
+
+/* Overflow menu popover — contains position picker + secondary actions */
+.chat-overflow-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 1000;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    min-width: 200px;
+}
+
+.chat-overflow-menu.hidden {
+    display: none;
+}
+
+.chat-menu-section {
+    padding: 4px 6px;
+}
+
+.chat-menu-label {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.chat-position-picker {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
+
+.chat-pos-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    padding: 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.chat-pos-btn:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.chat-pos-btn.active {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: rgba(var(--primary-rgb, 0, 255, 0), 0.12);
+}
+
+.chat-menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 6px 0;
+}
+
+.chat-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9em;
+    text-align: left;
+    transition: background 0.15s;
+}
+
+.chat-menu-item:hover {
+    background: var(--bg-main);
+    color: var(--primary-color);
+}
+
+.chat-menu-item svg {
+    flex-shrink: 0;
 }
 
 .chat-btn {
