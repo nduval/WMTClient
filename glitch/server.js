@@ -1124,21 +1124,22 @@ function autoLoginToMud(session, password) {
               if (!text.endsWith('\n') && parts.length > 0) {
                 session.lineBuffer = parts.pop();
                 if (session.lineBuffer) {
+                  // Hold fragments at least as long as packet_patch, with 150/350ms safety floors
+                  const stage1Ms = Math.max(150, session.packetPatchMs);
+                  const stage2Ms = Math.max(350, session.packetPatchMs);
                   session.lineBufferTimeout = setTimeout(() => {
                     if (session.lineBuffer) {
-                      // Stage 1: Hold fragment silently for reassembly
                       session.lastFlushedIncomplete = session.lineBuffer;
                       session.lineBuffer = '';
-                      // Stage 2: Display after 350ms more (500ms total) if no continuation
                       session.lastFlushedExpiry = setTimeout(() => {
                         if (session.lastFlushedIncomplete) {
                           processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
                           session.lastFlushedIncomplete = null;
                         }
                         session.lastFlushedExpiry = null;
-                      }, 350);
+                      }, stage2Ms);
                     }
-                  }, 150);
+                  }, stage1Ms);
                 }
               } else {
                 session.lineBuffer = '';
@@ -1348,21 +1349,22 @@ async function restorePersistentSessions() {
         if (!text.endsWith('\n') && parts.length > 0) {
           session.lineBuffer = parts.pop();
           if (session.lineBuffer) {
+            // Hold fragments at least as long as packet_patch, with 150/350ms safety floors
+            const stage1Ms = Math.max(150, session.packetPatchMs);
+            const stage2Ms = Math.max(350, session.packetPatchMs);
             session.lineBufferTimeout = setTimeout(() => {
               if (session.lineBuffer) {
-                // Stage 1: Hold fragment silently for reassembly
                 session.lastFlushedIncomplete = session.lineBuffer;
                 session.lineBuffer = '';
-                // Stage 2: Display after 350ms more (500ms total) if no continuation
                 session.lastFlushedExpiry = setTimeout(() => {
                   if (session.lastFlushedIncomplete) {
                     processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
                     session.lastFlushedIncomplete = null;
                   }
                   session.lastFlushedExpiry = null;
-                }, 350);
+                }, stage2Ms);
               }
-            }, 150);
+            }, stage1Ms);
           }
         } else {
           session.lineBuffer = '';
@@ -3621,21 +3623,22 @@ function connectToMud(session) {
     if (!text.endsWith('\n') && parts.length > 0) {
       session.lineBuffer = parts.pop();
       if (session.lineBuffer) {
+        // Hold fragments at least as long as packet_patch, with 150/350ms safety floors
+        const stage1Ms = Math.max(150, session.packetPatchMs);
+        const stage2Ms = Math.max(350, session.packetPatchMs);
         session.lineBufferTimeout = setTimeout(() => {
           if (session.lineBuffer) {
-            // Stage 1: Hold fragment silently for reassembly
             session.lastFlushedIncomplete = session.lineBuffer;
             session.lineBuffer = '';
-            // Stage 2: Display after 350ms more (500ms total) if no continuation
             session.lastFlushedExpiry = setTimeout(() => {
               if (session.lastFlushedIncomplete) {
                 processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
                 session.lastFlushedIncomplete = null;
               }
               session.lastFlushedExpiry = null;
-            }, 350);
+            }, stage2Ms);
           }
-        }, 150);
+        }, stage1Ms);
       }
     } else {
       session.lineBuffer = '';
