@@ -2098,8 +2098,13 @@ class WMTClient {
                 line.dataset.channel = channelKey;
                 line.innerHTML = message;
                 applyChannelColors(line);
+                if (this.chatFilterChannel && channelKey !== this.chatFilterChannel) {
+                    line.classList.add('chat-filtered-hidden');
+                }
                 popoutOutput.appendChild(line);
-                popoutOutput.scrollTop = popoutOutput.scrollHeight;
+                if (!line.classList.contains('chat-filtered-hidden')) {
+                    popoutOutput.scrollTop = popoutOutput.scrollHeight;
+                }
             }
         }
 
@@ -2126,37 +2131,56 @@ class WMTClient {
 
     // Rebuild the channel filter dropdown options from the current channelPrefs.
     // Called on focus so newly-seen channels show up without a page reload.
+    // Updates BOTH the main window's select and the popout's select if open.
     populateChatFilterOptions() {
-        const select = document.getElementById('chat-filter-select');
-        if (!select) return;
         const current = this.chatFilterChannel || '';
         const channels = Object.keys(this.channelPrefs).sort();
-        select.innerHTML = '<option value="">All channels</option>' +
+        const html = '<option value="">All channels</option>' +
             channels.map(ch => {
                 const selected = ch === current ? ' selected' : '';
                 const label = ch.charAt(0).toUpperCase() + ch.slice(1);
                 return `<option value="${ch}"${selected}>${label}</option>`;
             }).join('');
+        const mainSelect = document.getElementById('chat-filter-select');
+        if (mainSelect) mainSelect.innerHTML = html;
+        if (this.chatPopoutWindow && !this.chatPopoutWindow.closed) {
+            const popoutSelect = this.chatPopoutWindow.document.getElementById('chat-filter-select');
+            if (popoutSelect) popoutSelect.innerHTML = html;
+        }
     }
 
     // Apply the chat filter to existing chat lines. Empty channel = show all.
+    // Updates both the main window and the popout window if open — they stay in sync.
     setChatFilter(channel) {
         this.chatFilterChannel = channel || '';
-        const select = document.getElementById('chat-filter-select');
-        if (select) {
-            select.classList.toggle('filtering', !!this.chatFilterChannel);
+        const filtering = !!this.chatFilterChannel;
+
+        const syncSelect = (sel) => {
+            if (!sel) return;
+            sel.value = this.chatFilterChannel;
+            sel.classList.toggle('filtering', filtering);
+        };
+        const applyToOutput = (output) => {
+            if (!output) return;
+            output.querySelectorAll('.chat-line').forEach(line => {
+                if (!filtering || line.dataset.channel === this.chatFilterChannel) {
+                    line.classList.remove('chat-filtered-hidden');
+                } else {
+                    line.classList.add('chat-filtered-hidden');
+                }
+            });
+            output.scrollTop = output.scrollHeight;
+        };
+
+        // Main window
+        syncSelect(document.getElementById('chat-filter-select'));
+        applyToOutput(document.getElementById('chat-output'));
+
+        // Popout window (if open)
+        if (this.chatPopoutWindow && !this.chatPopoutWindow.closed) {
+            syncSelect(this.chatPopoutWindow.document.getElementById('chat-filter-select'));
+            applyToOutput(this.chatPopoutWindow.document.getElementById('chat-output'));
         }
-        const chatOutput = document.getElementById('chat-output');
-        if (!chatOutput) return;
-        const lines = chatOutput.querySelectorAll('.chat-line');
-        lines.forEach(line => {
-            if (!this.chatFilterChannel || line.dataset.channel === this.chatFilterChannel) {
-                line.classList.remove('chat-filtered-hidden');
-            } else {
-                line.classList.add('chat-filtered-hidden');
-            }
-        });
-        chatOutput.scrollTop = chatOutput.scrollHeight;
     }
 
 
@@ -2364,6 +2388,29 @@ class WMTClient {
                         display: flex;
                         flex-direction: column;
                     }
+                    .chat-header {
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 12px;
+                        background: #2a2a3e;
+                        border-bottom: 1px solid #3a3a4e;
+                        flex-shrink: 0;
+                    }
+                    .chat-title-group { display: flex; align-items: center; gap: 8px; }
+                    .chat-title { font-weight: bold; color: #00ff00; font-size: 0.95em; }
+                    #chat-filter-select {
+                        background: #1a1a2e;
+                        color: #e0e0e0;
+                        border: 1px solid #3a3a4e;
+                        border-radius: 4px;
+                        padding: 2px 4px;
+                        font-size: 0.85em;
+                        font-family: inherit;
+                        cursor: pointer;
+                        max-width: 140px;
+                    }
+                    #chat-filter-select:hover { border-color: #00ff00; }
+                    #chat-filter-select.filtering { border-color: #00ff00; color: #00ff00; }
                     #chat-output {
                         flex: 1;
                         overflow-y: auto;
@@ -2372,6 +2419,7 @@ class WMTClient {
                         line-height: 1.4;
                     }
                     .chat-line { margin-bottom: 4px; padding: 2px 4px; border-radius: 2px; }
+                    .chat-line.chat-filtered-hidden { display: none; }
                     .chat-line.tell { background: rgba(255, 100, 100, 0.1); border-left: 2px solid #ff6464; padding-left: 8px; }
                     .chat-line.channel { background: rgba(100, 200, 255, 0.1); border-left: 2px solid #64c8ff; padding-left: 8px; }
                     .input-container {
@@ -2405,6 +2453,14 @@ class WMTClient {
                 </style>
             </head>
             <body>
+                <div class="chat-header">
+                    <div class="chat-title-group">
+                        <span class="chat-title">Chat</span>
+                        <select id="chat-filter-select" title="Filter by channel">
+                            <option value="">All channels</option>
+                        </select>
+                    </div>
+                </div>
                 <div id="chat-output">${chatContent}</div>
                 <div class="input-container">
                     <input type="text" id="chat-input" placeholder="Type chat command...">
@@ -2413,6 +2469,7 @@ class WMTClient {
                 <script>
                     const input = document.getElementById('chat-input');
                     const sendBtn = document.getElementById('send-btn');
+                    const filterSelect = document.getElementById('chat-filter-select');
 
                     function sendCommand() {
                         const cmd = input.value.trim();
@@ -2426,12 +2483,30 @@ class WMTClient {
                         if (e.key === 'Enter') sendCommand();
                     });
                     sendBtn.addEventListener('click', sendCommand);
+
+                    // Channel filter — delegates to opener's setChatFilter so both windows stay in sync
+                    if (filterSelect) {
+                        filterSelect.addEventListener('focus', () => {
+                            if (window.opener && window.opener.wmtClient) {
+                                window.opener.wmtClient.populateChatFilterOptions();
+                            }
+                        });
+                        filterSelect.addEventListener('change', (e) => {
+                            if (window.opener && window.opener.wmtClient) {
+                                window.opener.wmtClient.setChatFilter(e.target.value);
+                            }
+                        });
+                    }
+
                     input.focus();
                 </script>
             </body>
             </html>
         `);
         doc.close();
+
+        // Populate the popout's filter dropdown with known channels + current state
+        this.populateChatFilterOptions();
 
         // Hide main chat window
         this.chatWindowOpen = false;
