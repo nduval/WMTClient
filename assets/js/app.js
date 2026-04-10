@@ -7633,10 +7633,12 @@ class WMTClient {
                 break;
 
             case 'kill': {
-                // WMT: kill = disable class (items preserved, not deleted)
-                // In TinTin++ kill removes items, but WMT uses persistent storage
-                // so we disable instead. Re-opening the class re-enables it.
-                // Duplicate items are handled by cmdAction/cmdAlias/etc which update in-place.
+                // TinTin++ semantics: kill removes ALL items in the class.
+                // The class record itself is preserved so scripts can be read into it again.
+                // Matters for bot-swap workflows where a shared class (e.g. "bots") gets
+                // loaded/killed/reloaded with different content — disable-only semantics
+                // leaked old content into new sessions. Items are re-persisted after any
+                // subsequent #read, so "kill" is a reset, not destructive data loss.
                 if (!existing) {
                     this.appendOutput(`#CLASS {${className}} NOT FOUND.`, 'error');
                     return;
@@ -7647,9 +7649,21 @@ class WMTClient {
                 }
                 // Remove from stack if present
                 this.classStack = this.classStack.filter(id => id !== existing.id);
-                // Disable the class instead of deleting
-                await this.setClassEnabled(existing.id, false);
-                this.appendOutput(`#CLASS {${className}} KILLED.`, 'system');
+
+                const classId = existing.id;
+                const removedTriggers = this.triggers.filter(t => t.class === classId).length;
+                const removedAliases = this.aliases.filter(a => a.class === classId).length;
+                const removedTickers = this.tickers.filter(t => t.class === classId).length;
+                this.triggers = this.triggers.filter(t => t.class !== classId);
+                this.aliases = this.aliases.filter(a => a.class !== classId);
+                this.tickers = this.tickers.filter(t => t.class !== classId);
+                const total = removedTriggers + removedAliases + removedTickers;
+                await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
+                this.sendFilteredTriggersAndAliases();
+                this.appendOutput(`#CLASS {${className}} KILLED: ${total} ITEM(S) REMOVED.`, 'system');
+                if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                    this.renderScriptsSidebar();
+                }
                 break;
             }
 
