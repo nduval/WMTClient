@@ -3049,45 +3049,25 @@ function parseFFFStats(session, data) {
 }
 
 /**
- * Queue complete lines for batch processing (packet patch).
- * Uses a FIXED delay from first data arrival — no timer reset.
- * If packetPatchMs is 0, processes immediately.
+ * Process complete lines immediately.
+ *
+ * Historical note: this used to batch lines for `packetPatchMs` ms before processing,
+ * intended to give "whole combat round appears at once" smoothness. In practice it
+ * just added 1s of unconditional latency to every bot action (GA isn't reliably sent
+ * by 3K, and `prompt off` kills it entirely). The only part of packet_patch that
+ * actually matters is FRAGMENT REASSEMBLY (in the data handler's line buffer), which
+ * is unaffected by this function. Complete lines always process immediately now.
  */
 function queueLinesForProcessing(session, parts) {
-  if (session.packetPatchMs <= 0) {
-    // No packet patch — process immediately (original behavior)
-    parts.forEach(line => processLine(session, line));
-    return;
-  }
-
-  // Add to queue
-  session.patchQueue.push(...parts);
-
-  // Only start a timer if one isn't already running (fixed delay, no reset)
-  if (!session.patchTimeout) {
-    session.patchTimeout = setTimeout(() => {
-      const batch = session.patchQueue;
-      session.patchQueue = [];
-      session.patchTimeout = null;
-      batch.forEach(line => processLine(session, line));
-    }, session.packetPatchMs);
-  }
+  parts.forEach(line => processLine(session, line));
 }
 
 /**
- * Flush any pending packet patch queue immediately.
- * Called when GA arrives (MUD says "I'm done, show this now").
+ * Legacy flush hook — kept as a no-op so existing GA handling in data handlers still
+ * compiles. There's nothing to flush anymore since queueLinesForProcessing doesn't batch.
  */
 function flushPatchQueue(session) {
-  if (session.patchTimeout) {
-    clearTimeout(session.patchTimeout);
-    session.patchTimeout = null;
-  }
-  if (session.patchQueue.length > 0) {
-    const batch = session.patchQueue;
-    session.patchQueue = [];
-    batch.forEach(line => processLine(session, line));
-  }
+  // no-op
 }
 
 /**
