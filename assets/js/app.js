@@ -749,6 +749,7 @@ class WMTClient {
             characterId: characterId,
             characterName: characterName,
             isWizard: isWizard,
+            packetPatch: this.preferences.packetPatch ?? 0.25,
             onConnect: (bridgeMode) => this.onConnect(bridgeMode),
             onDisconnect: () => this.onDisconnect(),
             onMessage: (data) => this.onMessage(data),
@@ -970,38 +971,9 @@ class WMTClient {
 
                 this.appendOutput(data.line, 'mud', {
                     highlight: data.highlight,
-                    sound: data.sound,
-                    incomplete: data.incomplete
+                    sound: data.sound
                 });
                 break;
-
-            case 'remove_incomplete': {
-                // Server reassembled a TCP fragment — remove the incomplete div
-                // The complete line follows as a normal 'mud' message
-                // Check render queue first (may not be flushed to DOM yet)
-                let removed = false;
-                if (this._renderQueue) {
-                    for (let i = this._renderQueue.length - 1; i >= 0; i--) {
-                        if (this._renderQueue[i].options.incomplete) {
-                            this._renderQueue.splice(i, 1);
-                            removed = true;
-                            break;
-                        }
-                    }
-                }
-                if (!removed) {
-                    const output = document.getElementById('mud-output');
-                    if (output) {
-                        for (let i = output.children.length - 1; i >= 0; i--) {
-                            if (output.children[i].classList.contains('incomplete')) {
-                                output.removeChild(output.children[i]);
-                                break;
-                            }
-                        }
-                    }
-                }
-                break;
-            }
 
             case 'system':
                 if (data.subtype === 'status_only') {
@@ -2588,7 +2560,6 @@ class WMTClient {
         for (const item of queue) {
             const line = document.createElement('div');
             line.className = 'line ' + item.type;
-            if (item.options.incomplete) line.classList.add('incomplete');
 
             // Convert ANSI codes to HTML
             let html = this.ansiToHtml(item.text);
@@ -11953,6 +11924,7 @@ class WMTClient {
             case 'PACKETPATCH':
                 if (value === 'OFF' || value === '0' || value === 'FALSE') {
                     this.preferences.packetPatch = 0;
+                    this.connection.packetPatch = 0;
                     this.connection.send('set_packet_patch', { value: 0 });
                     this.appendOutput('Packet patch disabled', 'system');
                 } else if (value === null) {
@@ -11962,6 +11934,7 @@ class WMTClient {
                     const seconds = parseFloat(value);
                     if (!isNaN(seconds) && seconds >= 0 && seconds <= 2) {
                         this.preferences.packetPatch = seconds;
+                        this.connection.packetPatch = seconds;
                         this.connection.send('set_packet_patch', { value: seconds });
                         if (seconds > 0) {
                             this.appendOutput(`Packet patch set to ${seconds}s`, 'system');

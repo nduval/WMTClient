@@ -11,6 +11,9 @@ class MudConnection {
         this.characterId = options.characterId || null;  // Character ID for multi-device session management
         this.characterName = options.characterName || null;  // Character name for admin display
         this.isWizard = options.isWizard || false;  // Wizard flag (no session timeout)
+        // Packet patch preference sent in auth so server has it BEFORE opening MUD socket
+        // (eliminates race where first bytes of MUD data use default instead of user's value)
+        this.packetPatch = options.packetPatch ?? 0.25;
         this.socket = null;
         this.connected = false;
         this.authenticated = false;  // Have we completed auth handshake?
@@ -61,7 +64,8 @@ class MudConnection {
                     userId: this.userId,
                     characterId: this.characterId,
                     characterName: this.characterName,
-                    isWizard: this.isWizard
+                    isWizard: this.isWizard,
+                    packetPatch: this.packetPatch
                 }));
             } else {
                 console.error('No WebSocket token available');

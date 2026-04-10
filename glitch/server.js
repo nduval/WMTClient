@@ -1092,17 +1092,6 @@ function autoLoginToMud(session, password) {
                 session.lineBufferTimeout = null;
               }
 
-              // Retroactive reassembly: if we recently flushed an incomplete
-              // fragment, prepend it so the full line gets processed correctly
-              if (session.lastFlushedIncomplete) {
-                session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
-                session.lastFlushedIncomplete = null;
-                if (session.lastFlushedExpiry) {
-                  clearTimeout(session.lastFlushedExpiry);
-                  session.lastFlushedExpiry = null;
-                }
-              }
-
               const fullText = session.lineBuffer + text;
               const parts = fullText.split('\n');
 
@@ -1124,22 +1113,15 @@ function autoLoginToMud(session, password) {
               if (!text.endsWith('\n') && parts.length > 0) {
                 session.lineBuffer = parts.pop();
                 if (session.lineBuffer) {
-                  // Hold fragments at least as long as packet_patch, with 150/350ms safety floors
-                  const stage1Ms = Math.max(150, session.packetPatchMs);
-                  const stage2Ms = Math.max(350, session.packetPatchMs);
+                  // Single-timer fragment hold. Scales with packet_patch, min 500ms.
+                  const holdMs = Math.max(500, session.packetPatchMs * 2);
                   session.lineBufferTimeout = setTimeout(() => {
                     if (session.lineBuffer) {
-                      session.lastFlushedIncomplete = session.lineBuffer;
+                      processLine(session, stripTrailingAnsi(session.lineBuffer));
                       session.lineBuffer = '';
-                      session.lastFlushedExpiry = setTimeout(() => {
-                        if (session.lastFlushedIncomplete) {
-                          processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
-                          session.lastFlushedIncomplete = null;
-                        }
-                        session.lastFlushedExpiry = null;
-                      }, stage2Ms);
                     }
-                  }, stage1Ms);
+                    session.lineBufferTimeout = null;
+                  }, holdMs);
                 }
               } else {
                 session.lineBuffer = '';
@@ -1320,17 +1302,6 @@ async function restorePersistentSessions() {
           session.lineBufferTimeout = null;
         }
 
-        // Retroactive reassembly: if we recently flushed an incomplete
-        // fragment, prepend it so the full line gets processed correctly
-        if (session.lastFlushedIncomplete) {
-          session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
-          session.lastFlushedIncomplete = null;
-          if (session.lastFlushedExpiry) {
-            clearTimeout(session.lastFlushedExpiry);
-            session.lastFlushedExpiry = null;
-          }
-        }
-
         const fullText = session.lineBuffer + text;
         const parts = fullText.split('\n');
 
@@ -1349,22 +1320,15 @@ async function restorePersistentSessions() {
         if (!text.endsWith('\n') && parts.length > 0) {
           session.lineBuffer = parts.pop();
           if (session.lineBuffer) {
-            // Hold fragments at least as long as packet_patch, with 150/350ms safety floors
-            const stage1Ms = Math.max(150, session.packetPatchMs);
-            const stage2Ms = Math.max(350, session.packetPatchMs);
+            // Single-timer fragment hold. Scales with packet_patch, min 500ms.
+            const holdMs = Math.max(500, session.packetPatchMs * 2);
             session.lineBufferTimeout = setTimeout(() => {
               if (session.lineBuffer) {
-                session.lastFlushedIncomplete = session.lineBuffer;
+                processLine(session, stripTrailingAnsi(session.lineBuffer));
                 session.lineBuffer = '';
-                session.lastFlushedExpiry = setTimeout(() => {
-                  if (session.lastFlushedIncomplete) {
-                    processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
-                    session.lastFlushedIncomplete = null;
-                  }
-                  session.lastFlushedExpiry = null;
-                }, stage2Ms);
               }
-            }, stage1Ms);
+              session.lineBufferTimeout = null;
+            }, holdMs);
           }
         } else {
           session.lineBuffer = '';
@@ -3358,10 +3322,11 @@ function processLine(session, line) {
     if (/^[a-z]+\s+#N\s*$/.test(line) && line.length < 20) return;
     if (/^#N(\/\w+)?\s*(#N)?\s*$/.test(line)) return;
 
-    // MIP FFF data fragments leaked from TCP-split MIP messages
-    // e.g., "7~G~99", "~A~100~B~200", "~H~50"
+    // MIP FFF data fragments leaked from TCP-split MIP messages.
+    // Vitals payloads look like "C~2838~N~18~L~55~E~1823~G~99" (leading letter)
+    // or "7~G~99" (leading digit) or "~A~100" (leading tilde). Match any combo.
     const strippedMip = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
-    if (/^[\d]*(?:~[A-Z]~[\d]*)+$/.test(strippedMip)) return;
+    if (/^[A-Z\d]*(?:~[A-Z]~[\d]*)+$/.test(strippedMip)) return;
   }
 
   if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
@@ -3592,19 +3557,6 @@ function connectToMud(session) {
       session.lineBufferTimeout = null;
     }
 
-    // Retroactive reassembly: if we recently flushed an incomplete
-    // fragment, prepend it so the full line gets processed correctly
-    if (session.lastFlushedIncomplete) {
-      session.lineBuffer = session.lastFlushedIncomplete + session.lineBuffer;
-      session.lastFlushedIncomplete = null;
-      // Tell client to remove the fragment div before we send the full line
-      sendToClient(session, { type: 'remove_incomplete' });
-      if (session.lastFlushedExpiry) {
-        clearTimeout(session.lastFlushedExpiry);
-        session.lastFlushedExpiry = null;
-      }
-    }
-
     const fullText = session.lineBuffer + text;
     const parts = fullText.split('\n');
 
@@ -3623,22 +3575,15 @@ function connectToMud(session) {
     if (!text.endsWith('\n') && parts.length > 0) {
       session.lineBuffer = parts.pop();
       if (session.lineBuffer) {
-        // Hold fragments at least as long as packet_patch, with 150/350ms safety floors
-        const stage1Ms = Math.max(150, session.packetPatchMs);
-        const stage2Ms = Math.max(350, session.packetPatchMs);
+        // Single-timer fragment hold. Scales with packet_patch, min 500ms.
+        const holdMs = Math.max(500, session.packetPatchMs * 2);
         session.lineBufferTimeout = setTimeout(() => {
           if (session.lineBuffer) {
-            session.lastFlushedIncomplete = session.lineBuffer;
+            processLine(session, stripTrailingAnsi(session.lineBuffer));
             session.lineBuffer = '';
-            session.lastFlushedExpiry = setTimeout(() => {
-              if (session.lastFlushedIncomplete) {
-                processLine(session, stripTrailingAnsi(session.lastFlushedIncomplete));
-                session.lastFlushedIncomplete = null;
-              }
-              session.lastFlushedExpiry = null;
-            }, stage2Ms);
           }
-        }, stage1Ms);
+          session.lineBufferTimeout = null;
+        }, holdMs);
       }
     } else {
       session.lineBuffer = '';
@@ -3716,6 +3661,12 @@ wss.on('connection', (ws, req) => {
           const characterId = data.characterId;
           const characterName = data.characterName || null;
           const isWizard = data.isWizard || false;
+          // Packet patch preference from auth message — applied to the session
+          // BEFORE connectToMud can be called, so the first bytes of MUD data
+          // use the user's setting, not the 250ms default.
+          const authPacketPatchMs = data.packetPatch != null
+            ? Math.max(0, Math.min(2000, Math.round(parseFloat(data.packetPatch) * 1000)))
+            : null;
 
           if (!token || token.length !== 64) {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid auth token' }));
@@ -3782,6 +3733,7 @@ wss.on('connection', (ws, req) => {
               oldSession.explicitDisconnect = false;
               oldSession.isWizard = isWizard;
               oldSession.clientIp = clientIp;
+              if (authPacketPatchMs !== null) oldSession.packetPatchMs = authPacketPatchMs;
               sendAuditLog('reconnect', oldSession, clientIp);
               oldSession._bridgeModeInit = false;  // Clear stale flag
               oldSession._pendingBridgeResume = false;
@@ -3885,6 +3837,7 @@ wss.on('connection', (ws, req) => {
             session.explicitDisconnect = false;
             session.isWizard = isWizard;  // Update wizard status on reconnect
             session.clientIp = clientIp;
+            if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
             sendAuditLog('reconnect', session, clientIp);
             session._bridgeModeInit = false;  // Clear stale flag — prevents duplicate session_new
             session._pendingBridgeResume = false;
@@ -3963,6 +3916,7 @@ wss.on('connection', (ws, req) => {
             session.characterName = characterName;
             session.isWizard = isWizard;
             session.clientIp = clientIp;
+            if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
             sessions.set(token, session);
             sendAuditLog('login', session, clientIp);
 
