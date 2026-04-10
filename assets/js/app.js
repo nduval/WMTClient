@@ -7703,6 +7703,13 @@ class WMTClient {
                         this.classStack.push(this.currentScriptClass);
                     }
                     this.currentScriptClass = classId;
+                    // Auto-enable the class if it was disabled — otherwise the aliases
+                    // we're about to load into it won't fire and the user will be confused.
+                    // Matches the behavior of `#class {name} {open}`.
+                    const cls = this.classes.find(c => c.id === classId);
+                    if (cls && cls.enabled === false) {
+                        await this.setClassEnabled(classId, true);
+                    }
                     // Read the file
                     await this.cmdRead([args[2]]);
                     // Pop back
