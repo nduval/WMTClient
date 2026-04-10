@@ -148,12 +148,6 @@ switch ($action) {
         break;
 
     case 'logout':
-        $logoutUser = getCurrentUsername() ?? '';
-        $logoutChar = getCurrentCharacterName() ?? '';
-        $logoutServer = getCurrentCharacterServer() ?? '3k';
-        if ($logoutUser) {
-            auditLog('logout', $logoutUser, $logoutChar, $logoutServer, getClientIp());
-        }
         endUserSession();
         successResponse(['message' => 'Logged out successfully']);
         break;
