@@ -165,6 +165,12 @@ let ipBans = loadIpBans();
 const EventEmitter = require('events');
 let bridgeWs = null;
 let bridgeReconnectTimer = null;
+// Tracks whether the one-time persistent-session restore has already run
+// during this server lifetime. We trigger it from the bridge `open` handler
+// instead of a fixed setTimeout so restore happens as soon as its real
+// dependency (the bridge handshake) is satisfied, before browsers can
+// reconnect and lose the race against the in-memory sessions map.
+let bridgeRestoreDone = false;
 const bridgeSockets = new Map(); // token -> BridgeSocket
 
 /**
@@ -287,15 +293,32 @@ function connectToBridge() {
   console.log(`[bridge] Connecting to ${BRIDGE_URL}...`);
   bridgeWs = new WebSocket(BRIDGE_URL);
 
-  bridgeWs.on('open', () => {
+  bridgeWs.on('open', async () => {
     console.log('[bridge] Connected to bridge');
     if (bridgeReconnectTimer) {
       clearTimeout(bridgeReconnectTimer);
       bridgeReconnectTimer = null;
     }
 
-    // After bridge reconnect, tell connected browsers to re-establish MUD connections.
-    // Sessions lost their mudSocket when bridge dropped (close handler above).
+    // First-time bridge connection on this server startup → run persistent
+    // session restore IMMEDIATELY, before any browser can reconnect and
+    // race the in-memory sessions map. Without this, the auth handler sees
+    // an empty map for tokens it should know about and fires SESSION_NEW
+    // (`login` audit) instead of SESSION_RESUME (`reconnect` audit) for
+    // every active user on every server restart. Pre-existing race fixed
+    // 2026-04-11.
+    if (!bridgeRestoreDone) {
+      bridgeRestoreDone = true;
+      try {
+        await restorePersistentSessions();
+      } catch (e) {
+        console.error('[bridge] Restore on bridge open failed:', e.message);
+      }
+    }
+
+    // After bridge reconnect (NOT initial startup), tell connected browsers
+    // to re-establish MUD connections. Sessions lost their mudSocket when
+    // bridge dropped (close handler above).
     let reconnectCount = 0;
     for (const [token, session] of sessions) {
       if (session.ws && session.ws.readyState === WebSocket.OPEN && !session.mudSocket && session.targetHost) {
@@ -6476,10 +6499,10 @@ server.listen(PORT, async () => {
 
   // Restore persistent sessions after startup
   if (BRIDGE_URL) {
-    // Bridge mode: wait for bridge connection, then restore (bridge has the TCP connections)
-    setTimeout(async () => {
-      await restorePersistentSessions();
-    }, 3000);
+    // Bridge mode: triggered from the bridge `open` handler in connectToBridge()
+    // (gated by bridgeRestoreDone) so restore runs as soon as the bridge handshake
+    // completes — well before any browser can race the in-memory sessions map.
+    // No setTimeout here.
   } else {
     // Direct mode: wait for old MUD connections to close, then re-login
     setTimeout(async () => {
