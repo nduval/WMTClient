@@ -229,9 +229,7 @@ def run_test_suites():
     ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
 
     # Known test failures that are accepted and should not block deploy.
-    # T11: Alias recursion via #if — server doesn't evaluate #if, so recursive
-    # patterns don't iterate server-side. Low priority; real bots use sequential pattern.
-    KNOWN_FAILURES = 1  # test_alias_compare.js T11
+    KNOWN_FAILURES = 0
 
     suites = [
         ('Pipeline',  'test_wmt_client.js'),
