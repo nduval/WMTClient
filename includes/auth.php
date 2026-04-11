@@ -19,6 +19,147 @@ function authLog(string $message): void {
     @file_put_contents($logFile, $entry, FILE_APPEND | LOCK_EX);
 }
 
+// ─── Login rate limiting ─────────────────────────────────────
+// Two parallel limits, both must pass for a login attempt to proceed:
+//   1. Per-IP   — catches a single attacker hammering many usernames
+//   2. Per-user — catches a botnet hammering a single account
+// Successful logins clear both counters for the (ip, user) pair.
+// Storage is a small JSON file under data/logs/ (denied via .htaccess).
+
+const RATE_IP_THRESHOLD   = 20;   // failures within window
+const RATE_IP_WINDOW      = 300;  // 5 min
+const RATE_IP_LOCKOUT     = 900;  // 15 min
+const RATE_USER_THRESHOLD = 10;   // failures within window
+const RATE_USER_WINDOW    = 600;  // 10 min
+const RATE_USER_LOCKOUT   = 900;  // 15 min
+
+function _loginRateLimitPath(): string {
+    return __DIR__ . '/../data/logs/login_attempts.json';
+}
+
+function _loadLoginRateData(): array {
+    $path = _loginRateLimitPath();
+    if (!file_exists($path)) return ['ip' => [], 'user' => []];
+    $raw = @file_get_contents($path);
+    $data = $raw ? json_decode($raw, true) : null;
+    if (!is_array($data)) $data = [];
+    if (!isset($data['ip']))   $data['ip']   = [];
+    if (!isset($data['user'])) $data['user'] = [];
+    return $data;
+}
+
+function _saveLoginRateData(array $data): void {
+    $path = _loginRateLimitPath();
+    $dir  = dirname($path);
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    @file_put_contents($path, json_encode($data), LOCK_EX);
+}
+
+function _pruneRateBucket(array &$bucket, int $window): void {
+    $cutoff = time() - $window;
+    if (isset($bucket['failures']) && is_array($bucket['failures'])) {
+        $bucket['failures'] = array_values(array_filter($bucket['failures'], function($t) use ($cutoff) {
+            return $t > $cutoff;
+        }));
+    }
+    if (isset($bucket['lockedUntil']) && $bucket['lockedUntil'] <= time()) {
+        unset($bucket['lockedUntil']);
+    }
+}
+
+/**
+ * Check login rate limit before attempting authentication.
+ * Returns null if OK, or ['reason' => 'ip'|'user', 'retryAfter' => seconds] if blocked.
+ */
+function checkLoginRateLimit(string $ip, string $username): ?array {
+    $data = _loadLoginRateData();
+    $now = time();
+    $userKey = strtolower($username);
+
+    if (isset($data['ip'][$ip]['lockedUntil']) && $data['ip'][$ip]['lockedUntil'] > $now) {
+        return [
+            'reason' => 'ip',
+            'retryAfter' => $data['ip'][$ip]['lockedUntil'] - $now,
+        ];
+    }
+    if (isset($data['user'][$userKey]['lockedUntil']) && $data['user'][$userKey]['lockedUntil'] > $now) {
+        return [
+            'reason' => 'user',
+            'retryAfter' => $data['user'][$userKey]['lockedUntil'] - $now,
+        ];
+    }
+    return null;
+}
+
+/**
+ * Record a failed login attempt against both the IP and the username buckets.
+ * If either bucket reaches its threshold, lock that bucket and clear its failures.
+ */
+function recordLoginFailure(string $ip, string $username): void {
+    $data = _loadLoginRateData();
+    $now = time();
+    $userKey = strtolower($username);
+
+    // IP bucket
+    if (!isset($data['ip'][$ip])) {
+        $data['ip'][$ip] = ['failures' => []];
+    }
+    _pruneRateBucket($data['ip'][$ip], RATE_IP_WINDOW);
+    $data['ip'][$ip]['failures'][] = $now;
+    if (count($data['ip'][$ip]['failures']) >= RATE_IP_THRESHOLD) {
+        $data['ip'][$ip]['lockedUntil'] = $now + RATE_IP_LOCKOUT;
+        $data['ip'][$ip]['failures'] = [];
+        authLog("RATE_LIMIT IP_LOCKED ip=$ip until=" . date('c', $data['ip'][$ip]['lockedUntil']));
+    }
+
+    // User bucket
+    if (!isset($data['user'][$userKey])) {
+        $data['user'][$userKey] = ['failures' => []];
+    }
+    _pruneRateBucket($data['user'][$userKey], RATE_USER_WINDOW);
+    $data['user'][$userKey]['failures'][] = $now;
+    if (count($data['user'][$userKey]['failures']) >= RATE_USER_THRESHOLD) {
+        $data['user'][$userKey]['lockedUntil'] = $now + RATE_USER_LOCKOUT;
+        $data['user'][$userKey]['failures'] = [];
+        authLog("RATE_LIMIT USER_LOCKED user=$userKey until=" . date('c', $data['user'][$userKey]['lockedUntil']));
+    }
+
+    _saveLoginRateData($data);
+}
+
+/**
+ * Clear rate limit counters for both buckets after a successful login.
+ * Also opportunistically prunes stale entries to keep the file small.
+ */
+function recordLoginSuccess(string $ip, string $username): void {
+    $data = _loadLoginRateData();
+    $userKey = strtolower($username);
+    $now = time();
+
+    if (isset($data['ip'][$ip])) {
+        $data['ip'][$ip]['failures'] = [];
+        unset($data['ip'][$ip]['lockedUntil']);
+    }
+    if (isset($data['user'][$userKey])) {
+        $data['user'][$userKey]['failures'] = [];
+        unset($data['user'][$userKey]['lockedUntil']);
+    }
+
+    // Opportunistic GC: drop empty/expired entries from BOTH buckets so the
+    // file stays bounded over time without needing a separate cron job.
+    foreach (['ip' => RATE_IP_WINDOW, 'user' => RATE_USER_WINDOW] as $kind => $window) {
+        foreach ($data[$kind] as $key => &$bucket) {
+            _pruneRateBucket($bucket, $window);
+            if (empty($bucket['failures']) && (!isset($bucket['lockedUntil']) || $bucket['lockedUntil'] <= $now)) {
+                unset($data[$kind][$key]);
+            }
+        }
+        unset($bucket);
+    }
+
+    _saveLoginRateData($data);
+}
+
 /**
  * Get the client's real IP address (handles proxies)
  */

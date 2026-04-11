@@ -134,15 +134,31 @@ switch ($action) {
             errorResponse('Username and password are required');
         }
 
+        // Rate limit BEFORE password check so we don't burn bcrypt CPU on
+        // already-blocked attempts. Two parallel limits — see includes/auth.php.
+        $clientIp = getClientIp();
+        $rateBlock = checkLoginRateLimit($clientIp, $username);
+        if ($rateBlock) {
+            $minutes = max(1, (int)ceil($rateBlock['retryAfter'] / 60));
+            authLog("RATE_LIMIT_BLOCK reason={$rateBlock['reason']} ip=$clientIp user=$username retry_after_seconds={$rateBlock['retryAfter']}");
+            header('Retry-After: ' . $rateBlock['retryAfter']);
+            errorResponse(
+                "Too many login attempts. Try again in $minutes minute" . ($minutes !== 1 ? 's' : '') . '.',
+                429
+            );
+        }
+
         $result = authenticateUser($username, $password);
 
         if ($result['success']) {
+            recordLoginSuccess($clientIp, $username);
             startUserSession($result['user_id'], $result['username']);
             successResponse([
                 'user_id' => $result['user_id'],
                 'username' => $result['username']
             ]);
         } else {
+            recordLoginFailure($clientIp, $username);
             errorResponse($result['error']);
         }
         break;
