@@ -18,6 +18,7 @@ BASE_DIR = Path(__file__).parent
 
 # Files/folders to deploy to IONOS (PHP client)
 IONOS_DEPLOY_FILES = [
+    '.htaccess',
     'index.php',
     'app.php',
     'characters.php',
