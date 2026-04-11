@@ -5551,11 +5551,417 @@ function serverSimpleHash(str) {
   return Math.abs(hash);
 }
 
+// ─── TinTin++ expression evaluator (ported from client app.js) ───
+// Used by server-side #if condition evaluation. Must stay in sync with the
+// client mathexp / tintoi / tincmp / tineval functions so that #if evaluates
+// the same on both sides.
+
+function tintoi(str) {
+  if (typeof str === 'number') return str;
+  if (!str || str.length === 0) return 0;
+  if (str.includes(':')) {
+    const parts = str.split(':').map(Number);
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+  }
+  const n = Number(str);
+  return isNaN(n) ? 0 : n;
+}
+
+function tincmp(left, right) {
+  if (left.type === 'string' && right.type === 'string') {
+    return left.str < right.str ? -1 : left.str > right.str ? 1 : 0;
+  }
+  if (left.type === 'number' && right.type === 'number') {
+    return left.val - right.val;
+  }
+  return 0;
+}
+
+function tineval(left, right) {
+  if (left.type === 'string' && right.type === 'string') {
+    try {
+      const pattern = right.str
+        .replace(/([.+^${}()|[\]\\])/g, '\\$1')
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.');
+      const regex = new RegExp('^' + pattern + '$');
+      return regex.test(left.str) ? 1 : 0;
+    } catch (e) {
+      return left.str === right.str ? 1 : 0;
+    }
+  }
+  if (left.type === 'number' && right.type === 'number') {
+    return left.val === right.val ? 1 : 0;
+  }
+  return 0;
+}
+
+function mathexpTokenize(str) {
+  const nodes = [];
+  let i = 0;
+  let level = 0;
+  let expectValue = true;
+  let hasFloat = false;
+
+  while (i < str.length) {
+    if (str[i] === ' ' || str[i] === '\t') { i++; continue; }
+
+    if (expectValue) {
+      if ((str[i] >= '0' && str[i] <= '9') || (str[i] === '.' && i + 1 < str.length && str[i + 1] >= '0' && str[i + 1] <= '9')) {
+        let numStr = '';
+        let hasDot = false;
+        while (i < str.length && ((str[i] >= '0' && str[i] <= '9') || (str[i] === '.' && !hasDot))) {
+          if (str[i] === '.') { hasDot = true; hasFloat = true; }
+          numStr += str[i];
+          i++;
+        }
+        nodes.push({ type: 'number', level, priority: 14, val: Number(numStr), str: numStr });
+        expectValue = false;
+        continue;
+      }
+      if (str[i] === '"') {
+        i++;
+        let s = '';
+        while (i < str.length && str[i] !== '"') {
+          if (str[i] === '\\' && i + 1 < str.length) { s += str[i + 1]; i += 2; }
+          else { s += str[i]; i++; }
+        }
+        if (i < str.length) i++;
+        nodes.push({ type: 'string', level, priority: 14, val: tintoi(s), str: s });
+        expectValue = false;
+        continue;
+      }
+      if (str[i] === '{') {
+        i++;
+        let s = '';
+        let depth = 1;
+        while (i < str.length && depth > 0) {
+          if (str[i] === '{') depth++;
+          else if (str[i] === '}') { depth--; if (depth === 0) break; }
+          s += str[i];
+          i++;
+        }
+        if (i < str.length) i++;
+        nodes.push({ type: 'string', level, priority: 14, val: tintoi(s), str: s });
+        expectValue = false;
+        continue;
+      }
+      if (str[i] === '(') {
+        level++;
+        nodes.push({ type: 'paren', level, priority: 0, val: 0, str: '(' });
+        i++;
+        continue;
+      }
+      if (str[i] === '!') {
+        nodes.push({ type: 'number', level, priority: 14, val: 0, str: '0' });
+        nodes.push({ type: 'operator', level, priority: 6, val: 0, str: '==' });
+        i++;
+        continue;
+      }
+      if (str[i] === '-') {
+        nodes.push({ type: 'number', level, priority: 14, val: -1, str: '-1' });
+        nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '*' });
+        i++;
+        continue;
+      }
+      if (str[i] === '~') {
+        nodes.push({ type: 'number', level, priority: 14, val: -1, str: '-1' });
+        nodes.push({ type: 'operator', level, priority: 3, val: 0, str: '-' });
+        i++;
+        continue;
+      }
+      if (str[i] === '+') { i++; continue; }
+      if (str[i] === '$') return false;
+      i++;
+    } else {
+      if (str[i] === ')') {
+        nodes.push({ type: 'paren', level, priority: 0, val: 0, str: ')' });
+        level--;
+        i++;
+        continue;
+      }
+      if (i + 1 < str.length) {
+        const two = str[i] + str[i + 1];
+        if (i + 2 < str.length) {
+          const three = str[i] + str[i + 1] + str[i + 2];
+          if (three === '===' || three === '!==') {
+            nodes.push({ type: 'operator', level, priority: 6, val: 0, str: three });
+            i += 3; expectValue = true; continue;
+          }
+        }
+        if (two === '**') { nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '**' }); i += 2; expectValue = true; continue; }
+        if (two === '//') { nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '//' }); i += 2; expectValue = true; continue; }
+        if (two === '<<') { nodes.push({ type: 'operator', level, priority: 4, val: 0, str: '<<' }); i += 2; expectValue = true; continue; }
+        if (two === '>>') { nodes.push({ type: 'operator', level, priority: 4, val: 0, str: '>>' }); i += 2; expectValue = true; continue; }
+        if (two === '<=') { nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '<=' }); i += 2; expectValue = true; continue; }
+        if (two === '>=') { nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '>=' }); i += 2; expectValue = true; continue; }
+        if (two === '==') { nodes.push({ type: 'operator', level, priority: 6, val: 0, str: '==' }); i += 2; expectValue = true; continue; }
+        if (two === '!=') { nodes.push({ type: 'operator', level, priority: 6, val: 0, str: '!=' }); i += 2; expectValue = true; continue; }
+        if (two === '&&') { nodes.push({ type: 'operator', level, priority: 10, val: 0, str: '&&' }); i += 2; expectValue = true; continue; }
+        if (two === '||') { nodes.push({ type: 'operator', level, priority: 12, val: 0, str: '||' }); i += 2; expectValue = true; continue; }
+        if (two === '^^') { nodes.push({ type: 'operator', level, priority: 11, val: 0, str: '^^' }); i += 2; expectValue = true; continue; }
+      }
+      if (str[i] === '*') { nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '*' }); i++; expectValue = true; continue; }
+      if (str[i] === '/') { nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '/' }); i++; expectValue = true; continue; }
+      if (str[i] === '%') { nodes.push({ type: 'operator', level, priority: 2, val: 0, str: '%' }); i++; expectValue = true; continue; }
+      if (str[i] === '+') { nodes.push({ type: 'operator', level, priority: 3, val: 0, str: '+' }); i++; expectValue = true; continue; }
+      if (str[i] === '-') { nodes.push({ type: 'operator', level, priority: 3, val: 0, str: '-' }); i++; expectValue = true; continue; }
+      if (str[i] === '<') { nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '<' }); i++; expectValue = true; continue; }
+      if (str[i] === '>') { nodes.push({ type: 'operator', level, priority: 5, val: 0, str: '>' }); i++; expectValue = true; continue; }
+      if (str[i] === '&') { nodes.push({ type: 'operator', level, priority: 7, val: 0, str: '&' }); i++; expectValue = true; continue; }
+      if (str[i] === '^') { nodes.push({ type: 'operator', level, priority: 8, val: 0, str: '^' }); i++; expectValue = true; continue; }
+      if (str[i] === '|') { nodes.push({ type: 'operator', level, priority: 9, val: 0, str: '|' }); i++; expectValue = true; continue; }
+      if (str[i] === '?') { nodes.push({ type: 'operator', level, priority: 13, val: 0, str: '?' }); i++; expectValue = true; continue; }
+      if (str[i] === ':') { nodes.push({ type: 'operator', level, priority: 13, val: 0, str: ':' }); i++; expectValue = true; continue; }
+      if ((str[i] === 'd' || str[i] === 'D') && i + 1 < str.length && str[i + 1] >= '0' && str[i + 1] <= '9') {
+        nodes.push({ type: 'operator', level, priority: 1, val: 0, str: 'd' });
+        i++; expectValue = true; continue;
+      }
+      const siChar = str[i];
+      if ('KMGTmunp'.includes(siChar) && nodes.length > 0 && nodes[nodes.length - 1].type === 'number') {
+        const prev = nodes[nodes.length - 1];
+        const siMap = { K: 1e3, M: 1e6, G: 1e9, T: 1e12, m: 1e-3, u: 1e-6, n: 1e-9, p: 1e-12 };
+        if (siMap[siChar]) {
+          prev.val *= siMap[siChar];
+          i++;
+          continue;
+        }
+      }
+      i++;
+    }
+  }
+
+  if (nodes.length === 0) return false;
+  nodes.hasFloat = hasFloat;
+  return nodes;
+}
+
+let _mathexpFloat = false;
+
+function mathexpCompute(nodes, idx) {
+  const op = nodes[idx];
+  const left = nodes[idx - 1];
+  const right = nodes[idx + 1];
+  if (!left || !right) return;
+
+  let result = { type: 'number', level: op.level, priority: 14, val: 0, str: '' };
+  const lv = left.val;
+  const rv = right.val;
+
+  switch (op.str) {
+    case '+':
+      if (left.type === 'string' || right.type === 'string') {
+        result.type = 'string';
+        result.str = (left.type === 'string' ? left.str : String(left.val)) +
+                     (right.type === 'string' ? right.str : String(right.val));
+        result.val = tintoi(result.str);
+      } else {
+        result.val = lv + rv;
+      }
+      break;
+    case '-': result.val = lv - rv; break;
+    case '*': result.val = lv * rv; break;
+    case '/': result.val = rv !== 0 ? (_mathexpFloat ? lv / rv : Math.trunc(lv / rv)) : 0; break;
+    case '%': result.val = rv !== 0 ? (_mathexpFloat ? lv % rv : Math.trunc(lv) % Math.trunc(rv)) : 0; break;
+    case '**': result.val = Math.pow(lv, rv); break;
+    case '//': result.val = rv !== 0 ? Math.pow(lv, 1 / rv) : 0; break;
+    case '<<': result.val = Math.trunc(lv) << Math.trunc(rv); break;
+    case '>>': result.val = Math.trunc(lv) >> Math.trunc(rv); break;
+    case '<': result.val = tincmp(left, right) < 0 ? 1 : 0; break;
+    case '>': result.val = tincmp(left, right) > 0 ? 1 : 0; break;
+    case '<=': result.val = tincmp(left, right) <= 0 ? 1 : 0; break;
+    case '>=': result.val = tincmp(left, right) >= 0 ? 1 : 0; break;
+    case '==': result.val = tineval(left, right) ? 1 : 0; break;
+    case '!=': result.val = tineval(left, right) ? 0 : 1; break;
+    case '===': result.val = tincmp(left, right) === 0 ? 1 : 0; break;
+    case '!==': result.val = tincmp(left, right) !== 0 ? 1 : 0; break;
+    case '&': result.val = Math.trunc(lv) & Math.trunc(rv); break;
+    case '^': result.val = Math.trunc(lv) ^ Math.trunc(rv); break;
+    case '|': result.val = Math.trunc(lv) | Math.trunc(rv); break;
+    case '&&': result.val = (lv !== 0 && rv !== 0) ? 1 : 0; break;
+    case '||': result.val = (lv !== 0 || rv !== 0) ? 1 : 0; break;
+    case '^^': result.val = ((lv !== 0) !== (rv !== 0)) ? 1 : 0; break;
+    case 'd': {
+      let total = 0;
+      const count = Math.max(1, Math.trunc(lv));
+      const sides = Math.max(1, Math.trunc(rv));
+      for (let r = 0; r < count; r++) {
+        total += Math.floor(Math.random() * sides) + 1;
+      }
+      result.val = total;
+      break;
+    }
+    case '?': {
+      let colonIdx = -1;
+      for (let j = idx + 2; j < nodes.length; j++) {
+        if (nodes[j].type === 'operator' && nodes[j].str === ':' && nodes[j].level === op.level) {
+          colonIdx = j;
+          break;
+        }
+      }
+      if (colonIdx !== -1 && colonIdx + 1 < nodes.length) {
+        const falseNode = nodes[colonIdx + 1];
+        if (lv !== 0) result = { ...right, level: op.level, priority: 14 };
+        else result = { ...falseNode, level: op.level, priority: 14 };
+        nodes.splice(colonIdx, 2);
+      } else {
+        result = lv !== 0 ? { ...right, level: op.level, priority: 14 } : { type: 'number', level: op.level, priority: 14, val: 0, str: '' };
+      }
+      break;
+    }
+    case ':': result = { ...right, level: op.level, priority: 14 }; break;
+  }
+
+  nodes.splice(idx - 1, 3, result);
+}
+
+function mathexpLevel(nodes, startIdx, endIdx) {
+  for (let pri = 0; pri <= 13; pri++) {
+    let j = startIdx;
+    while (j <= endIdx && j < nodes.length) {
+      const node = nodes[j];
+      if (node.type === 'operator' && node.priority === pri) {
+        mathexpCompute(nodes, j);
+        endIdx -= 2;
+      } else {
+        j++;
+      }
+    }
+  }
+}
+
+function mathexp(str) {
+  if (!str || typeof str !== 'string') {
+    return { val: 0, str: '', type: 'number' };
+  }
+  const nodes = mathexpTokenize(str.trim());
+  if (!nodes || nodes.length === 0) {
+    return { val: 0, str: '', type: 'number' };
+  }
+  _mathexpFloat = nodes.hasFloat || false;
+
+  let maxLevel = 0;
+  for (const n of nodes) {
+    if (n.level > maxLevel) maxLevel = n.level;
+  }
+
+  for (let lev = maxLevel; lev >= 0; lev--) {
+    let start = -1;
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i].type === 'paren' && nodes[i].str === '(' && nodes[i].level === lev) {
+        start = i;
+      } else if (nodes[i].type === 'paren' && nodes[i].str === ')' && nodes[i].level === lev) {
+        if (start !== -1) {
+          mathexpLevel(nodes, start + 1, i - 1);
+          let openIdx = -1, closeIdx = -1;
+          for (let k = 0; k < nodes.length; k++) {
+            if (nodes[k].type === 'paren' && nodes[k].str === '(' && nodes[k].level === lev) openIdx = k;
+            if (nodes[k].type === 'paren' && nodes[k].str === ')' && nodes[k].level === lev) { closeIdx = k; break; }
+          }
+          if (openIdx !== -1 && closeIdx !== -1) {
+            nodes.splice(closeIdx, 1);
+            nodes.splice(openIdx, 1);
+          }
+          start = -1;
+          i = -1;
+        }
+      }
+    }
+    let rangeStart = -1, rangeEnd = -1;
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i].level === lev) {
+        if (rangeStart === -1) rangeStart = i;
+        rangeEnd = i;
+      }
+    }
+    if (rangeStart !== -1) {
+      mathexpLevel(nodes, rangeStart, rangeEnd);
+    }
+  }
+
+  if (nodes.length > 0) return nodes[0];
+  return { val: 0, str: '', type: 'number' };
+}
+
+function evaluateCondition(condition) {
+  if (!condition) return false;
+  const cond = condition
+    .replace(/\band\b/gi, '&&')
+    .replace(/\bor\b/gi, '||')
+    .replace(/\bxor\b/gi, '^^')
+    .replace(/\bnot\b/gi, '!');
+  const result = mathexp(cond);
+  return result.type === 'string' ? result.str.length > 0 : result.val !== 0;
+}
+
+// Port of client parseIfChain: splits an #if body into
+// [{condition, commands}, ...] handling positional else and #elseif/#else.
+function parseIfChain(str) {
+  const parts = [];
+  let current = { condition: null, commands: null };
+  let depth = 0;
+  let buffer = '';
+  let state = 'condition';
+
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (char === '{') {
+      if (depth === 0) {
+        if (state === 'between') {
+          current.condition = '1';
+          state = 'commands';
+        }
+        depth++;
+        continue;
+      }
+      depth++;
+      buffer += char;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        if (state === 'condition') {
+          current.condition = buffer.trim();
+          buffer = '';
+          state = 'commands';
+        } else if (state === 'commands') {
+          current.commands = buffer.trim();
+          parts.push(current);
+          current = { condition: null, commands: null };
+          buffer = '';
+          state = 'between';
+        }
+        continue;
+      }
+      buffer += char;
+    } else if (depth > 0) {
+      buffer += char;
+    } else if (state === 'between') {
+      const remaining = str.substring(i).trim();
+      if (remaining.startsWith('#elseif') || remaining.startsWith('#elif')) {
+        const match = remaining.match(/^#(?:elseif|elif)\s*/);
+        if (match) {
+          i += match[0].length - 1;
+          state = 'condition';
+        }
+      } else if (remaining.startsWith('#else')) {
+        const match = remaining.match(/^#else\s*/);
+        if (match) {
+          i += match[0].length - 1;
+          current.condition = '1';
+          state = 'commands';
+        }
+      }
+    }
+  }
+  return parts;
+}
+
 // Server-side inline command processing
 // Canonical command registry: assets/js/app.js COMMAND_REGISTRY
 // Commands with serverInline: true are handled here:
 //   #math, #var/#variable, #unvar/#unvariable, #format, #cat, #replace,
-//   #line oneshot, #line gag
+//   #line oneshot, #line gag, #if
 function serverProcessInlineCommand(cmd, session) {
   if (!cmd || !session) return false;
   const trimmed = cmd.trim();
@@ -5723,6 +6129,54 @@ function serverProcessInlineCommand(cmd, session) {
         session._varServerModified[varName] = Date.now();
         sendToClient(session, { type: 'var_update', variables: { [varName]: session.variables[varName] } });
       }
+    }
+    return true;
+  }
+
+  // #if {condition} {true_cmds} [{else_cmds}]
+  //   or  #if {cond} {true} [#elseif {cond} {cmds}] [#else {cmds}]
+  //
+  // Why server-side: #if branches often contain #var/#math for server-owned
+  // variables. If #if is evaluated on the client, inner #var updates lose the
+  // sync race against `_varServerModified`-protected server values (every
+  // HP-tick #math refreshes the 2s window). Evaluating #if on the server lets
+  // inner #var/#math execute inline via serverProcessInlineCommand.
+  const ifMatch = trimmed.match(/^#if\s+(.*)$/is);
+  if (ifMatch) {
+    const chain = parseIfChain(ifMatch[1]);
+    if (chain.length === 0) return true; // malformed — swallow
+
+    if (!session._ifDepth) session._ifDepth = 0;
+    if (session._ifDepth > 20) {
+      session._ifDepth = 0;
+      return true;
+    }
+    session._ifDepth++;
+
+    try {
+      for (const part of chain) {
+        const substituted = substituteUserVariables(part.condition, session.variables || {}, session.functions || {});
+        if (evaluateCondition(substituted)) {
+          // Run the branch through the same pipeline the trigger dispatcher uses:
+          // expandCommandWithAliases calls serverProcessInlineCommand for inline
+          // server-handled # commands (recursing into nested #if), substitutes
+          // vars in other # commands, and alias-expands plain commands.
+          const expanded = expandCommandWithAliases(part.commands, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+          expanded.forEach(ec => {
+            const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+            if (repeatMatch) {
+              executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+            } else if (ec.startsWith('#')) {
+              sendToClient(session, { type: 'client_command', command: ec });
+            } else if (session.mudSocket && !session.mudSocket.destroyed) {
+              session.mudSocket.write(processEscapes(ec) + '\r\n');
+            }
+          });
+          break;
+        }
+      }
+    } finally {
+      session._ifDepth--;
     }
     return true;
   }

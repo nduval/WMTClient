@@ -64,7 +64,7 @@ const COMMAND_REGISTRY = [
     { name: 'math',         abbrevs: [],                   handler: 'cmdMath',         async: false, getAllAfter: 1, serverInline: true,
       category: 'Variables', syntax: '#math {variable} {expression}', description: 'Evaluate math expression' },
     // --- Control flow ---
-    { name: 'if',           abbrevs: [],                   handler: 'cmdIf',           async: true,
+    { name: 'if',           abbrevs: [],                   handler: 'cmdIf',           async: true,                  serverInline: true,
       category: 'Control Flow', syntax: '#if {condition} {true} [#elseif {cond} {cmd}] [#else {false}]', description: 'Conditional execution' },
     { name: 'switch',       abbrevs: [],                   handler: 'cmdSwitch',       async: false,
       category: 'Control Flow', syntax: '#switch {value} {#case {val} {cmd};#default {cmd}}', description: 'Multi-branch conditional' },
