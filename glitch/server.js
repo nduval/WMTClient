@@ -385,13 +385,26 @@ const _logDirsCreated = new Set();
 const LOG_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per character per day
 const _logFileSizeCache = new Map(); // filePath -> { size, checkedAt }
 
+// Resolve the best-known name for a session: if the sniffer has captured the
+// real MUD character name from the login prompt, prefer that over the
+// user-chosen WMT slot label. Falls back to characterId, then 'unknown'.
+// Used for audit logs, per-character log filenames, and journalctl `char=`
+// fields so the operator-facing record reflects MUD truth, not the user's
+// editable slot label. NEW structured wmtSlot/mudChar fields stay distinct
+// (so mismatches remain visible) — only the legacy single-name fields use
+// this helper.
+function effectiveCharName(session) {
+  if (!session) return 'unknown';
+  return session._actualMudChar || session.characterName || session.characterId || 'unknown';
+}
+
 function writeSessionLog(session, type, data) {
   if (!session) return;
   // Only log for the configured user (if filter is set)
   if (LOG_USER_ID && String(session.userId) !== LOG_USER_ID) return;
   try {
     const date = new Date().toISOString().slice(0, 10);
-    const charName = (session.characterName || session.characterId || 'unknown')
+    const charName = effectiveCharName(session)
       .toString().replace(/[^a-zA-Z0-9_-]/g, '_');
     const dir = path.join(LOG_DIR, date);
     const filePath = path.join(dir, `${charName}.jsonl`);
@@ -697,7 +710,7 @@ function sendAuditLog(activity, session, ip) {
   const payload = JSON.stringify({
     activity,
     user_id: session.userId || '',
-    character: session.characterName || '',
+    character: effectiveCharName(session),
     realm: session.targetHost === '3scapes.org' ? '3s' : '3k',
     ip: ip || session.clientIp || ''
   });
@@ -789,7 +802,7 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
         logSessionEvent('DISCORD_PREFS_FETCHED', {
           token: session.token.substring(0, 8),
           user: userId,
-          char: session.characterName || characterId,
+          char: effectiveCharName(session),
           webhookCount: webhookCount,
           totalChannels: Object.keys(response.channelPrefs).length,
           channels: Object.keys(response.channelPrefs).join(',')
@@ -800,7 +813,7 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
     logSessionEvent('DISCORD_PREFS_FETCH_ERROR', {
       token: session.token.substring(0, 8),
       user: userId,
-      char: session.characterName || characterId,
+      char: effectiveCharName(session),
       error: e.message
     });
   }
@@ -1665,7 +1678,7 @@ setInterval(() => {
         logSessionEvent('SESSION_TIMEOUT', {
           token: token.substring(0, 8),
           user: session.userId,
-          char: session.characterName || session.characterId,
+          char: effectiveCharName(session),
           disconnectedFor: Math.round(elapsed / 1000)
         });
         closeSession(session, 'timeout');
@@ -2803,7 +2816,7 @@ function closeSession(session, reason) {
   logSessionEvent('SESSION_CLOSE', {
     token: session.token.substring(0, 8),
     user: session.userId,
-    char: session.characterName || session.characterId,
+    char: effectiveCharName(session),
     reason: reason,
     mudWasConnected: mudConnected,
     wizard: session.isWizard
@@ -3000,7 +3013,7 @@ function parseMipMessage(session, msgType, msgData) {
             logSessionEvent('DISCORD_SEND', {
               token: session.token.substring(0, 8),
               user: session.userId,
-              char: session.characterName,
+              char: effectiveCharName(session),
               channel: channel,
               messagePreview: rawText.substring(0, 50)
             });
@@ -3177,7 +3190,7 @@ function flushPendingBab(session, channel) {
       logSessionEvent('DISCORD_SEND', {
         token: session.token.substring(0, 8),
         user: session.userId,
-        char: session.characterName,
+        char: effectiveCharName(session),
         channel: channel,
         messagePreview: bab.rawText.substring(0, 50)
       });
@@ -3823,7 +3836,7 @@ wss.on('connection', (ws, req) => {
               logSessionEvent('SESSION_RESUME', {
                 token: token.substring(0, 8),
                 user: session.userId,
-                char: session.characterName || session.characterId,
+                char: effectiveCharName(session),
                 mudConnected: oldMudConnected,
                 disconnectedFor: disconnectDuration,
                 wizard: session.isWizard,
@@ -3886,7 +3899,7 @@ wss.on('connection', (ws, req) => {
               logSessionEvent('SESSION_TAKEOVER', {
                 token: token.substring(0, 8),
                 user: session.userId,
-                char: session.characterName || session.characterId,
+                char: effectiveCharName(session),
                 note: 'new browser taking over from existing browser'
               });
               try {
@@ -3925,7 +3938,7 @@ wss.on('connection', (ws, req) => {
             logSessionEvent('SESSION_RESUME', {
               token: token.substring(0, 8),
               user: session.userId,
-              char: session.characterName || session.characterId,
+              char: effectiveCharName(session),
               mudConnected: mudConnected,
               disconnectedFor: disconnectDuration,
               wizard: session.isWizard,
@@ -4331,7 +4344,7 @@ wss.on('connection', (ws, req) => {
           logSessionEvent('DISCORD_PREFS_SET', {
             token: session.token.substring(0, 8),
             user: session.userId,
-            char: session.characterName,
+            char: effectiveCharName(session),
             webhookCount: webhookCount,
             totalChannels: Object.keys(session.discordChannelPrefs).length,
             channels: Object.keys(session.discordChannelPrefs).join(',')
@@ -4477,7 +4490,7 @@ wss.on('connection', (ws, req) => {
           logSessionEvent('SESSION_EXPLICIT_DISCONNECT', {
             token: session.token.substring(0, 8),
             user: session.userId,
-            char: session.characterName || session.characterId
+            char: effectiveCharName(session)
           });
           session.explicitDisconnect = true;
           closeSession(session, 'explicit disconnect');
@@ -4510,7 +4523,7 @@ wss.on('connection', (ws, req) => {
       logSessionEvent('SESSION_BROWSER_DISCONNECT', {
         token: session.token.substring(0, 8),
         user: session.userId,
-        char: session.characterName || session.characterId,
+        char: effectiveCharName(session),
         mudConnected: mudConnected,
         wizard: session.isWizard,
         willTimeout: !session.isWizard
