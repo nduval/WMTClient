@@ -631,7 +631,7 @@ if (in_array($username, $ADMIN_USERS)) {
         <div class="new-character">
             <h3>Add Character Profile</h3>
             <form class="new-character-form" id="create-form" onsubmit="createCharacter(event)">
-                <input type="text" id="new-character-name" placeholder="Character name" maxlength="50" required>
+                <input type="text" id="new-character-name" placeholder="MUD character name" maxlength="12" required title="Must match your existing MUD character name exactly (max 12 characters)">
                 <input type="text" id="new-character-label" placeholder="Profile label (optional)" maxlength="50" style="width: 180px;">
                 <span class="server-toggle" id="create-server-toggle" title="Select server for this profile">
                     <span class="server-option active" data-server="3k">3K</span>
@@ -639,14 +639,17 @@ if (in_array($username, $ADMIN_USERS)) {
                 </span>
                 <button type="submit">Add Profile</button>
             </form>
-            <p class="form-help">Creates a profile for a character - stores triggers, aliases, and settings. Use labels to create multiple profiles for the same character (e.g. "Mage", "Jedi").</p>
+            <p class="form-help">
+                <strong>Character name</strong> must match your MUD character name exactly — this is what the client auto-sends at the login prompt (max 12 characters, letters only).
+                <strong>Profile label</strong> is a free-form display title — use it for nicknames or to tag multiple profiles for the same character (e.g. "Mage", "Jedi").
+            </p>
         </div>
 
         <div class="new-character new-mud-character">
             <h3>New to 3Kingdoms?</h3>
             <p class="form-help" style="margin-bottom: 15px;">Create a brand new character on the MUD. You'll go through the registration process.</p>
             <form class="new-character-form" id="create-mud-form" onsubmit="createMudCharacter(event)">
-                <input type="text" id="new-mud-character-name" placeholder="Character name" maxlength="50" required pattern="[a-zA-Z]+" title="Letters only, no spaces">
+                <input type="text" id="new-mud-character-name" placeholder="Character name" maxlength="12" required pattern="[a-zA-Z]+" title="Letters only, no spaces (max 12 characters)">
                 <span class="server-toggle" id="create-mud-server-toggle" title="Select server">
                     <span class="server-option active" data-server="3k">3K</span>
                     <span class="server-option" data-server="3s">3S</span>
@@ -756,6 +759,11 @@ if (in_array($username, $ADMIN_USERS)) {
             const name = document.getElementById('new-character-name').value.trim();
             if (!name) return;
 
+            if (name.length > 12) {
+                showMessage('Character name must be 12 characters or less (3K/3S limit)', true);
+                return;
+            }
+
             const label = (document.getElementById('new-character-label').value || '').trim();
             const server = getSelectedServer('create-server-toggle');
 
@@ -784,6 +792,11 @@ if (in_array($username, $ADMIN_USERS)) {
             // Validate: letters only
             if (!/^[a-zA-Z]+$/.test(name)) {
                 showMessage('Character name must contain only letters (no spaces or numbers)', true);
+                return;
+            }
+
+            if (name.length > 12) {
+                showMessage('Character name must be 12 characters or less (3K/3S limit)', true);
                 return;
             }
 
@@ -863,8 +876,13 @@ if (in_array($username, $ADMIN_USERS)) {
         }
 
         async function renameCharacter(characterId, currentName) {
-            const newName = prompt('Character name:', currentName);
+            const newName = prompt('MUD character name (max 12 chars, must match your existing MUD character exactly):', currentName);
             if (!newName || newName.trim() === currentName) return;
+
+            if (newName.trim().length > 12) {
+                showMessage('Character name must be 12 characters or less (3K/3S limit)', true);
+                return;
+            }
 
             try {
                 const res = await fetch('api/characters.php?action=rename', {

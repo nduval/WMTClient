@@ -83,8 +83,11 @@ switch ($action) {
             errorResponse('Character name is required');
         }
 
-        if (strlen($name) > 50) {
-            errorResponse('Character name too long (max 50 characters)');
+        // 3K / 3S cap MUD character names at 12 characters; anything longer
+        // is rejected at the login prompt ("That name is too long. Please use
+        // less than 12 characters.") and breaks auto-login.
+        if (strlen($name) > 12) {
+            errorResponse('Character name too long (max 12 characters for 3K/3S)');
         }
 
         if (!in_array($server, ['3k', '3s'])) {
@@ -146,8 +149,8 @@ switch ($action) {
             errorResponse('Character ID and new name are required');
         }
 
-        if (strlen($newName) > 50) {
-            errorResponse('Character name too long (max 50 characters)');
+        if (strlen($newName) > 12) {
+            errorResponse('Character name too long (max 12 characters for 3K/3S)');
         }
 
         if (!renameCharacter($userId, $characterId, $newName)) {
