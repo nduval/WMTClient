@@ -473,6 +473,73 @@ function cleanupOldLogs() {
 cleanupOldLogs();
 setInterval(cleanupOldLogs, 6 * 60 * 60 * 1000);
 
+// ==================== MUD Event Sniffer ====================
+// Packet-level pattern matching on MUD output lines. Emits structured events
+// for login prompts, name/password rejections, linkdeath state, relink,
+// session takeover, etc. Events go to both the per-session JSONL log
+// (writeSessionLog) and the structured journalctl/IONOS buffer
+// (logSessionEvent). Patterns are anchored at start-of-line to minimize
+// false positives against normal game text.
+//
+// All patterns below are harvested from real sessions — do not add speculative
+// ones; add new patterns only after confirming the exact text from a live log.
+const MUD_EVENT_PATTERNS = [
+  // Login/name prompt
+  { re: /^<Entering 3(?:Kingdoms|Scapes)\.\s*Enter your character name/, event: 'name_prompt_banner', atNamePrompt: true },
+  { re: /^What is your name:/,                                            event: 'name_prompt',        atNamePrompt: true },
+  { re: /^Password:\s*$/,                                                 event: 'password_prompt',    atNamePrompt: false },
+
+  // Name prompt rejections (the StantonTheManton case)
+  { re: /^That name is too long/,                                         event: 'name_too_long',      atNamePrompt: true },
+  { re: /^Invalid character in position/,                                 event: 'name_invalid_char',  atNamePrompt: true },
+
+  // State-of-account messages at login prompt
+  { re: /^Your character is currently logged in and linkdead/,            event: 'linkdead_at_prompt' },
+  { re: /^Your character is currently logged in and active/,              event: 'takeover_at_prompt' },
+
+  // Successful relink — own-perspective message
+  { re: /^3Kingdoms welcomes you back from linkdeath/,                    event: 'relink_complete', realm: '3k' },
+  { re: /^3Scapes welcomes you back from linkdeath/,                      event: 'relink_complete', realm: '3s' },
+  { re: /^You received tells while linkdead/,                             event: 'relink_tells_waiting' },
+
+  // Auth failures
+  { re: /^Incorrect password\./,                                          event: 'password_fail',      atNamePrompt: true },
+];
+
+function detectMudEvents(session, rawLine) {
+  if (!session || !rawLine) return;
+  // Patterns are anchored at start of line and match plain text, so strip
+  // ANSI once up front. Cheap on short lines; returns early on no match.
+  const clean = stripAnsi(rawLine).trimEnd();
+  if (!clean) return;
+
+  for (const p of MUD_EVENT_PATTERNS) {
+    if (p.re.test(clean)) {
+      const payload = {
+        token: session.token ? session.token.substring(0, 8) : null,
+        user: session.userId || null,
+        wmtSlot: session.characterName || null,
+        mudChar: session._actualMudChar || null,
+        event: p.event,
+      };
+      if (p.realm) payload.realm = p.realm;
+
+      logSessionEvent('MUD_EVENT', payload);
+      writeSessionLog(session, 'mud_event', { event: p.event, realm: p.realm || null, match: clean.substring(0, 120) });
+
+      // State-machine side effect: track whether the MUD is currently
+      // asking for a character name. Used by the input handler to
+      // capture the real MUD character name (which may differ from the
+      // WMT slot label).
+      if (p.atNamePrompt === true)  session._atNamePrompt = true;
+      if (p.atNamePrompt === false) session._atNamePrompt = false;
+
+      // One line can only be one event — stop scanning.
+      return;
+    }
+  }
+}
+
 /**
  * Flush unflushed session logs to IONOS for persistence
  * Fire-and-forget: doesn't block on failure, just logs to console
@@ -3126,6 +3193,11 @@ function processLine(session, line) {
   // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
   line = line.replace(/\r/g, '');
 
+  // MUD event sniffer — emit structured events for login/logout/linkdeath.
+  // Runs BEFORE MIP filtering since login-prompt text never contains MIP.
+  // Pattern matching is line-start anchored so false positives are unlikely.
+  detectMudEvents(session, line);
+
   // Flush any pending BAB tell/soul — the MUD sends the MIP BAB message
   // on one line, then the ANSI text on the next. If the ANSI text starts
   // with "From afar", it's a soul; otherwise it's a regular tell.
@@ -3499,6 +3571,15 @@ function connectToMud(session) {
     const wasResumed = BRIDGE_URL && session.mudSocket.resumed;
     console.log(`${wasResumed ? 'Resumed' : 'Connected to'} MUD: ${session.targetHost}:${session.targetPort}${BRIDGE_URL ? ' (via bridge)' : ''}`);
     writeSessionLog(session, 'mud_connect', { host: session.targetHost, port: session.targetPort, resumed: wasResumed });
+    logSessionEvent('MUD_LINK_GAINED', {
+      token: session.token ? session.token.substring(0, 8) : null,
+      user: session.userId,
+      wmtSlot: session.characterName,
+      mudChar: session._actualMudChar || null,
+      host: session.targetHost,
+      port: session.targetPort,
+      resumed: wasResumed
+    });
 
     if (!wasResumed) {
       // New connection — notify client
@@ -3575,6 +3656,13 @@ function connectToMud(session) {
   session.mudSocket.on('close', () => {
     console.log('MUD connection closed');
     writeSessionLog(session, 'mud_disconnect', {});
+    logSessionEvent('MUD_LINK_LOST', {
+      token: session.token ? session.token.substring(0, 8) : null,
+      user: session.userId,
+      wmtSlot: session.characterName,
+      mudChar: session._actualMudChar || null,
+      explicitDisconnect: !!session.explicitDisconnect
+    });
     // Don't send misleading messages during server restart — browser already got notified
     if (!session.serverRestarting) {
       sendToClient(session, {
@@ -3979,6 +4067,32 @@ wss.on('connection', (ws, req) => {
           }
           if (session.mudSocket && !session.mudSocket.destroyed) {
             writeSessionLog(session, 'input', { cmd: data.command || '' });
+
+            // MUD character name capture: if the MUD is currently at the
+            // name prompt (detected by detectMudEvents), the next typed
+            // command is the real MUD character name. This is the only
+            // reliable way to learn the actual character — the WMT slot
+            // label is user-chosen and may differ (see the StantonTheManton
+            // incident, Apr 2026).
+            if (session._atNamePrompt && data.command && !data.raw) {
+              const candidate = String(data.command).trim().toLowerCase();
+              if (/^[a-z]{2,12}$/.test(candidate)) {
+                const previous = session._actualMudChar;
+                session._actualMudChar = candidate;
+                session._atNamePrompt = false;
+                if (previous !== candidate) {
+                  logSessionEvent('MUD_CHAR_RESOLVED', {
+                    token: session.token ? session.token.substring(0, 8) : null,
+                    user: session.userId,
+                    wmtSlot: session.characterName,
+                    mudChar: candidate,
+                    previous: previous || null
+                  });
+                  writeSessionLog(session, 'mud_event', { event: 'char_resolved', mudChar: candidate, previous: previous || null });
+                }
+              }
+            }
+
             // If raw flag is set, send as-is without semicolon splitting or alias processing
             // (used by #send for ANSI codes containing semicolons)
             if (data.raw) {
@@ -4064,6 +4178,13 @@ wss.on('connection', (ws, req) => {
                   if (ec.trim().toLowerCase() === 'quit') {
                     session.explicitDisconnect = true;
                     sendToClient(session, { type: 'quit_detected' });
+                    logSessionEvent('MUD_QUIT', {
+                      token: session.token ? session.token.substring(0, 8) : null,
+                      user: session.userId,
+                      wmtSlot: session.characterName,
+                      mudChar: session._actualMudChar || null
+                    });
+                    writeSessionLog(session, 'mud_event', { event: 'quit' });
                   }
                   session.mudSocket.write(processEscapes(ec) + '\r\n');
                 }
