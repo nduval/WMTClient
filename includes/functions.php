@@ -834,6 +834,14 @@ function requireAuth(): void {
     if (!isset($_SESSION['user_id'])) {
         @file_put_contents($logFile, "[$timestamp] requireAuth DENIED: no user_id in session\n", FILE_APPEND | LOCK_EX);
         if (strpos($_SERVER['REQUEST_URI'], '/api/') !== false) {
+            // Mirror unauth API hits to the security log so brute-force /
+            // scanner traffic against authenticated endpoints is visible
+            // alongside scanner_probe / traversal_attempt events.
+            if (function_exists('securityLog')) {
+                securityLog('unauth_api_hit', [
+                    'reason' => isset($_COOKIE[SESSION_NAME]) ? 'expired_or_invalid_session' : 'no_session_cookie',
+                ], 'low');
+            }
             errorResponse('Authentication required', 401);
         } else {
             header('Location: index.php');

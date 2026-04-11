@@ -141,6 +141,11 @@ switch ($action) {
         if ($rateBlock) {
             $minutes = max(1, (int)ceil($rateBlock['retryAfter'] / 60));
             authLog("RATE_LIMIT_BLOCK reason={$rateBlock['reason']} ip=$clientIp user=$username retry_after_seconds={$rateBlock['retryAfter']}");
+            securityLog('login_rate_block', [
+                'reason' => $rateBlock['reason'],
+                'username' => $username,
+                'retry_after' => $rateBlock['retryAfter'],
+            ], 'medium');
             header('Retry-After: ' . $rateBlock['retryAfter']);
             errorResponse(
                 "Too many login attempts. Try again in $minutes minute" . ($minutes !== 1 ? 's' : '') . '.',
@@ -159,6 +164,9 @@ switch ($action) {
             ]);
         } else {
             recordLoginFailure($clientIp, $username);
+            // Note: individual failures aren't security-logged (too noisy on
+            // typos). Only the rate-limit BLOCK is, since that signals
+            // crossing the threshold from "user mistype" to "brute force".
             errorResponse($result['error']);
         }
         break;

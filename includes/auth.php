@@ -4,6 +4,11 @@
  */
 
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/security.php';
+
+// Run the request inspector once per request. Idempotent — guarded by
+// SECURITY_INSPECTED constant inside inspectRequestForThreats().
+inspectRequestForThreats();
 
 /**
  * Log authentication events for debugging
