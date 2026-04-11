@@ -6,8 +6,11 @@
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/security.php';
 
-// Run the request inspector once per request. Idempotent — guarded by
-// SECURITY_INSPECTED constant inside inspectRequestForThreats().
+// Emit security response headers and run the request inspector. Both run
+// once per request (idempotent via constants). Headers MUST go out before
+// any output, which is safe here because auth.php is included at the top
+// of every entry point before any HTML.
+emitSecurityHeaders();
 inspectRequestForThreats();
 
 /**
