@@ -37,6 +37,7 @@ IONOS_DEPLOY_FILES = [
     'assets/',
     'config/',
     'includes/',
+    'tools/',
     'websocket/',
     'data/.htaccess',
     'data/users/.htaccess',
