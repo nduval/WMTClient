@@ -3838,7 +3838,10 @@ wss.on('connection', (ws, req) => {
               oldSession.isWizard = isWizard;
               oldSession.clientIp = clientIp;
               if (authPacketPatchMs !== null) oldSession.packetPatchMs = authPacketPatchMs;
-              sendAuditLog('reconnect', oldSession, clientIp);
+              // No audit event here — this is a browser-side rekey while
+              // the MUD connection stays alive on the bridge. The audit log
+              // tracks MUD-level player activity (login / disconnect), not
+              // browser session machinery. See journalctl for SESSION_REKEY.
               oldSession._bridgeModeInit = false;  // Clear stale flag
               oldSession._pendingBridgeResume = false;
               if (oldSession.timeoutHandle) {
@@ -3942,7 +3945,12 @@ wss.on('connection', (ws, req) => {
             session.isWizard = isWizard;  // Update wizard status on reconnect
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
-            sendAuditLog('reconnect', session, clientIp);
+            // No audit event here — browser is reattaching to a session
+            // whose MUD socket never broke from the MUD's perspective.
+            // The audit log only tracks real MUD-level player activity
+            // (login when a new MUD socket opens, disconnect when one
+            // actually closes). See journalctl SESSION_RESUME for the
+            // browser-side reattach event.
             session._bridgeModeInit = false;  // Clear stale flag — prevents duplicate session_new
             session._pendingBridgeResume = false;
             if (session.timeoutHandle) {
