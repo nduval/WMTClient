@@ -26,12 +26,12 @@ const VERSION = '3.0.0'; // Bridge architecture for zero-downtime deploys
 // is a durable mirror updated on every state change. Server restart
 // reads from DB instead of relying on the SIGTERM persist chain.
 //
-// Gated to specific users during rollout (DB_ENABLED_USERS). Once
-// validated, the gate opens to all users.
+// DB_ENABLED_USERS = null means all users. Set to a Set of user IDs
+// to gate during rollout. Gate was removed 2026-04-12 after validation.
 const DB_PATH = path.join(__dirname, 'wmt.db');
-const DB_ENABLED_USERS = new Set([
-  'bd035a266e8aa6c77e69d950ba0120c0', // nathan
-]);
+// DB is now active for ALL users. The gated rollout phase (nathan-only)
+// completed successfully on 2026-04-12. All users seeded from IONOS JSON.
+const DB_ENABLED_USERS = null; // null = all users
 
 let wmtDb = null;
 try {
@@ -1788,7 +1788,7 @@ async function restorePersistentSessions() {
     // with the correct set BEFORE the browser reconnects and syncs.
     // This eliminates the window where the session has zero triggers
     // (between restore and client sync). Gated by userId during rollout.
-    if (DB_ENABLED_USERS.has(ps.userId) && ps.characterId) {
+    if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(ps.userId)) && ps.characterId) {
       const dbTriggers = dbLoadTriggers(ps.characterId);
       if (dbTriggers && dbTriggers.length > 0) {
         session.triggers = dbTriggers;
@@ -4823,7 +4823,7 @@ wss.on('connection', (ws, req) => {
           session.triggers = data.triggers || [];
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
           // DB dual-write (gated by user during rollout)
-          if (DB_ENABLED_USERS.has(session.userId) && session.characterId) {
+          if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
             dbSaveTriggers(session.characterId, session.triggers);
           }
           // Bridge mode: triggers arrived, now safe to resume bridge connection.
@@ -4838,7 +4838,7 @@ wss.on('connection', (ws, req) => {
           session.aliases = data.aliases || [];
           writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
           // DB dual-write (gated by user during rollout)
-          if (DB_ENABLED_USERS.has(session.userId) && session.characterId) {
+          if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
             dbSaveAliases(session.characterId, session.aliases);
           }
           // Mark synced and flush any queued commands
