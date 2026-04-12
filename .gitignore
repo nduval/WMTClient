@@ -54,3 +54,15 @@ __pycache__/
 
 # Server-side tools (deployed to sandbox, not IONOS)
 /tools/
+
+# Database files (live on Lightsail only, never in git)
+*.db
+*.db-wal
+*.db-shm
+
+# Seed data exports (contain password hashes)
+seed_*.json
+
+# DB setup/seed scripts (utility, not deployed via deploy.py)
+glitch/setup_db.js
+glitch/seed_db.js

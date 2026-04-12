@@ -119,13 +119,33 @@ function dbLoadAliases(characterId) {
 }
 
 /**
+ * Write a change_log entry. Records old and new state for undo/audit.
+ */
+function dbLogChange(characterId, tableName, action, oldData, newData, source) {
+  if (!wmtDb) return;
+  try {
+    wmtDb.prepare(`
+      INSERT INTO change_log (character_id, table_name, action, old_data, new_data, source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(characterId, tableName, action, oldData, newData, source || 'server_sync');
+  } catch (e) {
+    // Non-fatal — don't let change_log errors block saves
+  }
+}
+
+/**
  * Write triggers to DB for a character. Atomic bulk replace inside a
  * transaction — either all triggers are written or none are.
+ * Also logs the change for undo/audit.
  */
 function dbSaveTriggers(characterId, triggers) {
   if (!wmtDb || !triggers) return;
   try {
     wmtDb.transaction(() => {
+      // Capture old state for change_log before replacing
+      const oldRows = dbStmts.getTriggers.all(characterId);
+      const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
+
       dbStmts.deleteTriggers.run(characterId);
       for (const t of triggers) {
         dbStmts.insertTrigger.run(
@@ -141,6 +161,11 @@ function dbSaveTriggers(characterId, triggers) {
           t.oneshot ? 1 : 0
         );
       }
+
+      // Log the change (skip if no meaningful difference)
+      if (oldRows.length !== triggers.length || oldData) {
+        dbLogChange(characterId, 'triggers', 'bulk_replace', oldData, JSON.stringify(triggers), 'client_sync');
+      }
     })();
   } catch (e) {
     console.error('DB trigger save failed:', e.message);
@@ -148,12 +173,15 @@ function dbSaveTriggers(characterId, triggers) {
 }
 
 /**
- * Write aliases to DB for a character. Same atomic bulk replace.
+ * Write aliases to DB for a character. Same atomic bulk replace + change log.
  */
 function dbSaveAliases(characterId, aliases) {
   if (!wmtDb || !aliases) return;
   try {
     wmtDb.transaction(() => {
+      const oldRows = dbStmts.getAliases.all(characterId);
+      const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
+
       dbStmts.deleteAliases.run(characterId);
       for (const a of aliases) {
         dbStmts.insertAlias.run(
@@ -166,6 +194,10 @@ function dbSaveAliases(characterId, aliases) {
           a.enabled !== false ? 1 : 0,
           a.class || null
         );
+      }
+
+      if (oldRows.length !== aliases.length || oldData) {
+        dbLogChange(characterId, 'aliases', 'bulk_replace', oldData, JSON.stringify(aliases), 'client_sync');
       }
     })();
   } catch (e) {
