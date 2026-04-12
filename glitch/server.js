@@ -3742,6 +3742,21 @@ function connectToMud(session) {
     const text = cleanData.toString('utf8');
     if (text.trim()) writeSessionLog(session, 'output', { text: text.substring(0, 4000) });
 
+    // Eager prompt detection — set state flags directly from the raw data
+    // chunk before line-buffering. The MUD's name and password prompts have
+    // no trailing newline, so they sit in lineBuffer until the buffer
+    // timeout fires (~2s with packet patch). That's slower than auto-login
+    // (~1.5s), so without this fast-path, auto-logged-in characters race
+    // the sniffer and miss MUD_CHAR_RESOLVED / `identified` audit rows.
+    // The full sniffer pass still runs from processLine for the
+    // journalctl event — flag setting is idempotent.
+    if (text.includes('Enter your character name')) {
+      session._atNamePrompt = true;
+    }
+    if (text.includes('Password:') && session._loginAuditPending) {
+      session._loginAuditAtPasswordPrompt = true;
+    }
+
     if (session.lineBufferTimeout) {
       clearTimeout(session.lineBufferTimeout);
       session.lineBufferTimeout = null;
