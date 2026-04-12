@@ -349,6 +349,7 @@ switch ($action) {
         $merged = array_merge($existing, $validated);
 
         saveJsonFile(getPreferencesPath($userId, $characterId), $merged);
+        syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $merged]);
         successResponse(['preferences' => $merged]);
         break;
 
@@ -369,6 +370,7 @@ switch ($action) {
         ];
 
         saveJsonFile(getPreferencesPath($userId, $characterId), $defaults);
+        syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $defaults]);
         successResponse(['preferences' => $defaults, 'message' => 'Preferences reset to defaults']);
         break;
 

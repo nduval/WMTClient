@@ -342,6 +342,7 @@ switch ($action) {
         }
 
         $relativeName = $basePath . '.' . $ext;
+        syncDataToDb(['type' => 'script', 'character_id' => $characterId, 'filename' => $relativeName, 'content' => $content]);
         successResponse([
             'filename' => $relativeName,
             'size' => strlen($content)
@@ -427,6 +428,7 @@ switch ($action) {
         }
 
         $content = file_get_contents($filePath);
+        syncDataToDb(['type' => 'script', 'character_id' => $characterId, 'filename' => $relativeName, 'content' => $content]);
 
         successResponse([
             'filename' => $relativeName,
@@ -473,6 +475,7 @@ switch ($action) {
         if (!unlink($filePath)) {
             errorResponse('Failed to delete script');
         }
+        syncDataToDb(['type' => 'script_delete', 'character_id' => $characterId, 'filename' => $basePath . '.' . $ext]);
 
         // Clean up empty parent directories (up to scripts root)
         $parentDir = dirname($filePath);
@@ -644,6 +647,9 @@ switch ($action) {
             errorResponse('Failed to rename');
         }
 
+        if ($isFile) {
+            syncDataToDb(['type' => 'script_rename', 'character_id' => $characterId, 'old_filename' => $oldPath . '.' . $ext, 'new_filename' => $newPath . '.' . $newExt]);
+        }
         successResponse(['message' => 'Renamed successfully']);
         break;
 

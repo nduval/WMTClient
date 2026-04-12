@@ -67,6 +67,14 @@ if (wmtDb) {
   dbStmts.upsertPreferences = wmtDb.prepare(`
     INSERT OR REPLACE INTO preferences (character_id, data) VALUES (?, ?)
   `);
+  dbStmts.getPreferences = wmtDb.prepare('SELECT data FROM preferences WHERE character_id = ?');
+  // Tickers
+  dbStmts.deleteTickers = wmtDb.prepare('DELETE FROM tickers WHERE character_id = ?');
+  dbStmts.insertTicker = wmtDb.prepare(`
+    INSERT INTO tickers (id, character_id, name, command, interval_seconds, class_id, enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  dbStmts.getTickers = wmtDb.prepare('SELECT * FROM tickers WHERE character_id = ?');
   // Read statements for DB-based restore
   dbStmts.getTriggers = wmtDb.prepare('SELECT * FROM triggers WHERE character_id = ?');
   dbStmts.getAliases = wmtDb.prepare('SELECT * FROM aliases WHERE character_id = ?');
@@ -83,6 +91,14 @@ if (wmtDb) {
   dbStmts.pruneOldChat = wmtDb.prepare(`
     DELETE FROM chat_messages WHERE created_at < datetime('now', '-30 days')
   `);
+  // Scripts
+  dbStmts.upsertScript = wmtDb.prepare(`
+    INSERT OR REPLACE INTO scripts (character_id, filename, content, size, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+  `);
+  dbStmts.deleteScript = wmtDb.prepare('DELETE FROM scripts WHERE character_id = ? AND filename = ?');
+  dbStmts.renameScript = wmtDb.prepare('UPDATE scripts SET filename = ? WHERE character_id = ? AND filename = ?');
+  dbStmts.getScripts = wmtDb.prepare('SELECT filename, content, size FROM scripts WHERE character_id = ?');
 }
 
 /**
@@ -218,6 +234,57 @@ function dbSaveAliases(characterId, aliases) {
     console.error('DB alias save failed:', e.message);
   }
 }
+
+function dbSaveTickers(characterId, tickers) {
+  if (!wmtDb || !tickers) return;
+  try {
+    wmtDb.transaction(() => {
+      dbStmts.deleteTickers.run(characterId);
+      for (const t of tickers) {
+        dbStmts.insertTicker.run(
+          t.id || null,
+          characterId,
+          t.name || '',
+          t.command || '',
+          t.interval || 0,
+          t.class || null,
+          t.enabled !== false ? 1 : 0
+        );
+      }
+    })();
+  } catch (e) {
+    console.error('DB ticker save failed:', e.message);
+  }
+}
+
+function dbSavePreferences(characterId, prefs) {
+  if (!wmtDb || !prefs) return;
+  try {
+    dbStmts.upsertPreferences.run(characterId, JSON.stringify(prefs));
+  } catch (e) {
+    console.error('DB preferences save failed:', e.message);
+  }
+}
+
+function dbLoadTickers(characterId) {
+  if (!wmtDb) return null;
+  try {
+    const rows = dbStmts.getTickers.all(characterId);
+    if (rows.length === 0) return null;
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name || '',
+      command: r.command || '',
+      interval: r.interval_seconds || 0,
+      class: r.class_id || null,
+      enabled: r.enabled === 1
+    }));
+  } catch (e) {
+    console.error('DB ticker load failed:', e.message);
+    return null;
+  }
+}
+
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 const BRIDGE_URL = process.env.BRIDGE_URL || null; // ws://localhost:4000 for bridge mode
 
@@ -1831,6 +1898,15 @@ async function restorePersistentSessions() {
           count: dbAliases.length
         });
       }
+      const dbTickers = dbLoadTickers(ps.characterId);
+      if (dbTickers && dbTickers.length > 0) {
+        updateSessionTickers(session, dbTickers);
+        logSessionEvent('RESTORE_DB_TICKERS', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName,
+          count: dbTickers.length
+        });
+      }
     }
 
     // Recreate server-side #delay timers from serialized state.
@@ -2691,6 +2767,83 @@ const server = http.createServer(async (req, res) => {
           case 'login':
             wmtDb.prepare('UPDATE users SET last_login = ?, last_ip = ? WHERE id = ?')
               .run(user.last_login || '', user.last_ip || '', user.id);
+            break;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/data-sync' && req.method === 'POST') {
+    // Sync preferences/scripts from IONOS PHP to Lightsail DB.
+    // Fire-and-forget from PHP — JSON/files stay primary, DB is the durable copy.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 500000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        if (!data.character_id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'character_id required' }));
+          return;
+        }
+
+        switch (data.type) {
+          case 'preferences':
+            dbSavePreferences(data.character_id, data.data || {});
+            break;
+          case 'script':
+            // Upsert a script file into DB
+            if (!data.filename) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, error: 'filename required' }));
+              return;
+            }
+            try {
+              dbStmts.upsertScript.run(data.character_id, data.filename, data.content || '', data.content ? data.content.length : 0);
+            } catch (e) {
+              console.error('DB script save failed:', e.message);
+            }
+            break;
+          case 'script_delete':
+            if (!data.filename) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, error: 'filename required' }));
+              return;
+            }
+            try {
+              dbStmts.deleteScript.run(data.character_id, data.filename);
+            } catch (e) {
+              console.error('DB script delete failed:', e.message);
+            }
+            break;
+          case 'script_rename':
+            if (!data.old_filename || !data.new_filename) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, error: 'old_filename and new_filename required' }));
+              return;
+            }
+            try {
+              dbStmts.renameScript.run(data.new_filename, data.character_id, data.old_filename);
+            } catch (e) {
+              console.error('DB script rename failed:', e.message);
+            }
             break;
         }
 
@@ -4962,6 +5115,10 @@ wss.on('connection', (ws, req) => {
           // Update tickers and restart intervals
           updateSessionTickers(session, data.tickers || []);
           writeSessionLog(session, 'settings', { what: 'tickers', count: (data.tickers || []).length });
+          // DB dual-write
+          if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
+            dbSaveTickers(session.characterId, data.tickers || []);
+          }
           break;
 
         case 'set_variables':

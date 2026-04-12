@@ -6,6 +6,34 @@
 require_once __DIR__ . '/../config/config.php';
 
 /**
+ * Sync data (preferences, scripts) to Lightsail DB.
+ * Fire-and-forget: short timeout, ignore failures.
+ */
+function syncDataToDb(array $payload): void {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey) return;
+
+    $url = 'https://ws.wemudtogether.com/data-sync';
+    $body = json_encode($payload);
+
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => "Content-Type: application/json\r\nX-Admin-Key: $adminKey\r\n",
+            'content' => $body,
+            'timeout' => 3,
+            'ignore_errors' => true
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true
+        ]
+    ]);
+
+    @file_get_contents($url, false, $ctx);
+}
+
+/**
  * Append a line to the login audit CSV.
  * If IP geo data isn't provided, does an inline lookup (adds ~100ms).
  */
