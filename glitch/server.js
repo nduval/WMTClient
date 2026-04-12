@@ -600,7 +600,12 @@ function detectMudEvents(session, rawLine) {
           session._loginAuditTimer = null;
         }
         session._loginAuditPending = false;
-        sendAuditLog('relink', session, session.clientIp);
+        // Audit-log activity name is 'reconnect' (return from linkdeath).
+        // The internal sniffer pattern label stays 'relink_complete' for
+        // journalctl/JSONL diagnostics — that's a more specific term for
+        // the underlying MUD message — but the operator-facing audit log
+        // uses the natural word.
+        sendAuditLog('reconnect', session, session.clientIp);
       }
       if (p.event === 'password_fail' && session._loginAuditTimer) {
         // The login attempt failed; cancel the fire-as-login timer but
