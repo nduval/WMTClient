@@ -37,7 +37,9 @@ let wmtDb = null;
 try {
   wmtDb = new Database(DB_PATH);
   wmtDb.pragma('journal_mode = WAL');
-  wmtDb.pragma('foreign_keys = ON');
+  // Foreign keys OFF during dual-write phase — users/characters tables
+  // aren't populated yet. Re-enable after seeding those tables.
+  wmtDb.pragma('foreign_keys = OFF');
   console.log('SQLite database connected:', DB_PATH);
 } catch (e) {
   console.error('SQLite database failed to open:', e.message);
