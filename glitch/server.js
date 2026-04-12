@@ -950,18 +950,40 @@ async function persistAllSessions() {
   for (const [token, session] of sessions) {
     // Persist ALL sessions with active MUD connections
     if (session.mudSocket && !session.mudSocket.destroyed) {
+      // Serialize pending #delay timers so they survive restart.
+      // Store the remaining time so we can recreate the setTimeout on
+      // restore with the correct remaining duration.
+      const serializedDelays = [];
+      if (session._delays) {
+        const now = Date.now();
+        for (const [name, timer] of Object.entries(session._delays)) {
+          // Node's setTimeout doesn't expose remaining time directly.
+          // We stored the fire time when creating the delay.
+          if (timer._wmt_fireAt && timer._wmt_command) {
+            const remainingMs = Math.max(0, timer._wmt_fireAt - now);
+            serializedDelays.push({
+              name,
+              command: timer._wmt_command,
+              remainingMs
+            });
+          }
+        }
+      }
+
       activeSessions.push({
         userId: session.userId,
         characterId: session.characterId,
         characterName: session.characterName,
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
         token: token,
-        // Save bridge token separately — may differ from session token if
-        // the old bridge.js hasn't processed a rekey message yet
         bridgeToken: (session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined,
         isWizard: session.isWizard || false,
         persistedAt: Date.now(),
-        chatBuffer: session.chatBuffer || []
+        chatBuffer: session.chatBuffer || [],
+        // Phase 1: persist session state for seamless restart
+        variables: session.variables || {},
+        delays: serializedDelays,
+        actualMudChar: session._actualMudChar || null
       });
     }
   }
@@ -1027,6 +1049,87 @@ async function persistAllSessions() {
         logSessionEvent('PERSIST_ERROR', { error: e.message, attempts: attempt });
       }
     }
+  }
+}
+
+/**
+ * Periodic session snapshot — lightweight persist that runs every 30s.
+ * Saves variables, delays, and session identity so a failed SIGTERM
+ * persist loses at most 30 seconds of state instead of everything.
+ * Fire-and-forget: failures are logged but don't block or retry.
+ */
+async function persistSnapshot() {
+  if (!ADMIN_KEY) return;
+
+  const activeSessions = [];
+  for (const [token, session] of sessions) {
+    if (session.mudSocket && !session.mudSocket.destroyed) {
+      const serializedDelays = [];
+      if (session._delays) {
+        const now = Date.now();
+        for (const [name, timer] of Object.entries(session._delays)) {
+          if (timer._wmt_fireAt && timer._wmt_command) {
+            serializedDelays.push({
+              name,
+              command: timer._wmt_command,
+              remainingMs: Math.max(0, timer._wmt_fireAt - now)
+            });
+          }
+        }
+      }
+
+      activeSessions.push({
+        userId: session.userId,
+        characterId: session.characterId,
+        characterName: session.characterName,
+        server: session.targetHost === '3scapes.org' ? '3s' : '3k',
+        token: token,
+        bridgeToken: (session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined,
+        isWizard: session.isWizard || false,
+        persistedAt: Date.now(),
+        // Lightweight: no chatBuffer (too large for 30s snapshots)
+        chatBuffer: [],
+        variables: session.variables || {},
+        delays: serializedDelays,
+        actualMudChar: session._actualMudChar || null
+      });
+    }
+  }
+
+  if (activeSessions.length === 0) return;
+
+  try {
+    const payload = JSON.stringify({ sessions: activeSessions });
+    const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-Admin-Key': ADMIN_KEY
+        },
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) resolve();
+          else reject(new Error(`HTTP ${res.statusCode}`));
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+      req.write(payload);
+      req.end();
+    });
+  } catch (e) {
+    // Fire-and-forget: log but don't retry. Next cycle will try again.
+    console.error('Snapshot persist failed:', e.message);
   }
 }
 
@@ -1485,6 +1588,49 @@ async function restorePersistentSessions() {
     session.disconnectedAt = Date.now(); // No browser connected yet
     if (ps.chatBuffer && ps.chatBuffer.length > 0) {
       session.chatBuffer = ps.chatBuffer;
+    }
+
+    // Phase 1: restore persisted session state
+    if (ps.variables && Object.keys(ps.variables).length > 0) {
+      session.variables = ps.variables;
+    }
+    if (ps.actualMudChar) {
+      session._actualMudChar = ps.actualMudChar;
+    }
+
+    // Recreate server-side #delay timers from serialized state.
+    // If a timer's remaining time has elapsed (negative), fire it
+    // immediately — the command should have run during the restart
+    // window and we don't want to silently drop it.
+    if (ps.delays && ps.delays.length > 0) {
+      session._delays = {};
+      for (const d of ps.delays) {
+        const remainingMs = Math.max(0, d.remainingMs || 0);
+        const fireDelay = remainingMs > 0 ? remainingMs : 50; // 50ms for "should have already fired"
+        const timer = setTimeout(() => {
+          delete session._delays[d.name];
+          const expanded = expandCommandWithAliases(d.command, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+          expanded.forEach(ec => {
+            const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+            if (repeatMatch) {
+              executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+            } else if (ec.startsWith('#')) {
+              sendToClient(session, { type: 'client_command', command: ec });
+            } else if (session.mudSocket && !session.mudSocket.destroyed) {
+              session.mudSocket.write(processEscapes(ec) + '\r\n');
+            }
+          });
+        }, fireDelay);
+        timer._wmt_fireAt = Date.now() + fireDelay;
+        timer._wmt_command = d.command;
+        session._delays[d.name] = timer;
+      }
+      logSessionEvent('RESTORE_DELAYS', {
+        token: ps.token.substring(0, 8),
+        char: ps.characterName,
+        count: ps.delays.length,
+        names: ps.delays.map(d => d.name).join(',')
+      });
     }
 
     let success = false;
@@ -6579,7 +6725,8 @@ function serverProcessInlineCommand(cmd, session) {
         clearTimeout(session._delays[name]);
       }
 
-      session._delays[name] = setTimeout(() => {
+      const delayMs = seconds * 1000;
+      const timer = setTimeout(() => {
         delete session._delays[name];
         const expanded = expandCommandWithAliases(command, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
         expanded.forEach(ec => {
@@ -6592,7 +6739,13 @@ function serverProcessInlineCommand(cmd, session) {
             session.mudSocket.write(processEscapes(ec) + '\r\n');
           }
         });
-      }, seconds * 1000);
+      }, delayMs);
+      // Attach metadata for serialization during persist. Node's
+      // setTimeout doesn't expose remaining time, so we store the
+      // absolute fire time and the original command.
+      timer._wmt_fireAt = Date.now() + delayMs;
+      timer._wmt_command = command;
+      session._delays[name] = timer;
 
       return true;
     }
@@ -6768,6 +6921,15 @@ server.listen(PORT, async () => {
   if (!BRIDGE_URL) {
     setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
   }
+
+  // Periodic session snapshot — every 30s, persist variables + delays
+  // so a failed SIGTERM loses at most 30 seconds of state. The full
+  // SIGTERM persist (with chatBuffer) still runs on shutdown; this is
+  // the safety net. Starts after a 10s delay to let initial restore
+  // and browser reconnects settle.
+  setTimeout(() => {
+    setInterval(() => persistSnapshot(), 30000);
+  }, 10000);
 
   // Restore persistent sessions after startup
   if (BRIDGE_URL) {
