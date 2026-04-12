@@ -69,6 +69,18 @@ if (wmtDb) {
   dbStmts.getTriggers = wmtDb.prepare('SELECT * FROM triggers WHERE character_id = ?');
   dbStmts.getAliases = wmtDb.prepare('SELECT * FROM aliases WHERE character_id = ?');
   dbStmts.getClasses = wmtDb.prepare('SELECT * FROM classes WHERE character_id = ?');
+  // ChatMon persistence
+  dbStmts.insertChat = wmtDb.prepare(`
+    INSERT INTO chat_messages (character_id, channel, sender, message, raw_data, created_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+  `);
+  dbStmts.getRecentChat = wmtDb.prepare(`
+    SELECT raw_data FROM chat_messages
+    WHERE character_id = ? ORDER BY id DESC LIMIT ?
+  `);
+  dbStmts.pruneOldChat = wmtDb.prepare(`
+    DELETE FROM chat_messages WHERE created_at < datetime('now', '-30 days')
+  `);
 }
 
 /**
@@ -1784,10 +1796,23 @@ async function restorePersistentSessions() {
       session._actualMudChar = ps.actualMudChar;
     }
 
-    // Phase 2: pre-load triggers/aliases from DB so the session starts
+    // Load chat history from DB (deeper than the in-memory buffer)
+    if (wmtDb && ps.characterId) {
+      try {
+        const chatRows = dbStmts.getRecentChat.all(ps.characterId, CHAT_BUFFER_MAX);
+        if (chatRows.length > 0) {
+          // Results come in DESC order, reverse for chronological
+          session.chatBuffer = chatRows.reverse().map(r => {
+            try { return JSON.parse(r.raw_data); } catch (e) { return null; }
+          }).filter(Boolean);
+        }
+      } catch (e) {
+        // Fall back to persist-payload chatBuffer
+      }
+    }
+
+    // Pre-load triggers/aliases from DB so the session starts
     // with the correct set BEFORE the browser reconnects and syncs.
-    // This eliminates the window where the session has zero triggers
-    // (between restore and client sync). Gated by userId during rollout.
     if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(ps.userId)) && ps.characterId) {
       const dbTriggers = dbLoadTriggers(ps.characterId);
       if (dbTriggers && dbTriggers.length > 0) {
@@ -3204,6 +3229,17 @@ function sendToClient(session, message) {
     session.chatBuffer.push(message);
     if (session.chatBuffer.length > CHAT_BUFFER_MAX) {
       session.chatBuffer.shift();
+    }
+    // Persist to DB for long-term chat history
+    if (wmtDb && session.characterId) {
+      try {
+        const channel = message.channel || '';
+        const sender = message.sender || '';
+        const text = message.text || message.message || '';
+        dbStmts.insertChat.run(session.characterId, channel, sender, text, JSON.stringify(message));
+      } catch (e) {
+        // Non-fatal — don't let chat logging break the message flow
+      }
     }
   }
 
@@ -7162,6 +7198,11 @@ server.listen(PORT, async () => {
   // Bridge mode (Lightsail) uses journalctl — no need to flush to IONOS
   if (!BRIDGE_URL) {
     setInterval(() => flushLogsToIONOS(), LOG_FLUSH_INTERVAL_MS);
+  }
+
+  // Prune old chat messages once on startup (30-day retention)
+  if (wmtDb) {
+    try { dbStmts.pruneOldChat.run(); } catch (e) {}
   }
 
   // Periodic session snapshot — every 30s, persist variables + delays
