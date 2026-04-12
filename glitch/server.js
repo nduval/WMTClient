@@ -549,6 +549,13 @@ const MUD_EVENT_PATTERNS = [
 
   // Auth failures
   { re: /^Incorrect password\./,                                          event: 'password_fail',      atNamePrompt: true },
+
+  // Successful quit — both 3K and 3S send the same humorous goodbye line
+  // immediately before saving the character and closing the socket. This
+  // is the ground-truth signal for "user voluntarily quit," distinct from
+  // a linkdeath / browser-close / timeout (where this line is never sent).
+  // Used to flip the audit-log close event from `disconnect` to `logout`.
+  { re: /^There was this one time, at band camp\.\.\.$/,                  event: 'quit_complete' },
 ];
 
 function detectMudEvents(session, rawLine) {
@@ -619,6 +626,15 @@ function detectMudEvents(session, rawLine) {
       if (p.event === 'password_fail') {
         session._loginAuditAtPasswordPrompt = false;
         session._loginAuditPasswordEntered = false;
+      }
+      // Quit detection: the band-camp goodbye line is the ground-truth
+      // signal that the user voluntarily quit (vs linkdeath / fast close).
+      // Just flag it on the session — closeSession will fire `logout`
+      // instead of `disconnect` when this flag is set. We don't fire the
+      // audit row here directly because the disconnect path is the right
+      // place to emit it (avoids ordering issues with the close handler).
+      if (p.event === 'quit_complete') {
+        session._loginAuditQuit = true;
       }
 
       // One line can only be one event — stop scanning.
@@ -2908,12 +2924,21 @@ function closeSession(session, reason) {
     session._loginAuditPending = false;
     sendAuditLog('login', session, session.clientIp);
   }
-  // Always clear deferred-audit state — disconnect is about to fire anyway.
+  // Always clear deferred-audit state — close event is about to fire anyway.
   session._loginAuditPending = false;
   session._loginAuditAtPasswordPrompt = false;
   session._loginAuditPasswordEntered = false;
 
-  sendAuditLog('disconnect', session);
+  // Voluntary quit (sniffer detected the MUD's "band camp" goodbye line)
+  // gets `logout`. Anything else — linkdeath, fast close, browser close,
+  // idle timeout — gets `disconnect`. The wizard distinguishes voluntary
+  // exits from involuntary ones in the audit log this way.
+  if (session._loginAuditQuit) {
+    session._loginAuditQuit = false;
+    sendAuditLog('logout', session);
+  } else {
+    sendAuditLog('disconnect', session);
+  }
 
   // Clear all tickers
   clearAllTickers(session);
@@ -4325,7 +4350,14 @@ wss.on('connection', (ws, req) => {
                   sendToClient(session, { type: 'client_command', command: ec });
                 } else {
                   // Detect 'quit' command — flag as intentional disconnect so
-                  // client doesn't auto-reconnect after MUD closes connection
+                  // client doesn't auto-reconnect after MUD closes connection.
+                  // NOTE: this is text-pattern detection on user INPUT, which
+                  // is fragile (aliases, typos, shorthand). The audit-log
+                  // logout/disconnect distinction is driven by the SNIFFER
+                  // catching the MUD's goodbye packet — see the
+                  // mud_quit_complete pattern in MUD_EVENT_PATTERNS. This
+                  // input-side detection only handles the auto-reconnect
+                  // suppression, not the audit classification.
                   if (ec.trim().toLowerCase() === 'quit') {
                     session.explicitDisconnect = true;
                     sendToClient(session, { type: 'quit_detected' });
