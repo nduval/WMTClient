@@ -2966,6 +2966,14 @@ function closeSession(session, reason) {
     sendAuditLog('disconnect', session);
   }
 
+  // Clear all pending #delay timers
+  if (session._delays) {
+    for (const name in session._delays) {
+      clearTimeout(session._delays[name]);
+    }
+    session._delays = {};
+  }
+
   // Clear all tickers
   clearAllTickers(session);
 
@@ -6528,6 +6536,65 @@ function serverProcessInlineCommand(cmd, session) {
       }
     } finally {
       session._ifDepth--;
+    }
+    return true;
+  }
+
+  // #delay {name} {command} {seconds}
+  // Server-side delayed execution. The command fires through the full
+  // expansion pipeline (alias expansion, #var/#math/#if server-side)
+  // after the specified delay. Unlike the client-side #delay (which
+  // uses browser setTimeout and dies when the phone screen sleeps),
+  // server-side delays survive browser disconnect — critical for bots
+  // that use #delay in their stepping chains.
+  //
+  // Variables in the command are substituted at FIRE time (not schedule
+  // time), matching TinTin++ behavior. The seconds arg is substituted
+  // immediately (we need its numeric value for setTimeout).
+  const delayMatch = trimmed.match(/^#delay\s+(.*)/i);
+  if (delayMatch) {
+    const dargs = parseBracedArgs(delayMatch[1]);
+    if (dargs.length >= 2) {
+      const name = dargs[0];
+      const command = dargs[1];
+      const rawSeconds = dargs[2] || '1';
+      const subSeconds = substituteUserVariables(rawSeconds, session.variables || {}, session.functions || {});
+      let seconds = parseFloat(subSeconds);
+      if (isNaN(seconds) || seconds < 0) seconds = 1;
+      seconds = Math.min(seconds, 300);
+
+      if (!session._delays) session._delays = {};
+      if (session._delays[name]) {
+        clearTimeout(session._delays[name]);
+      }
+
+      session._delays[name] = setTimeout(() => {
+        delete session._delays[name];
+        const expanded = expandCommandWithAliases(command, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+        expanded.forEach(ec => {
+          const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+          if (repeatMatch) {
+            executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+          } else if (ec.startsWith('#')) {
+            sendToClient(session, { type: 'client_command', command: ec });
+          } else if (session.mudSocket && !session.mudSocket.destroyed) {
+            session.mudSocket.write(processEscapes(ec) + '\r\n');
+          }
+        });
+      }, seconds * 1000);
+
+      return true;
+    }
+  }
+
+  // #undelay {name}
+  const undelayMatch = trimmed.match(/^#undelay\s+(.*)/i);
+  if (undelayMatch) {
+    const uargs = parseBracedArgs(undelayMatch[1]);
+    const name = uargs[0] || undelayMatch[1].trim();
+    if (session._delays && session._delays[name]) {
+      clearTimeout(session._delays[name]);
+      delete session._delays[name];
     }
     return true;
   }
