@@ -14,10 +14,113 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 
+const Database = require('better-sqlite3');
+
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
 const PORT = process.env.PORT || 3000;
 const VERSION = '3.0.0'; // Bridge architecture for zero-downtime deploys
+
+// ─── SQLite Database (Phase 2 of resilience roadmap) ──────────
+// Write-through persistent store. Memory stays the hot path — the DB
+// is a durable mirror updated on every state change. Server restart
+// reads from DB instead of relying on the SIGTERM persist chain.
+//
+// Gated to specific users during rollout (DB_ENABLED_USERS). Once
+// validated, the gate opens to all users.
+const DB_PATH = path.join(__dirname, 'wmt.db');
+const DB_ENABLED_USERS = new Set([
+  'bd035a266e8aa6c77e69d950ba0120c0', // nathan
+]);
+
+let wmtDb = null;
+try {
+  wmtDb = new Database(DB_PATH);
+  wmtDb.pragma('journal_mode = WAL');
+  wmtDb.pragma('foreign_keys = ON');
+  console.log('SQLite database connected:', DB_PATH);
+} catch (e) {
+  console.error('SQLite database failed to open:', e.message);
+  // Non-fatal — server runs without DB, falls back to JSON persist
+}
+
+// Prepared statements (created once, reused for performance)
+const dbStmts = {};
+if (wmtDb) {
+  dbStmts.deleteTriggers = wmtDb.prepare('DELETE FROM triggers WHERE character_id = ?');
+  dbStmts.insertTrigger = wmtDb.prepare(`
+    INSERT INTO triggers (id, character_id, pattern, match_type, actions, priority, enabled, class_id, name, oneshot, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `);
+  dbStmts.deleteAliases = wmtDb.prepare('DELETE FROM aliases WHERE character_id = ?');
+  dbStmts.insertAlias = wmtDb.prepare(`
+    INSERT INTO aliases (id, character_id, pattern, replacement, match_type, priority, enabled, class_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `);
+  dbStmts.deleteClasses = wmtDb.prepare('DELETE FROM classes WHERE character_id = ?');
+  dbStmts.insertClass = wmtDb.prepare(`
+    INSERT INTO classes (id, character_id, name, enabled, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  dbStmts.upsertPreferences = wmtDb.prepare(`
+    INSERT OR REPLACE INTO preferences (character_id, data) VALUES (?, ?)
+  `);
+}
+
+/**
+ * Write triggers to DB for a character. Atomic bulk replace inside a
+ * transaction — either all triggers are written or none are.
+ */
+function dbSaveTriggers(characterId, triggers) {
+  if (!wmtDb || !triggers) return;
+  try {
+    wmtDb.transaction(() => {
+      dbStmts.deleteTriggers.run(characterId);
+      for (const t of triggers) {
+        dbStmts.insertTrigger.run(
+          t.id || null,
+          characterId,
+          t.pattern || '',
+          t.matchType || 'tintin',
+          JSON.stringify(t.actions || []),
+          t.priority ?? 5,
+          t.enabled !== false ? 1 : 0,
+          t.class || null,
+          t.name || null,
+          t.oneshot ? 1 : 0
+        );
+      }
+    })();
+  } catch (e) {
+    console.error('DB trigger save failed:', e.message);
+  }
+}
+
+/**
+ * Write aliases to DB for a character. Same atomic bulk replace.
+ */
+function dbSaveAliases(characterId, aliases) {
+  if (!wmtDb || !aliases) return;
+  try {
+    wmtDb.transaction(() => {
+      dbStmts.deleteAliases.run(characterId);
+      for (const a of aliases) {
+        dbStmts.insertAlias.run(
+          a.id || null,
+          characterId,
+          a.pattern || '',
+          a.replacement || '',
+          a.matchType || 'exact',
+          a.priority ?? 5,
+          a.enabled !== false ? 1 : 0,
+          a.class || null
+        );
+      }
+    })();
+  } catch (e) {
+    console.error('DB alias save failed:', e.message);
+  }
+}
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 const BRIDGE_URL = process.env.BRIDGE_URL || null; // ws://localhost:4000 for bridge mode
 
@@ -4614,6 +4717,10 @@ wss.on('connection', (ws, req) => {
         case 'set_triggers':
           session.triggers = data.triggers || [];
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
+          // DB dual-write (gated by user during rollout)
+          if (DB_ENABLED_USERS.has(session.userId) && session.characterId) {
+            dbSaveTriggers(session.characterId, session.triggers);
+          }
           // Bridge mode: triggers arrived, now safe to resume bridge connection.
           // MUD data will flow through processLine with triggers ready.
           if (session._pendingBridgeResume) {
@@ -4625,6 +4732,10 @@ wss.on('connection', (ws, req) => {
         case 'set_aliases':
           session.aliases = data.aliases || [];
           writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
+          // DB dual-write (gated by user during rollout)
+          if (DB_ENABLED_USERS.has(session.userId) && session.characterId) {
+            dbSaveAliases(session.characterId, session.aliases);
+          }
           // Mark synced and flush any queued commands
           if (!session._aliasesSynced) {
             session._aliasesSynced = true;
@@ -6875,6 +6986,10 @@ async function gracefulShutdown(signal) {
     console.log('Bridge mode: MUD connections preserved in bridge.js');
     if (bridgeWs) {
       try { bridgeWs.close(); } catch (e) {}
+    }
+    // Close SQLite database cleanly
+    if (wmtDb) {
+      try { wmtDb.close(); console.log('SQLite database closed.'); } catch (e) {}
     }
     setTimeout(() => {
       console.log('Shutting down...');
