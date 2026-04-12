@@ -908,15 +908,21 @@ function detectMudEvents(session, rawLine) {
       // asking for a character name. Used by the input handler to
       // capture the real MUD character name (which may differ from the
       // WMT slot label).
-      // Guard: don't re-set _atNamePrompt if a name was just captured.
-      // Guest accounts (no password) hit this: the banner line processes
-      // AFTER the user already typed their name, re-setting the flag.
-      // Without a Password: prompt to clear it, the next game command
-      // (like "jump") gets falsely captured as the character name.
-      if (p.atNamePrompt === true) {
-        if (!session._nameResolvedAt || Date.now() - session._nameResolvedAt > 5000) {
-          session._atNamePrompt = true;
-        }
+      // password_fail means back to name prompt — clear _nameCaptured
+      // BEFORE the atNamePrompt guard so the flag can be re-set.
+      if (p.event === 'password_fail') {
+        session._nameCaptured = false;
+      }
+
+      // Guard: don't re-set _atNamePrompt if a name was already captured
+      // in this login cycle. Guest accounts (no password) hit this: the
+      // banner line processes AFTER the user already typed their name,
+      // re-setting the flag. Without a Password: prompt to clear it, the
+      // next game command (like "jump") gets falsely captured as the
+      // character name. The _nameCaptured flag is only cleared by
+      // password_fail (retry) or a new session.
+      if (p.atNamePrompt === true && !session._nameCaptured) {
+        session._atNamePrompt = true;
       }
       if (p.atNamePrompt === false) session._atNamePrompt = false;
 
@@ -4556,10 +4562,8 @@ function connectToMud(session) {
     // the sniffer and miss MUD_CHAR_RESOLVED / `identified` audit rows.
     // The full sniffer pass still runs from processLine for the
     // journalctl event — flag setting is idempotent.
-    if (text.includes('Enter your character name')) {
-      if (!session._nameResolvedAt || Date.now() - session._nameResolvedAt > 5000) {
-        session._atNamePrompt = true;
-      }
+    if (text.includes('Enter your character name') && !session._nameCaptured) {
+      session._atNamePrompt = true;
     }
     if (text.includes('Password:') && session._loginAuditPending) {
       session._loginAuditAtPasswordPrompt = true;
@@ -5060,7 +5064,7 @@ wss.on('connection', (ws, req) => {
                 const previous = session._actualMudChar;
                 session._actualMudChar = candidate;
                 session._atNamePrompt = false;
-                session._nameResolvedAt = Date.now();
+                session._nameCaptured = true;
                 if (previous !== candidate) {
                   logSessionEvent('MUD_CHAR_RESOLVED', {
                     token: session.token ? session.token.substring(0, 8) : null,
