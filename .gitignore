@@ -66,3 +66,4 @@ seed_*.json
 # DB setup/seed scripts (utility, not deployed via deploy.py)
 glitch/setup_db.js
 glitch/seed_db.js
+3kmap/

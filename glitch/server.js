@@ -4995,18 +4995,25 @@ wss.on('connection', (ws, req) => {
 
         case 'test_line':
           // Process text through triggers as if it came from MUD
-          // Used by #showme to test trigger patterns
+          // Used by #showme to test trigger patterns.
+          // Response goes to the ORIGINATING device only (not broadcast)
+          // to prevent N-device amplification where each device's #showme
+          // sends test_line and the result broadcasts to all N devices.
           if (data.line) {
             const processed = processTriggers(data.line, session.triggers, null, session.variables || {}, session.functions || {});
 
-            // Send to client (even if gagged, for testing)
-            sendToClient(session, {
-              type: 'mud',
-              line: processed.line,
-              highlight: processed.highlight,
-              sound: processed.sound,
-              test: true  // Flag so client knows this is test output
-            });
+            // Send to originating client only (not broadcast)
+            try {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'mud',
+                  line: processed.line,
+                  highlight: processed.highlight,
+                  sound: processed.sound,
+                  test: true
+                }));
+              }
+            } catch (e) {}
 
             // Execute any trigger commands (with alias expansion)
             processed.commands.forEach(cmd => {
