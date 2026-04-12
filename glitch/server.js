@@ -14,7 +14,8 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 
-const Database = require('better-sqlite3');
+let Database;
+try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
 
 const MUD_HOST = '3k.org';
 const MUD_PORT = 3000;
@@ -35,6 +36,7 @@ const DB_ENABLED_USERS = null; // null = all users
 
 let wmtDb = null;
 try {
+  if (!Database) throw new Error('better-sqlite3 not installed');
   wmtDb = new Database(DB_PATH);
   wmtDb.pragma('journal_mode = WAL');
   wmtDb.pragma('foreign_keys = ON');
