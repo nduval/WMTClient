@@ -3784,22 +3784,24 @@ function parseMipMessage(session, msgType, msgData) {
       if (session && MAP_ENABLED_USERS.has(session.userId)) {
         console.log(`[MAP-DEBUG] BAD raw="${rawRoom}" vnum=${mipStats.roomVnum} room="${mipStats.room}"`);
       }
-      // Send map context if map DB is loaded and user is enabled
-      if (mapDb && session && MAP_ENABLED_USERS.has(session.userId)) {
-        // Try vnum first, fall back to name matching
-        if (mipStats.roomVnum) {
-          sendMapContext(session, mipStats.roomVnum);
-        } else {
-          // Name-based lookup fallback
-          sendMapContextByName(session, mipStats.room, mipStats.exits);
-        }
-      }
+      // Don't send map context here — DDD (exits) arrives after BAD.
+      // If we send here, mipStats.exits still has the PREVIOUS room's exits.
+      // Map context is triggered from DDD instead.
       break;
     }
 
     case 'DDD':
       mipStats.exits = msgData.replace(/~/g, ', ');
       updated = true;
+      // Now both room name (from BAD) and exits (from DDD) are current.
+      // Send map context with accurate exit filtering.
+      if (mapDb && session && MAP_ENABLED_USERS.has(session.userId)) {
+        if (mipStats.roomVnum) {
+          sendMapContext(session, mipStats.roomVnum);
+        } else {
+          sendMapContextByName(session, mipStats.room, mipStats.exits);
+        }
+      }
       break;
 
     case 'BBA':
