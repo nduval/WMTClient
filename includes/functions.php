@@ -234,14 +234,50 @@ function saveJsonFile(string $path, array $data, int $rotations = 0): bool {
         mkdir($dir, 0755, true);
     }
 
-    // Auto-rotate trigger and alias files — user's most valuable data.
-    // Keeps 3 previous versions alongside the current file so a bad save
-    // (race condition, reduced set, corrupt data) can be recovered by
-    // copying .1 back over the current file.
-    if ($rotations === 0) {
-        $basename = basename($path);
-        if (in_array($basename, ['triggers.json', 'aliases.json'])) {
-            $rotations = 3;
+    // Auto-protect trigger and alias files — user's most valuable data.
+    // Three tiers of backup:
+    //   1. Per-save rotation (.1 through .10) — 10 revisions for rapid
+    //      recovery when a bad save happens during debugging/panic.
+    //   2. Daily snapshot (.daily.YYYY-MM-DD) — one per day, keep 14.
+    //      Created on the first save of each calendar day. Rotation
+    //      never touches these.
+    //   3. Weekly snapshot (.weekly.YYYY-WNN) — one per week, keep 8.
+    //      Two months of weekly recovery points.
+    //
+    // Total storage per character: ~1MB. Automatic, transparent.
+    $basename = basename($path);
+    $isProtected = in_array($basename, ['triggers.json', 'aliases.json']);
+
+    if ($isProtected && $rotations === 0) {
+        $rotations = 10;
+    }
+
+    // Daily + weekly snapshots for protected files
+    if ($isProtected && file_exists($path)) {
+        $today = date('Y-m-d');
+        $dailyPath = "$path.daily.$today";
+        if (!file_exists($dailyPath)) {
+            @copy($path, $dailyPath);
+            // Prune daily snapshots older than 14 days
+            foreach (glob("$path.daily.*") as $old) {
+                $dateStr = substr($old, strrpos($old, '.daily.') + 7);
+                if ($dateStr < date('Y-m-d', strtotime('-14 days'))) {
+                    @unlink($old);
+                }
+            }
+        }
+
+        $week = date('Y-\WW');
+        $weeklyPath = "$path.weekly.$week";
+        if (!file_exists($weeklyPath)) {
+            @copy($path, $weeklyPath);
+            // Prune weekly snapshots older than 8 weeks
+            foreach (glob("$path.weekly.*") as $old) {
+                $weekStr = substr($old, strrpos($old, '.weekly.') + 8);
+                if ($weekStr < date('Y-\WW', strtotime('-8 weeks'))) {
+                    @unlink($old);
+                }
+            }
         }
     }
 
