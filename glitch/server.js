@@ -570,6 +570,45 @@ function detectMudEvents(session, rawLine) {
       if (p.atNamePrompt === true)  session._atNamePrompt = true;
       if (p.atNamePrompt === false) session._atNamePrompt = false;
 
+      // ─── Deferred login audit state machine ───
+      // The login audit fires from the sniffer rather than from WMT auth
+      // because we want to distinguish a fresh login from a return-from-
+      // linkdeath. Both go through the same WMT auth flow; only the MUD
+      // can tell us which it actually was.
+      //
+      // Sequence:
+      //   1. createSession() sets _loginAuditPending = true
+      //   2. password_prompt fires → start a fallback timer
+      //   3. relink_complete fires → fire `relink` audit, cancel timer
+      //   4. timer expires (no relink seen) → fire `login` audit
+      //   5. password_fail fires → cancel timer, leave pending so the
+      //      next attempt can re-trigger
+      if (p.event === 'password_prompt' && session._loginAuditPending && !session._loginAuditTimer) {
+        // 10s gives the MUD plenty of time to respond with either the
+        // welcome text or the relink message even on a slow tick.
+        session._loginAuditTimer = setTimeout(() => {
+          session._loginAuditTimer = null;
+          if (session._loginAuditPending) {
+            session._loginAuditPending = false;
+            sendAuditLog('login', session, session.clientIp);
+          }
+        }, 10000);
+      }
+      if (p.event === 'relink_complete' && session._loginAuditPending) {
+        if (session._loginAuditTimer) {
+          clearTimeout(session._loginAuditTimer);
+          session._loginAuditTimer = null;
+        }
+        session._loginAuditPending = false;
+        sendAuditLog('relink', session, session.clientIp);
+      }
+      if (p.event === 'password_fail' && session._loginAuditTimer) {
+        // The login attempt failed; cancel the fire-as-login timer but
+        // keep _loginAuditPending true so a retry can re-trigger us.
+        clearTimeout(session._loginAuditTimer);
+        session._loginAuditTimer = null;
+      }
+
       // One line can only be one event — stop scanning.
       return;
     }
@@ -2847,6 +2886,14 @@ function closeSession(session, reason) {
   writeSessionLog(session, 'session', { event: 'close', reason });
   sendAuditLog('disconnect', session);
 
+  // Cancel any pending login-audit timer so it doesn't fire after the
+  // session is gone (would log a phantom 'login' for a closed session).
+  if (session._loginAuditTimer) {
+    clearTimeout(session._loginAuditTimer);
+    session._loginAuditTimer = null;
+  }
+  session._loginAuditPending = false;
+
   // Clear all tickers
   clearAllTickers(session);
 
@@ -4411,15 +4458,10 @@ wss.on('connection', (ws, req) => {
               session.targetHost = data.host;
               session.targetPort = data.port;
               console.log(`Target server set to ${session.targetHost}:${session.targetPort}`);
-              // Now that targetHost is correct, fire the deferred login
-              // audit (set in the createSession path). One-shot via the
-              // _loginAuditPending flag so subsequent set_server calls
-              // (e.g. user switching servers within a session) don't
-              // double-audit.
-              if (session._loginAuditPending) {
-                session._loginAuditPending = false;
-                sendAuditLog('login', session, session.clientIp);
-              }
+              // Login audit is NOT fired here. We defer it until the MUD
+              // sniffer can tell us whether this is a fresh login or a
+              // return from linkdeath — see the password_prompt timer +
+              // relink_complete handler in detectMudEvents().
               // In bridge mode, defer connectToMud until triggers arrive
               // to prevent MUD data flowing before gags/triggers are loaded.
               if (BRIDGE_URL && session._pendingBridgeResume) {
