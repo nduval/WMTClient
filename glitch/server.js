@@ -215,12 +215,21 @@ class BridgeSocket extends EventEmitter {
   }
 
   end() {
-    if (!this.destroyed && bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+    // Idempotent — calling end() twice should not double-emit close.
+    if (this.destroyed) return;
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
       try { bridgeWs.send(JSON.stringify({ type: 'destroy', token: this.token })); } catch (e) {}
     }
     this.destroyed = true;
     this.writable = false;
     bridgeSockets.delete(this.token);
+    // Mirror Node TCP socket convention: emit 'close' after destroy. Without
+    // this, the connectToMud on('close') handler never fires, which means
+    // closeSession() is never called for sessions that end via the bridge's
+    // 'end' message (clean MUD-side close, e.g. user typed `quit`). The
+    // result was missing 'disconnect' audit rows for clean quit/idle drops.
+    // Use nextTick so the current call frame can finish before listeners run.
+    process.nextTick(() => this.emit('close'));
   }
 
   destroy() {
