@@ -3274,3 +3274,123 @@ body {
 }
 .bot-fav-btn:hover { color: #e8a83c; }
 .bot-fav-btn.active { color: #e8a83c; }
+
+/* ── Map Window ──────────────────────────────────────────────── */
+.map-window {
+    position: absolute;
+    top: 60px;
+    right: 10px;
+    width: 360px;
+    height: 420px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    z-index: 55;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    font-family: 'Consolas', monospace;
+    resize: both;
+    overflow: hidden;
+}
+.map-window.hidden { display: none !important; }
+
+.map-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: #16213e;
+    border-bottom: 1px solid #333;
+    cursor: move;
+    user-select: none;
+    min-height: 28px;
+}
+.map-title {
+    color: #8ec8f0;
+    font-size: 12px;
+    font-weight: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.map-controls { display: flex; gap: 4px; }
+.map-btn {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    padding: 2px;
+    line-height: 1;
+}
+.map-btn:hover { color: #fff; }
+
+.map-body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    min-height: 0;
+}
+#map-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* SVG room styles */
+.map-room { cursor: pointer; }
+.map-room rect {
+    stroke-width: 1.5;
+    rx: 4;
+    ry: 4;
+    transition: fill 0.15s, stroke 0.15s;
+}
+.map-room:hover rect {
+    stroke: #fff;
+    filter: brightness(1.3);
+}
+.map-room text {
+    font-family: 'Consolas', monospace;
+    fill: #ddd;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+}
+.map-room.current rect {
+    fill: #2a5a8a;
+    stroke: #6cb4ee;
+    stroke-width: 2;
+}
+.map-room.neighbor rect {
+    fill: #2a2a3e;
+    stroke: #555;
+}
+.map-room.neighbor:hover rect {
+    fill: #3a3a5e;
+    stroke: #8ec8f0;
+}
+.map-exit-line {
+    stroke: #444;
+    stroke-width: 1.5;
+}
+.map-direction-label {
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+    fill: #666;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+}
+
+.map-footer {
+    padding: 4px 10px;
+    background: #16213e;
+    border-top: 1px solid #333;
+    color: #8ec8f0;
+    font-size: 11px;
+    min-height: 22px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

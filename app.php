@@ -127,7 +127,7 @@ setcookie($tokenCookieName, $wsToken, [
                         <button onclick="wmtClient.openTickerModal()">Ticker</button>
                     </div>
                 </div>
-                <?php if ($userId === 'bd035a266e8aa6c77e69d950ba0120c0'): ?><button class="header-btn" id="bot-btn">Bot</button><?php endif; ?>
+                <?php if ($userId === 'bd035a266e8aa6c77e69d950ba0120c0'): ?><button class="header-btn" id="bot-btn">Bot</button><button class="header-btn" id="map-toggle-btn">Map</button><?php endif; ?>
                 <button class="header-btn" id="settings-btn">Settings</button>
 
                 <!-- Hamburger Menu (visible on small screens) -->
@@ -227,6 +227,22 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
                 <div class="chat-output" id="chat-output"></div>
                 <div class="chat-resize-handle"></div>
+            </div>
+
+            <!-- Map Window -->
+            <div id="map-window" class="map-window hidden">
+                <div class="map-header">
+                    <span class="map-title" id="map-title">Map</span>
+                    <div class="map-controls">
+                        <button class="map-btn map-close" id="map-close-btn" title="Close map">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="map-body" id="map-body">
+                    <svg id="map-svg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+                </div>
+                <div class="map-footer" id="map-footer"></div>
             </div>
 
             <!-- Output Container -->

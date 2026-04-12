@@ -310,6 +310,12 @@ class WMTClient {
         this.chatDragOffset = { x: 0, y: 0 };
         this.chatIsDragging = false;
 
+        // Map window state
+        this.mapWindowOpen = false;
+        this.lastMapContext = null;
+        this.mapDragOffset = { x: 0, y: 0 };
+        this.mapIsDragging = false;
+
         // Channel preferences for ChatMon
         // Format: { channelName: { sound: bool, hidden: bool, discord: bool, webhookUrl: string } }
         this.channelPrefs = {};
@@ -1168,11 +1174,10 @@ class WMTClient {
                 break;
 
             case 'map_context':
-                // Map room data from server (vnum-based lookup)
+                // Map room data from server (vnum-based lookup in map DB)
                 if (data.room) {
                     this.lastMapContext = data;
-                    // Log to console for dev visibility
-                    console.log(`[MAP] ${data.room.name} (${data.room.area}) vnum=${data.room.vnum} exits=${data.exits.map(e => e.direction).join(',')}`);
+                    this.renderMap(data);
                 }
                 break;
 
@@ -2570,6 +2575,170 @@ class WMTClient {
         });
     }
 
+    // ── Map Window ────────────────────────────────────────────────
+
+    toggleMapWindow() {
+        const mapWindow = document.getElementById('map-window');
+        if (!mapWindow) return;
+        this.mapWindowOpen = !this.mapWindowOpen;
+        if (this.mapWindowOpen) {
+            mapWindow.classList.remove('hidden');
+            document.getElementById('map-toggle-btn')?.classList.add('active');
+            if (this.lastMapContext) this.renderMap(this.lastMapContext);
+        } else {
+            mapWindow.classList.add('hidden');
+            document.getElementById('map-toggle-btn')?.classList.remove('active');
+        }
+    }
+
+    initMapDragging() {
+        const mapWindow = document.getElementById('map-window');
+        const mapHeader = mapWindow?.querySelector('.map-header');
+        if (!mapWindow || !mapHeader) return;
+
+        mapHeader.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.map-controls')) return;
+            this.mapIsDragging = true;
+            const rect = mapWindow.getBoundingClientRect();
+            this.mapDragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            mapWindow.style.transition = 'none';
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!this.mapIsDragging) return;
+            mapWindow.style.left = `${Math.max(0, e.clientX - this.mapDragOffset.x)}px`;
+            mapWindow.style.top = `${Math.max(0, e.clientY - this.mapDragOffset.y)}px`;
+        });
+        document.addEventListener('mouseup', () => {
+            this.mapIsDragging = false;
+            const mw = document.getElementById('map-window');
+            if (mw) mw.style.transition = '';
+        });
+    }
+
+    renderMap(ctx) {
+        if (!this.mapWindowOpen) return;
+        const svg = document.getElementById('map-svg');
+        if (!svg) return;
+
+        // Update title
+        const title = document.getElementById('map-title');
+        if (title) title.textContent = `${ctx.room.area} — ${ctx.room.name}`;
+
+        // Update footer
+        const footer = document.getElementById('map-footer');
+        if (footer) {
+            const exitList = ctx.exits.map(e => e.direction).join(', ');
+            footer.textContent = `Exits: ${exitList}`;
+        }
+
+        // Clear SVG
+        svg.innerHTML = '';
+        const W = 400, H = 400;
+        const CX = W / 2, CY = H / 2;
+
+        // Direction → position offset from center
+        const dirPos = {
+            n:  { x: 0, y: -1 },   s:  { x: 0, y: 1 },
+            e:  { x: 1, y: 0 },    w:  { x: -1, y: 0 },
+            ne: { x: 0.7, y: -0.7 }, nw: { x: -0.7, y: -0.7 },
+            se: { x: 0.7, y: 0.7 },  sw: { x: -0.7, y: 0.7 },
+            u:  { x: 0.5, y: -0.85 }, d: { x: -0.5, y: 0.85 }
+        };
+
+        const ROOM_W = 120, ROOM_H = 36;
+        const SPREAD = 140; // distance from center to neighbors
+
+        // Draw exit lines first (behind rooms)
+        for (const nb of ctx.neighbors) {
+            const pos = dirPos[nb.direction];
+            if (!pos) continue;
+            const nx = CX + pos.x * SPREAD;
+            const ny = CY + pos.y * SPREAD;
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', CX); line.setAttribute('y1', CY);
+            line.setAttribute('x2', nx); line.setAttribute('y2', ny);
+            line.setAttribute('class', 'map-exit-line');
+            svg.appendChild(line);
+        }
+
+        // Draw exits that don't have a neighbor in the map (unknown rooms)
+        for (const ex of ctx.exits) {
+            const hasNeighbor = ctx.neighbors.some(n => n.direction === ex.direction);
+            if (hasNeighbor) continue;
+            const pos = dirPos[ex.direction];
+            if (!pos) continue;
+            const nx = CX + pos.x * SPREAD;
+            const ny = CY + pos.y * SPREAD;
+            // Dashed line for unmapped exits
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', CX); line.setAttribute('y1', CY);
+            line.setAttribute('x2', nx); line.setAttribute('y2', ny);
+            line.setAttribute('class', 'map-exit-line');
+            line.setAttribute('stroke-dasharray', '4,4');
+            line.setAttribute('stroke', '#333');
+            svg.appendChild(line);
+            // Small "?" node for unknown destination
+            this._addMapRoom(svg, nx, ny, 50, 24, `? ${ex.direction}`, 'unknown', ex.command);
+        }
+
+        // Draw neighbor rooms
+        for (const nb of ctx.neighbors) {
+            const pos = dirPos[nb.direction];
+            if (!pos) continue;
+            const nx = CX + pos.x * SPREAD;
+            const ny = CY + pos.y * SPREAD;
+            const label = this._truncate(nb.name, 14);
+            this._addMapRoom(svg, nx, ny, ROOM_W, ROOM_H, label, 'neighbor', nb.command, nb.area !== ctx.room.area ? nb.area : null);
+        }
+
+        // Draw current room (on top)
+        this._addMapRoom(svg, CX, CY, ROOM_W + 10, ROOM_H + 4, this._truncate(ctx.room.name, 15), 'current', null);
+    }
+
+    _addMapRoom(svg, cx, cy, w, h, label, type, command, areaLabel) {
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', `map-room ${type}`);
+        if (command) {
+            g.style.cursor = 'pointer';
+            g.addEventListener('click', () => {
+                this.sendCommand(command);
+            });
+        }
+
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', cx - w / 2);
+        rect.setAttribute('y', cy - h / 2);
+        rect.setAttribute('width', w);
+        rect.setAttribute('height', h);
+        g.appendChild(rect);
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', cx);
+        text.setAttribute('y', areaLabel ? cy - 5 : cy);
+        text.setAttribute('font-size', type === 'current' ? '12' : '11');
+        text.textContent = label;
+        g.appendChild(text);
+
+        // Show area name below room name if crossing area boundary
+        if (areaLabel) {
+            const areaText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            areaText.setAttribute('x', cx);
+            areaText.setAttribute('y', cy + 8);
+            areaText.setAttribute('font-size', '9');
+            areaText.setAttribute('fill', '#888');
+            areaText.setAttribute('text-anchor', 'middle');
+            areaText.setAttribute('dominant-baseline', 'central');
+            areaText.textContent = this._truncate(areaLabel, 16);
+            g.appendChild(areaText);
+        }
+
+        svg.appendChild(g);
+    }
+
+    _truncate(str, max) {
+        return str && str.length > max ? str.substring(0, max - 1) + '\u2026' : str || '';
+    }
+
     // Helper to update a single stat block (with conditional display)
     updateStatBlock(statId, current, max, label, show) {
         const block = document.getElementById(`${statId}-block`);
@@ -3035,6 +3204,11 @@ class WMTClient {
         // Chat window buttons
         document.getElementById('chat-toggle-btn')?.addEventListener('click', () => this.toggleChatWindow());
         document.getElementById('chat-close-btn')?.addEventListener('click', () => this.toggleChatWindow());
+
+        // Map window
+        document.getElementById('map-toggle-btn')?.addEventListener('click', () => this.toggleMapWindow());
+        document.getElementById('map-close-btn')?.addEventListener('click', () => this.toggleMapWindow());
+        this.initMapDragging();
 
         // Overflow menu: single entry point for settings, dock position, float, popout
         document.getElementById('chat-overflow-btn')?.addEventListener('click', (e) => {
