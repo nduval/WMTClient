@@ -2642,6 +2642,68 @@ const server = http.createServer(async (req, res) => {
     });
     return;
 
+  } else if (parsedUrl.pathname === '/account-sync' && req.method === 'POST') {
+    // Admin: sync account data from IONOS PHP to Lightsail DB.
+    // Fire-and-forget from PHP — JSON stays primary, DB is the copy.
+    // Back out plan: remove the PHP calls, DB stops updating, no impact.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 100000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+
+        const action = data.action; // 'register', 'update', 'password_change', 'ban', 'login'
+        const user = data.user;
+        if (!user || !user.id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'user.id required' }));
+          return;
+        }
+
+        switch (action) {
+          case 'register':
+            wmtDb.prepare(`
+              INSERT OR IGNORE INTO users (id, username, email, password, is_wizard, created_at, last_login, last_ip)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(user.id, user.username, user.email || '', user.password || '', user.is_wizard ? 1 : 0, user.created_at || '', '', '');
+            break;
+          case 'update':
+          case 'password_change':
+            wmtDb.prepare(`
+              UPDATE users SET username = ?, email = ?, password = ?, is_wizard = ?, last_login = ?, last_ip = ?
+              WHERE id = ?
+            `).run(user.username, user.email || '', user.password || '', user.is_wizard ? 1 : 0, user.last_login || '', user.last_ip || '', user.id);
+            break;
+          case 'ban':
+            wmtDb.prepare('UPDATE users SET banned = ?, ban_reason = ? WHERE id = ?')
+              .run(user.banned ? 1 : 0, user.ban_reason || '', user.id);
+            break;
+          case 'login':
+            wmtDb.prepare('UPDATE users SET last_login = ?, last_ip = ? WHERE id = ?')
+              .run(user.last_login || '', user.last_ip || '', user.id);
+            break;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
   } else {
     res.writeHead(404);
     res.end('Not found');

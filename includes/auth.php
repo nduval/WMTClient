@@ -6,6 +6,42 @@
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/security.php';
 
+/**
+ * Fire-and-forget account sync to Lightsail DB.
+ * JSON on IONOS stays primary — this is the backup copy.
+ * If the call fails, nothing breaks. Back out: delete this function
+ * and its call sites.
+ */
+function syncAccountToDb(string $action, array $user): void {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey) return;
+
+    // WS_SERVER_URL might not be defined — use the known Lightsail endpoint
+    $url = 'https://ws.wemudtogether.com/account-sync';
+
+    $payload = json_encode([
+        'action' => $action,
+        'user' => $user
+    ]);
+
+    // Non-blocking: use a short timeout, ignore failures
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => "Content-Type: application/json\r\nX-Admin-Key: $adminKey\r\n",
+            'content' => $payload,
+            'timeout' => 3,
+            'ignore_errors' => true
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true
+        ]
+    ]);
+
+    @file_get_contents($url, false, $ctx);
+}
+
 // Emit security response headers and run the request inspector. Both run
 // once per request (idempotent via constants). Headers MUST go out before
 // any output, which is safe here because auth.php is included at the top
@@ -364,6 +400,12 @@ function registerUser(string $username, string $password, string $email): array 
         // User data exists in profile.json, can be recovered via admin
     }
 
+    // Sync new account to Lightsail DB (fire-and-forget)
+    syncAccountToDb('register', [
+        'id' => $userId, 'username' => $username, 'email' => $email,
+        'password' => $hashedPassword, 'created_at' => date('c')
+    ]);
+
     return ['success' => true, 'user_id' => $userId, 'username' => $username];
 }
 
@@ -542,7 +584,16 @@ function setUserBanned(string $userId, bool $banned, string $reason = ''): bool 
         unset($profile['banned'], $profile['banned_at'], $profile['ban_reason']);
     }
 
-    return saveJsonFile($path, $profile);
+    $result = saveJsonFile($path, $profile);
+
+    // Sync ban status to Lightsail DB (fire-and-forget)
+    if ($result) {
+        syncAccountToDb('ban', [
+            'id' => $userId, 'banned' => $banned, 'ban_reason' => $reason
+        ]);
+    }
+
+    return $result;
 }
 
 /**
@@ -648,6 +699,12 @@ function startUserSession(string $userId, string $username): void {
     // Store last IP in user profile
     updateUserProfileField($userId, 'last_ip', $ip);
     updateUserProfileField($userId, 'last_login_at', date('c'));
+
+    // Sync login to Lightsail DB (fire-and-forget)
+    syncAccountToDb('login', [
+        'id' => $userId, 'username' => $username,
+        'last_login' => date('c'), 'last_ip' => $ip
+    ]);
 }
 
 /**
@@ -723,6 +780,12 @@ function changePassword(string $userId, string $currentPassword, string $newPass
         }
     }
     saveUsersIndex($users);
+
+    // Sync password change to Lightsail DB (fire-and-forget)
+    syncAccountToDb('password_change', [
+        'id' => $userId, 'username' => $user['username'],
+        'email' => $user['email'] ?? '', 'password' => password_hash($newPassword, PASSWORD_BCRYPT)
+    ]);
 
     return ['success' => true];
 }
