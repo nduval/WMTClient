@@ -3686,7 +3686,7 @@ function sendMapContext(session, vnum) {
     const neighbors = mapStmts.getNeighborRooms.all(vnum);
     const exits = mapStmts.getExitsByVnum.all(vnum);
 
-    sendToClient(session, JSON.stringify({
+    sendToClient(session, {
       type: 'map_context',
       room: {
         vnum: room.vnum,
@@ -3707,7 +3707,7 @@ function sendMapContext(session, vnum) {
         direction: n.direction,
         command: n.command
       }))
-    }));
+    });
   } catch (e) {
     // Non-fatal — map is informational
   }
