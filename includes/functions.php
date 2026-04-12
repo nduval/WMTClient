@@ -228,10 +228,21 @@ function loadJsonFile(string $path): array {
  * Save JSON file atomically (write to temp, then rename)
  * This prevents partial/corrupted writes
  */
-function saveJsonFile(string $path, array $data): bool {
+function saveJsonFile(string $path, array $data, int $rotations = 0): bool {
     $dir = dirname($path);
     if (!is_dir($dir)) {
         mkdir($dir, 0755, true);
+    }
+
+    // Auto-rotate trigger and alias files — user's most valuable data.
+    // Keeps 3 previous versions alongside the current file so a bad save
+    // (race condition, reduced set, corrupt data) can be recovered by
+    // copying .1 back over the current file.
+    if ($rotations === 0) {
+        $basename = basename($path);
+        if (in_array($basename, ['triggers.json', 'aliases.json'])) {
+            $rotations = 3;
+        }
     }
 
     $json = json_encode($data, JSON_PRETTY_PRINT);
@@ -253,6 +264,24 @@ function saveJsonFile(string $path, array $data): bool {
         error_log("saveJsonFile: Temp file validation failed for $path");
         @unlink($tempPath);
         return false;
+    }
+
+    // Rotate previous versions before overwriting. Keeps $rotations
+    // backup copies so user data (triggers, aliases) can be recovered
+    // if a bad save overwrites the current file.
+    if ($rotations > 0 && file_exists($path)) {
+        for ($i = $rotations; $i >= 1; $i--) {
+            $older = "$path.$i";
+            if ($i === $rotations) {
+                @unlink($older);
+            }
+            if ($i > 1) {
+                $newer = "$path." . ($i - 1);
+                if (file_exists($newer)) @rename($newer, $older);
+            } else {
+                @copy($path, $older);
+            }
+        }
     }
 
     // Atomic rename (on Windows, need to delete first)
