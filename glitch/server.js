@@ -4407,8 +4407,8 @@ function processLine(session, line) {
       // Process #math/#var server-side for immediate variable updates
       const handled = serverProcessInlineCommand(cmd, session);
       if (!handled) {
-        // Not a server-handled variable command — substitute and forward to client
-        // (e.g. #if, #showme, #delay, etc.)
+        // Not a server-handled command — substitute and forward to client
+        // (e.g. #showme, #show, #bell, etc.)
         const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
         sendToClient(session, {
           type: 'client_command',
@@ -7325,6 +7325,62 @@ function serverProcessInlineCommand(cmd, session) {
       session._ifDepth--;
     }
     return true;
+  }
+
+  // #regex {string} {pattern} {true_cmds} [false_cmds]
+  // Also matches #regexp. Server-side regex matching with &N capture substitution.
+  // Without this server-side, HP/mana/stat extraction triggers silently buffer
+  // to the client when no browser is connected, leaving variables stale.
+  const regexCmdMatch = trimmed.match(/^#regexp?\s+(.*)/is);
+  if (regexCmdMatch) {
+    const rargs = parseBracedArgs(regexCmdMatch[1]);
+    if (rargs.length >= 3) {
+      const rawString = rargs[0];
+      const expression = rargs[1];
+      const trueCmd = rargs[2];
+      const falseCmd = rargs[3] || '';
+
+      // Substitute variables in the string to match against
+      const matchString = substituteUserVariables(rawString, session.variables || {}, session.functions || {});
+
+      try {
+        const regexPattern = tinTinToRegex(expression);
+        const regex = new RegExp(regexPattern);
+        const match = matchString.match(regex);
+
+        let branchCmd = '';
+        if (match) {
+          // Substitute &0, &1, ... &99 with captured groups
+          branchCmd = trueCmd;
+          for (let ri = 0; ri < match.length && ri < 100; ri++) {
+            branchCmd = branchCmd.replace(new RegExp('&' + ri + '(?![0-9])', 'g'), match[ri] || '');
+          }
+          // Clean up unreplaced &N references
+          branchCmd = branchCmd.replace(/&\d+/g, '');
+        } else if (falseCmd) {
+          branchCmd = falseCmd;
+        }
+
+        if (branchCmd) {
+          // Run through the same pipeline as #if branches
+          const expanded = expandCommandWithAliases(branchCmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+          expanded.forEach(ec => {
+            const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+            if (repeatMatch) {
+              executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+            } else if (ec.startsWith('#')) {
+              sendToClient(session, { type: 'client_command', command: ec });
+            } else if (session.mudSocket && !session.mudSocket.destroyed) {
+              session.mudSocket.write(processEscapes(ec) + '\r\n');
+            }
+          });
+        }
+      } catch (e) {
+        // Bad regex — swallow silently (matches client behavior)
+      }
+
+      return true;
+    }
   }
 
   // #delay {name} {command} {seconds}
