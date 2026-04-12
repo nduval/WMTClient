@@ -2636,6 +2636,8 @@ class WMTClient {
         const W = 400, H = 400;
         const CX = W / 2, CY = H / 2;
 
+        try { // Debug: catch rendering errors
+
         // Cardinal/diagonal directions get compass positions
         const compassPos = {
             n:  { x: 0, y: -1 },   s:  { x: 0, y: 1 },
@@ -2737,6 +2739,7 @@ class WMTClient {
 
         // Draw current room (on top, slightly larger)
         this._addMapNode(svg, CX, CY, R + 4, ctx.room.name, 'current', null);
+        } catch (err) { console.error('[MAP render error]', err); }
     }
 
     _addMapNode(svg, cx, cy, r, tooltip, type, command) {
