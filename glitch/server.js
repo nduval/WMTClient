@@ -712,6 +712,7 @@ const _logDirsCreated = new Set();
 
 const LOG_MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB per rotation file
 const LOG_MAX_ROTATIONS = 10; // Keep up to 10 rotated files per char per day (50 MB total)
+const LOG_MAX_ROTATIONS_ADMIN = 50; // Nathan's account: 50 rotations (250 MB) for deeper debugging
 const _logFileSizeCache = new Map(); // filePath -> { size, checkedAt }
 
 // Resolve the best-known name for a session: if the sniffer has captured the
@@ -768,10 +769,12 @@ function writeSessionLog(session, type, data) {
     }
     if (currentSize >= LOG_MAX_FILE_SIZE) {
       try {
+        const maxRot = (session.userId === 'bd035a266e8aa6c77e69d950ba0120c0')
+          ? LOG_MAX_ROTATIONS_ADMIN : LOG_MAX_ROTATIONS;
         // Rotate: .4 → .5 (deleted), .3 → .4, .2 → .3, .1 → .2, current → .1
-        for (let i = LOG_MAX_ROTATIONS; i >= 1; i--) {
+        for (let i = maxRot; i >= 1; i--) {
           const older = `${filePath}.${i}`;
-          if (i === LOG_MAX_ROTATIONS) {
+          if (i === maxRot) {
             try { fs.unlinkSync(older); } catch (e) {}
           }
           if (i > 1) {
