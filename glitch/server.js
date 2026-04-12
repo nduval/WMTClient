@@ -4030,7 +4030,14 @@ wss.on('connection', (ws, req) => {
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
             sessions.set(token, session);
-            sendAuditLog('login', session, clientIp);
+            // Defer the login audit until set_server fires. At this moment
+            // session.targetHost is still the default MUD_HOST (3k.org), so
+            // firing here would log the wrong realm for any 3scapes user.
+            // The set_server handler updates targetHost and then fires the
+            // audit with the correct realm. Restored sessions never go
+            // through this path, so they don't fire the login audit a
+            // second time.
+            session._loginAuditPending = true;
 
             logSessionEvent('SESSION_NEW', {
               token: token.substring(0, 8),
@@ -4404,6 +4411,15 @@ wss.on('connection', (ws, req) => {
               session.targetHost = data.host;
               session.targetPort = data.port;
               console.log(`Target server set to ${session.targetHost}:${session.targetPort}`);
+              // Now that targetHost is correct, fire the deferred login
+              // audit (set in the createSession path). One-shot via the
+              // _loginAuditPending flag so subsequent set_server calls
+              // (e.g. user switching servers within a session) don't
+              // double-audit.
+              if (session._loginAuditPending) {
+                session._loginAuditPending = false;
+                sendAuditLog('login', session, session.clientIp);
+              }
               // In bridge mode, defer connectToMud until triggers arrive
               // to prevent MUD data flowing before gags/triggers are loaded.
               if (BRIDGE_URL && session._pendingBridgeResume) {
