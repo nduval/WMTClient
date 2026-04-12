@@ -3378,8 +3378,8 @@ body {
 }
 .map-direction-label {
     font-family: 'Consolas', monospace;
-    font-size: 9px;
-    fill: #666;
+    font-size: 10px;
+    fill: #9ab;
     text-anchor: middle;
     dominant-baseline: central;
     pointer-events: none;

@@ -2687,13 +2687,32 @@ class WMTClient {
             svg.appendChild(line);
         }
 
-        // Draw direction labels on lines
+        // Draw direction labels offset from lines
         for (const [dir, pos] of exitPositions) {
-            const mx = CX + (pos.x - CX) * 0.38;
-            const my = CY + (pos.y - CY) * 0.38;
+            // Position label at 30% along the line, offset perpendicular
+            const dx = pos.x - CX, dy = pos.y - CY;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const mx = CX + dx * 0.32;
+            const my = CY + dy * 0.32;
+            // Perpendicular offset (rotate 90 degrees)
+            const ox = (-dy / len) * 12;
+            const oy = (dx / len) * 12;
+
+            // Background pill
+            const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            const tw = dir.length * 6 + 6;
+            bg.setAttribute('x', mx + ox - tw / 2);
+            bg.setAttribute('y', my + oy - 7);
+            bg.setAttribute('width', tw);
+            bg.setAttribute('height', 14);
+            bg.setAttribute('rx', 3);
+            bg.setAttribute('fill', '#1a1a2e');
+            bg.setAttribute('fill-opacity', '0.9');
+            svg.appendChild(bg);
+
             const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            lbl.setAttribute('x', mx);
-            lbl.setAttribute('y', my);
+            lbl.setAttribute('x', mx + ox);
+            lbl.setAttribute('y', my + oy);
             lbl.setAttribute('class', 'map-direction-label');
             lbl.textContent = dir;
             svg.appendChild(lbl);
