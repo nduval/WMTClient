@@ -1798,21 +1798,16 @@ async function restorePersistentSessions() {
       session._actualMudChar = ps.actualMudChar;
     }
 
-    // Load chat history from DB if it has more than the persist payload.
-    // The DB accumulates over time; the persist payload only has the
-    // last CHAT_BUFFER_MAX messages from the in-memory buffer. Use
-    // whichever source has more history.
+    // Load chat history from DB — authoritative source for chat.
     if (wmtDb && ps.characterId) {
       try {
         const chatRows = dbStmts.getRecentChat.all(ps.characterId, CHAT_BUFFER_MAX);
-        if (chatRows.length > (session.chatBuffer || []).length) {
+        if (chatRows.length > 0) {
           session.chatBuffer = chatRows.reverse().map(r => {
             try { return JSON.parse(r.raw_data); } catch (e) { return null; }
           }).filter(Boolean);
         }
-      } catch (e) {
-        // Fall back to persist-payload chatBuffer
-      }
+      } catch (e) {}
     }
 
     // Pre-load triggers/aliases from DB so the session starts
