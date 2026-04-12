@@ -46,6 +46,35 @@ try {
   // Non-fatal — server runs without DB, falls back to JSON persist
 }
 
+// ── 3K Map Database (read-only, separate file) ──────────────────────
+const MAP_DB_PATH = path.join(__dirname, '3k_map.db');
+const MAP_ENABLED_USERS = new Set(['bd035a266e8aa6c77e69d950ba0120c0']); // Nathan only during dev
+let mapDb = null;
+const mapStmts = {};
+try {
+  if (Database && require('fs').existsSync(MAP_DB_PATH)) {
+    mapDb = new Database(MAP_DB_PATH, { readonly: true });
+    mapStmts.getRoomByVnum = mapDb.prepare('SELECT vnum, name, area, terrain, description FROM rooms WHERE vnum = ?');
+    mapStmts.getExitsByVnum = mapDb.prepare('SELECT to_vnum, direction, command, weight FROM exits WHERE from_vnum = ?');
+    mapStmts.getRoomByName = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE');
+    mapStmts.getRoomByNameArea = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE AND area = ? COLLATE NOCASE');
+    mapStmts.getAreaRooms = mapDb.prepare('SELECT vnum, name, terrain FROM rooms WHERE area = ? COLLATE NOCASE');
+    mapStmts.searchRooms = mapDb.prepare('SELECT vnum, name, area FROM rooms WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
+    mapStmts.searchLocations = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
+    mapStmts.getLocation = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name = ? COLLATE NOCASE');
+    mapStmts.getAllAreas = mapDb.prepare('SELECT name, room_count FROM areas ORDER BY room_count DESC');
+    mapStmts.getNeighborRooms = mapDb.prepare(`
+      SELECT r.vnum, r.name, r.area, e.direction, e.command
+      FROM exits e JOIN rooms r ON r.vnum = e.to_vnum
+      WHERE e.from_vnum = ?
+    `);
+    const roomCount = mapDb.prepare('SELECT count(*) as c FROM rooms').get();
+    console.log(`3K map database loaded: ${MAP_DB_PATH} (${roomCount.c} rooms)`);
+  }
+} catch (e) {
+  console.error('Map database failed to load:', e.message);
+}
+
 // Prepared statements (created once, reused for performance)
 const dbStmts = {};
 if (wmtDb) {
@@ -2916,6 +2945,7 @@ function createSession(token) {
       enemyName: '',
       round: 0,
       room: '',
+      roomVnum: 0,
       exits: '',
       gline1: '',
       gline2: '',
@@ -3640,6 +3670,50 @@ function closeSession(session, reason) {
 }
 
 /**
+ * Send map context to client when room changes.
+ * Includes current room info + neighbors from map DB.
+ */
+function sendMapContext(session, vnum) {
+  if (!mapDb) return;
+  try {
+    const room = mapStmts.getRoomByVnum.get(vnum);
+    if (!room) return; // Vnum not in map DB
+
+    // Don't resend if we're still in the same room
+    if (session._lastMapVnum === vnum) return;
+    session._lastMapVnum = vnum;
+
+    const neighbors = mapStmts.getNeighborRooms.all(vnum);
+    const exits = mapStmts.getExitsByVnum.all(vnum);
+
+    sendToClient(session, JSON.stringify({
+      type: 'map_context',
+      room: {
+        vnum: room.vnum,
+        name: room.name,
+        area: room.area,
+        terrain: room.terrain
+      },
+      exits: exits.map(e => ({
+        direction: e.direction,
+        command: e.command,
+        toVnum: e.to_vnum,
+        weight: e.weight
+      })),
+      neighbors: neighbors.map(n => ({
+        vnum: n.vnum,
+        name: n.name,
+        area: n.area,
+        direction: n.direction,
+        command: n.command
+      }))
+    }));
+  } catch (e) {
+    // Non-fatal — map is informational
+  }
+}
+
+/**
  * Parse MIP message and send updates to client
  */
 function parseMipMessage(session, msgType, msgData) {
@@ -3660,10 +3734,21 @@ function parseMipMessage(session, msgType, msgData) {
       updated = true;
       break;
 
-    case 'BAD':
-      mipStats.room = msgData.trim().replace(/\s*\([^)]*\)?(~\d+)?\s*$/, '').trim();
+    case 'BAD': {
+      const rawRoom = msgData.trim();
+      // Extract room vnum if present (MIP appends ~12345 to room name)
+      const vnumMatch = rawRoom.match(/~(\d+)\s*$/);
+      if (vnumMatch) {
+        mipStats.roomVnum = parseInt(vnumMatch[1], 10);
+      }
+      mipStats.room = rawRoom.replace(/\s*\([^)]*\)?(~\d+)?\s*$/, '').trim();
       updated = true;
+      // Send map context if map DB is loaded and user is enabled
+      if (mapDb && mipStats.roomVnum && session && MAP_ENABLED_USERS.has(session.userId)) {
+        sendMapContext(session, mipStats.roomVnum);
+      }
       break;
+    }
 
     case 'DDD':
       mipStats.exits = msgData.replace(/~/g, ', ');

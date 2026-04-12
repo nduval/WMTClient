@@ -1167,6 +1167,15 @@ class WMTClient {
                 }
                 break;
 
+            case 'map_context':
+                // Map room data from server (vnum-based lookup)
+                if (data.room) {
+                    this.lastMapContext = data;
+                    // Log to console for dev visibility
+                    console.log(`[MAP] ${data.room.name} (${data.room.area}) vnum=${data.room.vnum} exits=${data.exits.map(e => e.direction).join(',')}`);
+                }
+                break;
+
             case 'mip_debug':
                 // Show raw MIP data when debug mode is on
                 if (this.mipDebug) {
