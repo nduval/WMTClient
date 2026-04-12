@@ -3714,6 +3714,36 @@ function sendMapContext(session, vnum) {
 }
 
 /**
+ * Name-based map lookup fallback when MIP doesn't send vnums.
+ * Uses room name + exits to disambiguate.
+ */
+function sendMapContextByName(session, roomName, exitsStr) {
+  if (!mapDb || !roomName) return;
+  try {
+    const candidates = mapStmts.getRoomByName.all(roomName);
+    if (candidates.length === 0) return;
+
+    let match = candidates[0]; // Default to first match
+    if (candidates.length > 1 && exitsStr) {
+      // Disambiguate by exit count/directions
+      const mipExits = exitsStr.split(/,\s*/).sort().join(',');
+      for (const c of candidates) {
+        const dbExits = mapStmts.getExitsByVnum.all(c.vnum);
+        const dbExitStr = dbExits.map(e => e.direction).sort().join(',');
+        if (dbExitStr === mipExits) {
+          match = c;
+          break;
+        }
+      }
+    }
+
+    sendMapContext(session, match.vnum);
+  } catch (e) {
+    // Non-fatal
+  }
+}
+
+/**
  * Parse MIP message and send updates to client
  */
 function parseMipMessage(session, msgType, msgData) {
@@ -3743,9 +3773,19 @@ function parseMipMessage(session, msgType, msgData) {
       }
       mipStats.room = rawRoom.replace(/\s*\([^)]*\)?(~\d+)?\s*$/, '').trim();
       updated = true;
+      // Debug: log raw BAD data for map development (Nathan only, temporary)
+      if (session && MAP_ENABLED_USERS.has(session.userId)) {
+        console.log(`[MAP-DEBUG] BAD raw="${rawRoom}" vnum=${mipStats.roomVnum} room="${mipStats.room}"`);
+      }
       // Send map context if map DB is loaded and user is enabled
-      if (mapDb && mipStats.roomVnum && session && MAP_ENABLED_USERS.has(session.userId)) {
-        sendMapContext(session, mipStats.roomVnum);
+      if (mapDb && session && MAP_ENABLED_USERS.has(session.userId)) {
+        // Try vnum first, fall back to name matching
+        if (mipStats.roomVnum) {
+          sendMapContext(session, mipStats.roomVnum);
+        } else {
+          // Name-based lookup fallback
+          sendMapContextByName(session, mipStats.room, mipStats.exits);
+        }
       }
       break;
     }
