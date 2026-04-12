@@ -587,28 +587,21 @@ function detectMudEvents(session, rawLine) {
       //
       // Sequence:
       //   1. createSession() sets _loginAuditPending = true
-      //   2. password_prompt fires → start a fallback timer
-      //   3. relink_complete fires → fire `relink` audit, cancel timer
-      //   4. timer expires (no relink seen) → fire `login` audit
-      //   5. password_fail fires → cancel timer, leave pending so the
-      //      next attempt can re-trigger
-      if (p.event === 'password_prompt' && session._loginAuditPending && !session._loginAuditTimer) {
-        // 10s gives the MUD plenty of time to respond with either the
-        // welcome text or the relink message even on a slow tick.
-        session._loginAuditTimer = setTimeout(() => {
-          session._loginAuditTimer = null;
-          if (session._loginAuditPending) {
-            session._loginAuditPending = false;
-            sendAuditLog('login', session, session.clientIp);
-          }
-        }, 10000);
+      //   2. password_prompt fires → set _loginAuditPostPasswordPrompt
+      //   3. relink_complete fires → fire `reconnect` audit, clear flags
+      //   4. user's first non-empty input after step 2 → fire `login`
+      //   5. closeSession fallback → if both flags still true at close,
+      //      fire `login` before the existing `disconnect`. Covers fast
+      //      `#end` cases (where #end is client-only and never reaches
+      //      the input handler) and idle-after-login cases.
+      //   6. password_fail clears _loginAuditPostPasswordPrompt — the
+      //      user is back at the name prompt, will reset on next pwd.
+      if (p.event === 'password_prompt' && session._loginAuditPending) {
+        session._loginAuditPostPasswordPrompt = true;
       }
       if (p.event === 'relink_complete' && session._loginAuditPending) {
-        if (session._loginAuditTimer) {
-          clearTimeout(session._loginAuditTimer);
-          session._loginAuditTimer = null;
-        }
         session._loginAuditPending = false;
+        session._loginAuditPostPasswordPrompt = false;
         // Audit-log activity name is 'reconnect' (return from linkdeath).
         // The internal sniffer pattern label stays 'relink_complete' for
         // journalctl/JSONL diagnostics — that's a more specific term for
@@ -616,11 +609,8 @@ function detectMudEvents(session, rawLine) {
         // uses the natural word.
         sendAuditLog('reconnect', session, session.clientIp);
       }
-      if (p.event === 'password_fail' && session._loginAuditTimer) {
-        // The login attempt failed; cancel the fire-as-login timer but
-        // keep _loginAuditPending true so a retry can re-trigger us.
-        clearTimeout(session._loginAuditTimer);
-        session._loginAuditTimer = null;
+      if (p.event === 'password_fail') {
+        session._loginAuditPostPasswordPrompt = false;
       }
 
       // One line can only be one event — stop scanning.
@@ -2898,15 +2888,23 @@ function closeSession(session, reason) {
     wizard: session.isWizard
   });
   writeSessionLog(session, 'session', { event: 'close', reason });
-  sendAuditLog('disconnect', session);
 
-  // Cancel any pending login-audit timer so it doesn't fire after the
-  // session is gone (would log a phantom 'login' for a closed session).
-  if (session._loginAuditTimer) {
-    clearTimeout(session._loginAuditTimer);
-    session._loginAuditTimer = null;
+  // Login audit fallback: if the session got past the MUD password prompt
+  // but closed before the user typed any command (fast #end, immediate
+  // browser close, idle-then-timeout), fire the deferred login audit
+  // BEFORE the disconnect audit so the row pair stays consistent. The
+  // _loginAuditPostPasswordPrompt gate makes sure we don't fire login
+  // for sessions that disconnected mid-auth (never successfully logged in).
+  if (session._loginAuditPending && session._loginAuditPostPasswordPrompt) {
+    session._loginAuditPending = false;
+    session._loginAuditPostPasswordPrompt = false;
+    sendAuditLog('login', session, session.clientIp);
   }
+  // Always clear pending state — disconnect is about to fire anyway.
   session._loginAuditPending = false;
+  session._loginAuditPostPasswordPrompt = false;
+
+  sendAuditLog('disconnect', session);
 
   // Clear all tickers
   clearAllTickers(session);
@@ -4179,6 +4177,19 @@ wss.on('connection', (ws, req) => {
           }
           if (session.mudSocket && !session.mudSocket.destroyed) {
             writeSessionLog(session, 'input', { cmd: data.command || '' });
+
+            // Deferred login audit: the first non-empty user command after
+            // the MUD password prompt is a definitive "past auth" signal.
+            // Fires `login` for fresh logins. Relink scenarios fired
+            // `reconnect` from the sniffer's relink_complete handler before
+            // we got here. closeSession has its own fallback for sessions
+            // that close before the user types anything (fast #end / idle).
+            if (session._loginAuditPending && session._loginAuditPostPasswordPrompt
+                && data.command && String(data.command).trim()) {
+              session._loginAuditPending = false;
+              session._loginAuditPostPasswordPrompt = false;
+              sendAuditLog('login', session, session.clientIp);
+            }
 
             // MUD character name capture: if the MUD is currently at the
             // name prompt (detected by detectMudEvents), the next typed
