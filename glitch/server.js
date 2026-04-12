@@ -414,7 +414,8 @@ const LOG_RETENTION_DAYS = 7; // Keep logs on Lightsail for 7 days
 const LOG_USER_ID = process.env.LOG_USER_ID || null; // If set, only log this user's sessions
 const _logDirsCreated = new Set();
 
-const LOG_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per character per day
+const LOG_MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB per rotation file
+const LOG_MAX_ROTATIONS = 10; // Keep up to 10 rotated files per char per day (50 MB total)
 const _logFileSizeCache = new Map(); // filePath -> { size, checkedAt }
 
 // Resolve the best-known name for a session: if the sniffer has captured the
@@ -451,18 +452,43 @@ function writeSessionLog(session, type, data) {
       }
     }
 
-    // Size cap: check every 60s, stop writing if over limit
+    // Size cap: check every 60s, rotate if over limit. Old behavior was
+    // "stop writing" which silently lost all events for the rest of the day.
+    // New behavior rotates the current file and starts fresh, keeping up to
+    // LOG_MAX_ROTATIONS old copies so you can always look back.
     const cached = _logFileSizeCache.get(filePath);
     const now = Date.now();
+    let currentSize = 0;
     if (cached && now - cached.checkedAt < 60000) {
-      if (cached.size >= LOG_MAX_FILE_SIZE) return;
+      currentSize = cached.size;
     } else {
       try {
         const stat = fs.statSync(filePath);
-        _logFileSizeCache.set(filePath, { size: stat.size, checkedAt: now });
-        if (stat.size >= LOG_MAX_FILE_SIZE) return;
+        currentSize = stat.size;
+        _logFileSizeCache.set(filePath, { size: currentSize, checkedAt: now });
       } catch (e) {
         _logFileSizeCache.set(filePath, { size: 0, checkedAt: now });
+      }
+    }
+    if (currentSize >= LOG_MAX_FILE_SIZE) {
+      try {
+        // Rotate: .4 → .5 (deleted), .3 → .4, .2 → .3, .1 → .2, current → .1
+        for (let i = LOG_MAX_ROTATIONS; i >= 1; i--) {
+          const older = `${filePath}.${i}`;
+          if (i === LOG_MAX_ROTATIONS) {
+            try { fs.unlinkSync(older); } catch (e) {}
+          }
+          if (i > 1) {
+            const newer = `${filePath}.${i - 1}`;
+            try { fs.renameSync(newer, older); } catch (e) {}
+          } else {
+            try { fs.renameSync(filePath, older); } catch (e) {}
+          }
+        }
+        _logFileSizeCache.set(filePath, { size: 0, checkedAt: now });
+      } catch (e) {
+        // Rotation failed — continue writing to the existing file rather
+        // than silently losing data.
       }
     }
 
