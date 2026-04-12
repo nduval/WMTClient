@@ -4269,17 +4269,19 @@ wss.on('connection', (ws, req) => {
                     previous: previous || null
                   });
                   writeSessionLog(session, 'mud_event', { event: 'char_resolved', mudChar: candidate, previous: previous || null });
-                  // Audit-log the resolved identity. The original `login`
-                  // audit fired at WebSocket auth time, before the user
-                  // typed their character name — so for guests it shows
-                  // character=guest and account=unknown, which is useless
-                  // for tracking who they actually were on the MUD. This
-                  // 'identified' row links the session to the real MUD
-                  // character. Fires once per session unless they re-enter
-                  // a different name (character switch within session).
-                  // effectiveCharName(session) now returns `candidate`
-                  // because we just set _actualMudChar above.
-                  sendAuditLog('identified', session, session.clientIp);
+                  // Audit-log the resolved identity ONLY when the real MUD
+                  // character differs from the WMT slot label. When they
+                  // match (the normal case — Hot=hot, Chomp=chomp), the
+                  // identified row would be redundant noise. When they
+                  // mismatch (StantonTheManton=bendover, guest=realname),
+                  // the row carries actual information: it tells the
+                  // wizard "the WMT slot label is misleading, the real
+                  // MUD character for this session is X." So an
+                  // `identified` row in the audit log is itself a flag.
+                  const wmtSlotLower = (session.characterName || '').toLowerCase();
+                  if (candidate !== wmtSlotLower) {
+                    sendAuditLog('identified', session, session.clientIp);
+                  }
                 }
               }
             }

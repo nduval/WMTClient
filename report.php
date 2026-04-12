@@ -144,9 +144,16 @@ if ($adminKey) {
 
         .realm-3k { background: rgba(0,255,0,0.15); color: #00ff00; }
         .realm-3s { background: rgba(102,153,255,0.15); color: #6699ff; }
-        .activity-login { background: rgba(0,255,0,0.15); color: #00ff00; }
-        .activity-reconnect { background: rgba(102,153,255,0.15); color: #6699ff; }
-        .activity-disconnect { background: rgba(255,102,102,0.15); color: #ff6666; }
+        .activity-login      { background: rgba(0,255,0,0.15);     color: #00ff00; }
+        .activity-reconnect  { background: rgba(102,153,255,0.15);  color: #6699ff; }
+        .activity-disconnect { background: rgba(255,102,102,0.15);  color: #ff6666; }
+        /* logout = voluntary exit (user typed quit). Distinct from
+           involuntary disconnect (linkdeath/timeout/browser close). */
+        .activity-logout     { background: rgba(255,170,102,0.15);  color: #ffaa66; }
+        /* identified = sniffer-captured real MUD char name. Only fired
+           when the captured name DIFFERS from the WMT slot label, so
+           presence of this row is itself meaningful (mismatch flag). */
+        .activity-identified { background: rgba(170,102,255,0.15);  color: #aa66ff; }
 
         .pagination {
             padding: 16px 24px;
@@ -242,6 +249,8 @@ if ($adminKey) {
             <option value="login">Login</option>
             <option value="reconnect">Reconnect</option>
             <option value="disconnect">Disconnect</option>
+            <option value="logout">Logout</option>
+            <option value="identified">Identified (mismatch)</option>
         </select>
         <select id="realm-filter">
             <option value="">All Realms</option>
