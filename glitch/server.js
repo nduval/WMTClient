@@ -37,9 +37,7 @@ let wmtDb = null;
 try {
   wmtDb = new Database(DB_PATH);
   wmtDb.pragma('journal_mode = WAL');
-  // Foreign keys OFF during dual-write phase — users/characters tables
-  // aren't populated yet. Re-enable after seeding those tables.
-  wmtDb.pragma('foreign_keys = OFF');
+  wmtDb.pragma('foreign_keys = ON');
   console.log('SQLite database connected:', DB_PATH);
 } catch (e) {
   console.error('SQLite database failed to open:', e.message);
@@ -67,6 +65,57 @@ if (wmtDb) {
   dbStmts.upsertPreferences = wmtDb.prepare(`
     INSERT OR REPLACE INTO preferences (character_id, data) VALUES (?, ?)
   `);
+  // Read statements for DB-based restore
+  dbStmts.getTriggers = wmtDb.prepare('SELECT * FROM triggers WHERE character_id = ?');
+  dbStmts.getAliases = wmtDb.prepare('SELECT * FROM aliases WHERE character_id = ?');
+  dbStmts.getClasses = wmtDb.prepare('SELECT * FROM classes WHERE character_id = ?');
+}
+
+/**
+ * Load triggers from DB for a character. Returns array in the same
+ * format the server uses in session.triggers.
+ */
+function dbLoadTriggers(characterId) {
+  if (!wmtDb) return null;
+  try {
+    const rows = dbStmts.getTriggers.all(characterId);
+    return rows.map(r => ({
+      id: r.id,
+      pattern: r.pattern,
+      matchType: r.match_type,
+      actions: JSON.parse(r.actions),
+      priority: r.priority,
+      enabled: r.enabled === 1,
+      class: r.class_id,
+      name: r.name,
+      oneshot: r.oneshot === 1
+    }));
+  } catch (e) {
+    console.error('DB trigger load failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Load aliases from DB for a character.
+ */
+function dbLoadAliases(characterId) {
+  if (!wmtDb) return null;
+  try {
+    const rows = dbStmts.getAliases.all(characterId);
+    return rows.map(r => ({
+      id: r.id,
+      pattern: r.pattern,
+      replacement: r.replacement,
+      matchType: r.match_type,
+      priority: r.priority,
+      enabled: r.enabled === 1,
+      class: r.class_id
+    }));
+  } catch (e) {
+    console.error('DB alias load failed:', e.message);
+    return null;
+  }
 }
 
 /**
@@ -1701,6 +1750,31 @@ async function restorePersistentSessions() {
     }
     if (ps.actualMudChar) {
       session._actualMudChar = ps.actualMudChar;
+    }
+
+    // Phase 2: pre-load triggers/aliases from DB so the session starts
+    // with the correct set BEFORE the browser reconnects and syncs.
+    // This eliminates the window where the session has zero triggers
+    // (between restore and client sync). Gated by userId during rollout.
+    if (DB_ENABLED_USERS.has(ps.userId) && ps.characterId) {
+      const dbTriggers = dbLoadTriggers(ps.characterId);
+      if (dbTriggers && dbTriggers.length > 0) {
+        session.triggers = dbTriggers;
+        logSessionEvent('RESTORE_DB_TRIGGERS', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName,
+          count: dbTriggers.length
+        });
+      }
+      const dbAliases = dbLoadAliases(ps.characterId);
+      if (dbAliases && dbAliases.length > 0) {
+        session.aliases = dbAliases;
+        logSessionEvent('RESTORE_DB_ALIASES', {
+          token: ps.token.substring(0, 8),
+          char: ps.characterName,
+          count: dbAliases.length
+        });
+      }
     }
 
     // Recreate server-side #delay timers from serialized state.
