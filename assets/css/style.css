@@ -3339,36 +3339,38 @@ body {
 }
 
 /* SVG room styles */
-.map-room { cursor: pointer; }
-.map-room rect {
+.map-room { cursor: default; }
+.map-room circle {
     stroke-width: 1.5;
-    rx: 4;
-    ry: 4;
-    transition: fill 0.15s, stroke 0.15s;
+    transition: fill 0.15s, stroke 0.15s, r 0.15s;
 }
-.map-room:hover rect {
+.map-room:hover circle {
     stroke: #fff;
-    filter: brightness(1.3);
+    filter: brightness(1.4);
 }
-.map-room text {
-    font-family: 'Consolas', monospace;
-    fill: #ddd;
-    text-anchor: middle;
-    dominant-baseline: central;
-    pointer-events: none;
-}
-.map-room.current rect {
-    fill: #2a5a8a;
+.map-room.current circle {
+    fill: #3a7abf;
     stroke: #6cb4ee;
-    stroke-width: 2;
+    stroke-width: 2.5;
 }
-.map-room.neighbor rect {
-    fill: #2a2a3e;
-    stroke: #555;
-}
-.map-room.neighbor:hover rect {
+.map-room.neighbor circle {
     fill: #3a3a5e;
+    stroke: #666;
+    cursor: pointer;
+}
+.map-room.neighbor:hover circle {
+    fill: #5a5a8e;
     stroke: #8ec8f0;
+}
+.map-room.unknown circle {
+    fill: #222;
+    stroke: #444;
+    stroke-dasharray: 3,3;
+    cursor: pointer;
+}
+.map-room.unknown:hover circle {
+    fill: #333;
+    stroke: #888;
 }
 .map-exit-line {
     stroke: #444;

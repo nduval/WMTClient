@@ -2636,101 +2636,110 @@ class WMTClient {
         const W = 400, H = 400;
         const CX = W / 2, CY = H / 2;
 
-        // Direction → position offset from center
-        const dirPos = {
+        // Cardinal/diagonal directions get compass positions
+        const compassPos = {
             n:  { x: 0, y: -1 },   s:  { x: 0, y: 1 },
             e:  { x: 1, y: 0 },    w:  { x: -1, y: 0 },
-            ne: { x: 0.7, y: -0.7 }, nw: { x: -0.7, y: -0.7 },
-            se: { x: 0.7, y: 0.7 },  sw: { x: -0.7, y: 0.7 },
-            u:  { x: 0.5, y: -0.85 }, d: { x: -0.5, y: 0.85 }
+            ne: { x: 0.71, y: -0.71 }, nw: { x: -0.71, y: -0.71 },
+            se: { x: 0.71, y: 0.71 },  sw: { x: -0.71, y: 0.71 },
         };
+        // u/d get dedicated positions (offset from N/S to avoid overlap)
+        const verticalPos = {
+            u: { x: 0.4, y: -0.9 },
+            d: { x: -0.4, y: 0.9 }
+        };
+        const allPos = { ...compassPos, ...verticalPos };
 
-        const ROOM_W = 120, ROOM_H = 36;
-        const SPREAD = 140; // distance from center to neighbors
+        const R = 10; // room circle radius
+        const SPREAD = 130;
+        // Special exits (enter, jump, climb, etc.) go in a ring further out
+        let specialSlot = 0;
+        const specialAngles = [0.35, -0.35, 0.85, -0.85, 1.2, -1.2]; // radians from top
 
-        // Draw exit lines first (behind rooms)
-        for (const nb of ctx.neighbors) {
-            const pos = dirPos[nb.direction];
-            if (!pos) continue;
-            const nx = CX + pos.x * SPREAD;
-            const ny = CY + pos.y * SPREAD;
+        function getPos(direction) {
+            if (allPos[direction]) return allPos[direction];
+            // Special exit — assign a slot position
+            const angle = specialAngles[specialSlot % specialAngles.length] + Math.PI / 2;
+            specialSlot++;
+            return { x: Math.cos(angle) * 0.6, y: Math.sin(angle) * 0.6 };
+        }
+
+        // Collect all exit positions
+        const exitPositions = new Map(); // direction → {x, y screen coords}
+        const allExits = [...ctx.neighbors.map(n => n.direction), ...ctx.exits.map(e => e.direction)];
+        const uniqueDirs = [...new Set(allExits)];
+        for (const dir of uniqueDirs) {
+            const p = getPos(dir);
+            exitPositions.set(dir, { x: CX + p.x * SPREAD, y: CY + p.y * SPREAD });
+        }
+
+        // Draw exit lines
+        for (const [dir, pos] of exitPositions) {
             const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
             line.setAttribute('x1', CX); line.setAttribute('y1', CY);
-            line.setAttribute('x2', nx); line.setAttribute('y2', ny);
+            line.setAttribute('x2', pos.x); line.setAttribute('y2', pos.y);
             line.setAttribute('class', 'map-exit-line');
+            const hasNeighbor = ctx.neighbors.some(n => n.direction === dir);
+            if (!hasNeighbor) {
+                line.setAttribute('stroke-dasharray', '4,4');
+                line.setAttribute('stroke', '#333');
+            }
             svg.appendChild(line);
         }
 
-        // Draw exits that don't have a neighbor in the map (unknown rooms)
+        // Draw direction labels on lines
+        for (const [dir, pos] of exitPositions) {
+            const mx = CX + (pos.x - CX) * 0.38;
+            const my = CY + (pos.y - CY) * 0.38;
+            const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            lbl.setAttribute('x', mx);
+            lbl.setAttribute('y', my);
+            lbl.setAttribute('class', 'map-direction-label');
+            lbl.textContent = dir;
+            svg.appendChild(lbl);
+        }
+
+        // Draw unmapped exit nodes (exits with no neighbor in DB)
         for (const ex of ctx.exits) {
             const hasNeighbor = ctx.neighbors.some(n => n.direction === ex.direction);
             if (hasNeighbor) continue;
-            const pos = dirPos[ex.direction];
+            const pos = exitPositions.get(ex.direction);
             if (!pos) continue;
-            const nx = CX + pos.x * SPREAD;
-            const ny = CY + pos.y * SPREAD;
-            // Dashed line for unmapped exits
-            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-            line.setAttribute('x1', CX); line.setAttribute('y1', CY);
-            line.setAttribute('x2', nx); line.setAttribute('y2', ny);
-            line.setAttribute('class', 'map-exit-line');
-            line.setAttribute('stroke-dasharray', '4,4');
-            line.setAttribute('stroke', '#333');
-            svg.appendChild(line);
-            // Small "?" node for unknown destination
-            this._addMapRoom(svg, nx, ny, 50, 24, `? ${ex.direction}`, 'unknown', ex.command);
+            this._addMapNode(svg, pos.x, pos.y, R - 2, `? (${ex.direction})`, 'unknown', ex.command);
         }
 
         // Draw neighbor rooms
         for (const nb of ctx.neighbors) {
-            const pos = dirPos[nb.direction];
+            const pos = exitPositions.get(nb.direction);
             if (!pos) continue;
-            const nx = CX + pos.x * SPREAD;
-            const ny = CY + pos.y * SPREAD;
-            const label = this._truncate(nb.name, 14);
-            this._addMapRoom(svg, nx, ny, ROOM_W, ROOM_H, label, 'neighbor', nb.command, nb.area !== ctx.room.area ? nb.area : null);
+            const tooltip = nb.area !== ctx.room.area ? `${nb.name} [${nb.area}]` : nb.name;
+            this._addMapNode(svg, pos.x, pos.y, R, tooltip, 'neighbor', nb.command);
         }
 
-        // Draw current room (on top)
-        this._addMapRoom(svg, CX, CY, ROOM_W + 10, ROOM_H + 4, this._truncate(ctx.room.name, 15), 'current', null);
+        // Draw current room (on top, slightly larger)
+        this._addMapNode(svg, CX, CY, R + 4, ctx.room.name, 'current', null);
     }
 
-    _addMapRoom(svg, cx, cy, w, h, label, type, command, areaLabel) {
+    _addMapNode(svg, cx, cy, r, tooltip, type, command) {
         const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         g.setAttribute('class', `map-room ${type}`);
         if (command) {
             g.style.cursor = 'pointer';
             g.addEventListener('click', () => {
-                this.sendCommand(command);
+                this.connection.sendCommand(command);
             });
         }
 
-        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        rect.setAttribute('x', cx - w / 2);
-        rect.setAttribute('y', cy - h / 2);
-        rect.setAttribute('width', w);
-        rect.setAttribute('height', h);
-        g.appendChild(rect);
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', cx);
+        circle.setAttribute('cy', cy);
+        circle.setAttribute('r', r);
+        g.appendChild(circle);
 
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', cx);
-        text.setAttribute('y', areaLabel ? cy - 5 : cy);
-        text.setAttribute('font-size', type === 'current' ? '12' : '11');
-        text.textContent = label;
-        g.appendChild(text);
-
-        // Show area name below room name if crossing area boundary
-        if (areaLabel) {
-            const areaText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            areaText.setAttribute('x', cx);
-            areaText.setAttribute('y', cy + 8);
-            areaText.setAttribute('font-size', '9');
-            areaText.setAttribute('fill', '#888');
-            areaText.setAttribute('text-anchor', 'middle');
-            areaText.setAttribute('dominant-baseline', 'central');
-            areaText.textContent = this._truncate(areaLabel, 16);
-            g.appendChild(areaText);
-        }
+        // Tooltip on hover
+        const titleEl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        titleEl.textContent = tooltip;
+        g.appendChild(titleEl);
 
         svg.appendChild(g);
     }
