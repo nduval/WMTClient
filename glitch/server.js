@@ -4503,8 +4503,9 @@ wss.on('connection', (ws, req) => {
                 }));
               }
 
-              // Replay ChatMon buffer
+              // Replay ChatMon buffer (clear first so reconnect doesn't duplicate)
               if (session.chatBuffer.length > 0) {
+                try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) {}
                 console.log(`Replaying ${session.chatBuffer.length} ChatMon messages (rekey)`);
                 for (const msg of session.chatBuffer) {
                   try {
@@ -4606,7 +4607,9 @@ wss.on('connection', (ws, req) => {
             }
 
             // Replay ChatMon buffer so chat history survives refresh
+            // Clear first so reconnect after deploy doesn't duplicate
             if (session.chatBuffer.length > 0) {
+              try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) {}
               console.log(`Replaying ${session.chatBuffer.length} ChatMon messages`);
               for (const msg of session.chatBuffer) {
                 try {

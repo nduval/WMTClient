@@ -1148,6 +1148,18 @@ class WMTClient {
                 }
                 break;
 
+            case 'chat_clear':
+                // Server is about to replay chat history — clear existing to avoid duplicates
+                {
+                    const chatOutput = document.getElementById('chat-output');
+                    if (chatOutput) chatOutput.innerHTML = '';
+                    if (this.chatPopoutWindow && !this.chatPopoutWindow.closed) {
+                        const popout = this.chatPopoutWindow.document.getElementById('chat-output');
+                        if (popout) popout.innerHTML = '';
+                    }
+                }
+                break;
+
             case 'mip_chat':
                 // Handle MIP chat/tell messages
                 if (data.message) {
