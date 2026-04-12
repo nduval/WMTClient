@@ -864,12 +864,28 @@ class WMTClient {
         this.lastDisconnectTime = null;
         this.reconnectingSince = null;
 
-        // Reload triggers/aliases/tickers from the API (source of truth) before pushing
-        // to the server. Prevents a stale device from overwriting changes made elsewhere.
-        // Non-blocking: don't await — let sendFilteredTriggersAndAliases run immediately,
-        // then re-send once loadSettings completes with fresh data.
+        // Reload triggers/aliases/tickers from the API (source of truth),
+        // THEN sync to server, THEN run the startup script. This MUST be
+        // sequential — loadSettings replaces this.triggers with the disk
+        // version, and cmdRead adds to it. If they run concurrently,
+        // loadSettings' .then() overwrites cmdRead's additions with the
+        // stale disk copy. The race was hidden when the disk set matched
+        // the startup-loaded set (no net change), but surfaced when a
+        // persist failure reduced the disk set below what the scripts
+        // produce. Fixed 2026-04-12.
         this.loadSettings().then(() => {
             this.sendFilteredTriggersAndAliases();
+
+            // Run the startup script AFTER loadSettings completes so
+            // cmdRead's trigger additions aren't overwritten by the
+            // disk-loaded set.
+            if (mudConnected) {
+                if (!briefReconnect && this.preferences.startupScript) {
+                    this.cmdRead([this.preferences.startupScript]);
+                }
+            } else if (this.preferences.startupScript) {
+                this.cmdRead([this.preferences.startupScript]);
+            }
         });
 
         if (mudConnected) {
@@ -882,11 +898,6 @@ class WMTClient {
             if (this.preferences.mipEnabled !== false) {
                 if (briefReconnect) this._silentMipEnable = true;
                 this.enableMip();
-            }
-            // Re-run startup script on page refresh (not brief WiFi reconnects)
-            // Client-side state like #split, #var, #event is lost on reload
-            if (!briefReconnect && this.preferences.startupScript) {
-                this.cmdRead([this.preferences.startupScript]);
             }
         } else {
             // MUD disconnected while we were away — reconnect without full onConnect().
@@ -903,10 +914,6 @@ class WMTClient {
                 window.WMT_CONFIG.mudPort || 3000
             );
             this.sendFilteredTriggersAndAliases();
-            // Re-run startup script (client-side state lost on reload)
-            if (this.preferences.startupScript) {
-                this.cmdRead([this.preferences.startupScript]);
-            }
         }
     }
 

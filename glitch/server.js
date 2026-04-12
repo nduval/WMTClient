@@ -976,46 +976,57 @@ async function persistAllSessions() {
     chars: activeSessions.map(s => s.characterName).join(',')
   });
 
-  try {
-    const payload = JSON.stringify({ sessions: activeSessions });
-    const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
+  const payload = JSON.stringify({ sessions: activeSessions });
+  const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
 
-    await new Promise((resolve, reject) => {
-      const req = https.request({
-        hostname: url.hostname,
-        port: 443,
-        path: url.pathname + url.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-          'X-Admin-Key': ADMIN_KEY
-        },
-        timeout: 5000
-      }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            logSessionEvent('PERSIST_SUCCESS', { count: activeSessions.length });
-            resolve(JSON.parse(data));
-          } else {
-            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-          }
+  // Retry once on failure. Session persistence is the most critical
+  // operation during shutdown — a transient HTTP error or PHP hiccup
+  // must not silently drop every user's MUD connection.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: url.hostname,
+          port: 443,
+          path: url.pathname + url.search,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+            'X-Admin-Key': ADMIN_KEY
+          },
+          timeout: 5000
+        }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => {
+            if (res.statusCode === 200) {
+              logSessionEvent('PERSIST_SUCCESS', { count: activeSessions.length, attempt });
+              resolve(JSON.parse(data));
+            } else {
+              reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+            }
+          });
         });
-      });
 
-      req.on('error', reject);
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Request timed out'));
-      });
+        req.on('error', reject);
+        req.on('timeout', () => {
+          req.destroy();
+          reject(new Error('Request timed out'));
+        });
 
-      req.write(payload);
-      req.end();
-    });
-  } catch (e) {
-    logSessionEvent('PERSIST_ERROR', { error: e.message });
+        req.write(payload);
+        req.end();
+      });
+      break; // success — exit retry loop
+    } catch (e) {
+      if (attempt < 2) {
+        logSessionEvent('PERSIST_RETRY', { error: e.message, attempt });
+        await new Promise(r => setTimeout(r, 1000)); // 1s pause before retry
+      } else {
+        logSessionEvent('PERSIST_ERROR', { error: e.message, attempts: attempt });
+      }
+    }
   }
 }
 
