@@ -3683,8 +3683,15 @@ function sendMapContext(session, vnum) {
     if (session._lastMapVnum === vnum) return;
     session._lastMapVnum = vnum;
 
-    const neighbors = mapStmts.getNeighborRooms.all(vnum);
-    const exits = mapStmts.getExitsByVnum.all(vnum);
+    const allNeighbors = mapStmts.getNeighborRooms.all(vnum);
+    const allExits = mapStmts.getExitsByVnum.all(vnum);
+
+    // Filter to only exits MIP confirms exist (strips mapper artifacts)
+    const mipExitSet = new Set(
+      (session.mipStats.exits || '').split(/,\s*/).map(e => e.trim().toLowerCase()).filter(Boolean)
+    );
+    const neighbors = allNeighbors.filter(n => mipExitSet.has(n.direction));
+    const exits = allExits.filter(e => mipExitSet.has(e.direction));
 
     sendToClient(session, {
       type: 'map_context',
