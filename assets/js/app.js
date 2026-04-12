@@ -8698,6 +8698,9 @@ class WMTClient {
             this.readingSilent = this._readStack.length > 0; // Stay silent if nested reads remain
             this._bulkLoading = this._readStack.length > 0; // Stay in bulk mode if nested reads remain
 
+            // DIAGNOSTIC: log trigger/alias count after #read processing
+            console.log(`[#read] ${filename}: ${lineCount} lines, ${errorCount} errors. Triggers: ${this.triggers.length}, Aliases: ${this.aliases.length}, Stack depth: ${this._readStack.length}`);
+
             // Save all changes in one batch (instead of 450+ individual saves)
             await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
 
