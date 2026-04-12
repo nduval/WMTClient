@@ -54,9 +54,14 @@ switch ($action) {
                 'characterName' => $session['characterName'] ?? '',
                 'server' => $session['server'] ?? '3k',
                 'token' => $session['token'],
+                'bridgeToken' => $session['bridgeToken'] ?? null,
                 'isWizard' => $session['isWizard'] ?? false,
                 'persistedAt' => $session['persistedAt'] ?? (time() * 1000),
                 'chatBuffer' => $session['chatBuffer'] ?? [],
+                // Phase 1: session state for seamless restart
+                'variables' => $session['variables'] ?? [],
+                'delays' => $session['delays'] ?? [],
+                'actualMudChar' => $session['actualMudChar'] ?? null,
                 'savedAt' => date('c')
             ];
         }
