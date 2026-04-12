@@ -585,23 +585,30 @@ function detectMudEvents(session, rawLine) {
       // linkdeath. Both go through the same WMT auth flow; only the MUD
       // can tell us which it actually was.
       //
+      // State flags on session:
+      //   _loginAuditPending           — set in createSession, cleared on fire
+      //   _loginAuditAtPasswordPrompt  — true between password_prompt event
+      //                                  and the user typing the password
+      //   _loginAuditPasswordEntered   — true after user types the password,
+      //                                  watching for the FIRST real command
+      //
       // Sequence:
-      //   1. createSession() sets _loginAuditPending = true
-      //   2. password_prompt fires → set _loginAuditPostPasswordPrompt
-      //   3. relink_complete fires → fire `reconnect` audit, clear flags
-      //   4. user's first non-empty input after step 2 → fire `login`
-      //   5. closeSession fallback → if both flags still true at close,
-      //      fire `login` before the existing `disconnect`. Covers fast
-      //      `#end` cases (where #end is client-only and never reaches
-      //      the input handler) and idle-after-login cases.
-      //   6. password_fail clears _loginAuditPostPasswordPrompt — the
-      //      user is back at the name prompt, will reset on next pwd.
+      //   1. createSession sets _loginAuditPending = true
+      //   2. password_prompt event → _loginAuditAtPasswordPrompt = true
+      //   3. user types password → input handler moves us to
+      //      _loginAuditPasswordEntered = true (skips the password itself)
+      //   4. user types FIRST real command → input handler fires `login`
+      //   5. relink_complete event preempts at any point → fire `reconnect`
+      //   6. closeSession fallback: if _loginAuditPasswordEntered is still
+      //      true at close, fire `login` (covers fast #end / idle close)
+      //   7. password_fail clears both flags — back at name prompt
       if (p.event === 'password_prompt' && session._loginAuditPending) {
-        session._loginAuditPostPasswordPrompt = true;
+        session._loginAuditAtPasswordPrompt = true;
       }
       if (p.event === 'relink_complete' && session._loginAuditPending) {
         session._loginAuditPending = false;
-        session._loginAuditPostPasswordPrompt = false;
+        session._loginAuditAtPasswordPrompt = false;
+        session._loginAuditPasswordEntered = false;
         // Audit-log activity name is 'reconnect' (return from linkdeath).
         // The internal sniffer pattern label stays 'relink_complete' for
         // journalctl/JSONL diagnostics — that's a more specific term for
@@ -610,7 +617,8 @@ function detectMudEvents(session, rawLine) {
         sendAuditLog('reconnect', session, session.clientIp);
       }
       if (p.event === 'password_fail') {
-        session._loginAuditPostPasswordPrompt = false;
+        session._loginAuditAtPasswordPrompt = false;
+        session._loginAuditPasswordEntered = false;
       }
 
       // One line can only be one event — stop scanning.
@@ -2889,20 +2897,21 @@ function closeSession(session, reason) {
   });
   writeSessionLog(session, 'session', { event: 'close', reason });
 
-  // Login audit fallback: if the session got past the MUD password prompt
-  // but closed before the user typed any command (fast #end, immediate
-  // browser close, idle-then-timeout), fire the deferred login audit
-  // BEFORE the disconnect audit so the row pair stays consistent. The
-  // _loginAuditPostPasswordPrompt gate makes sure we don't fire login
-  // for sessions that disconnected mid-auth (never successfully logged in).
-  if (session._loginAuditPending && session._loginAuditPostPasswordPrompt) {
+  // Login audit fallback: if the session got past the password prompt
+  // (user successfully entered their password) but closed before they
+  // typed any real command (fast #end, immediate browser close, idle-
+  // then-timeout), fire the deferred login audit BEFORE the disconnect
+  // audit so the row pair stays consistent. The _loginAuditPasswordEntered
+  // gate makes sure we don't fire login for sessions that disconnected
+  // mid-auth (never successfully entered a password).
+  if (session._loginAuditPending && session._loginAuditPasswordEntered) {
     session._loginAuditPending = false;
-    session._loginAuditPostPasswordPrompt = false;
     sendAuditLog('login', session, session.clientIp);
   }
-  // Always clear pending state — disconnect is about to fire anyway.
+  // Always clear deferred-audit state — disconnect is about to fire anyway.
   session._loginAuditPending = false;
-  session._loginAuditPostPasswordPrompt = false;
+  session._loginAuditAtPasswordPrompt = false;
+  session._loginAuditPasswordEntered = false;
 
   sendAuditLog('disconnect', session);
 
@@ -4178,17 +4187,25 @@ wss.on('connection', (ws, req) => {
           if (session.mudSocket && !session.mudSocket.destroyed) {
             writeSessionLog(session, 'input', { cmd: data.command || '' });
 
-            // Deferred login audit: the first non-empty user command after
-            // the MUD password prompt is a definitive "past auth" signal.
-            // Fires `login` for fresh logins. Relink scenarios fired
-            // `reconnect` from the sniffer's relink_complete handler before
-            // we got here. closeSession has its own fallback for sessions
-            // that close before the user types anything (fast #end / idle).
-            if (session._loginAuditPending && session._loginAuditPostPasswordPrompt
-                && data.command && String(data.command).trim()) {
-              session._loginAuditPending = false;
-              session._loginAuditPostPasswordPrompt = false;
-              sendAuditLog('login', session, session.clientIp);
+            // Deferred login audit state machine — see detectMudEvents
+            // comment block for the full sequence. Two phases here:
+            //   Phase 1: at password prompt → this input IS the password,
+            //            consume it and watch for the next.
+            //   Phase 2: password entered, this is the user's FIRST real
+            //            command after auth → fire login.
+            // Relink scenarios are preempted by relink_complete in the
+            // sniffer, which fires reconnect and clears both flags.
+            if (session._loginAuditPending && data.command && String(data.command).trim()) {
+              if (session._loginAuditAtPasswordPrompt) {
+                // Phase 1: this is the password itself. Skip it, advance.
+                session._loginAuditAtPasswordPrompt = false;
+                session._loginAuditPasswordEntered = true;
+              } else if (session._loginAuditPasswordEntered) {
+                // Phase 2: first command after the password — fire login.
+                session._loginAuditPending = false;
+                session._loginAuditPasswordEntered = false;
+                sendAuditLog('login', session, session.clientIp);
+              }
             }
 
             // MUD character name capture: if the MUD is currently at the
