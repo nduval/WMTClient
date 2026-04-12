@@ -516,7 +516,7 @@ function connectToBridge() {
     // bridge dropped (close handler above).
     let reconnectCount = 0;
     for (const [token, session] of sessions) {
-      if (session.ws && session.ws.readyState === WebSocket.OPEN && !session.mudSocket && session.targetHost) {
+      if (session.wsClients.size > 0 && !session.mudSocket && session.targetHost) {
         reconnectCount++;
         sendToClient(session, { type: 'mud_reconnect' });
       }
@@ -2152,7 +2152,7 @@ function parseGuildVars(line1, line2) {
 setInterval(() => {
   const now = Date.now();
   for (const [token, session] of sessions) {
-    if (!session.ws && session.disconnectedAt) {
+    if (session.wsClients.size === 0 && session.disconnectedAt) {
       // Skip timeout for wizard accounts (game devs who may idle for long periods)
       if (session.isWizard) {
         continue;
@@ -2222,7 +2222,7 @@ const server = http.createServer(async (req, res) => {
     const activeSessions = [];
     for (const [token, session] of sessions) {
       const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
-      const browserConnected = session.ws && session.ws.readyState === WebSocket.OPEN;
+      const browserConnected = session.wsClients.size > 0;
 
       if (mudConnected || browserConnected) {
         activeSessions.push({
@@ -2368,13 +2368,13 @@ const server = http.createServer(async (req, res) => {
         // Broadcast to all connected browsers
         let sentCount = 0;
         for (const [token, session] of sessions) {
-          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+          if (session.wsClients.size > 0) {
             try {
-              session.ws.send(JSON.stringify({
+              sendToClient(session, {
                 type: 'broadcast',
                 message: message,
                 timestamp: Date.now()
-              }));
+              });
               sentCount++;
             } catch (e) {
               console.error('Error sending broadcast to session:', e.message);
@@ -2484,7 +2484,7 @@ const server = http.createServer(async (req, res) => {
         characterId: session.characterId,
         characterName: session.characterName || null,
         mudConnected: !!(session.mudSocket || session.bridgeSocket?.writable),
-        wsConnected: !!session.ws,
+        wsConnected: session.wsClients.size > 0,
         targetHost: session.targetHost,
         targetPort: session.targetPort,
         triggerCount: (session.triggers || []).length,
@@ -2636,7 +2636,8 @@ if (BRIDGE_URL) console.log(`Bridge: ${BRIDGE_URL}`);
 function createSession(token) {
   return {
     token: token,
-    ws: null,
+    ws: null,  // Legacy — use wsClients Set for multi-device support
+    wsClients: new Set(),  // All connected browser WebSockets
     mudSocket: null,
     authenticated: false,
     explicitDisconnect: false,
@@ -3206,14 +3207,25 @@ function sendToClient(session, message) {
     }
   }
 
-  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-    try {
-      session.ws.send(JSON.stringify(message));
-    } catch (e) {
-      console.error('Error sending to client:', e.message);
+  // Broadcast to ALL connected browsers (multi-device support).
+  // If no browsers are connected, buffer for replay on reconnect.
+  const jsonMsg = JSON.stringify(message);
+  let sent = false;
+  for (const clientWs of session.wsClients) {
+    if (clientWs.readyState === WebSocket.OPEN) {
+      try {
+        clientWs.send(jsonMsg);
+        sent = true;
+      } catch (e) {
+        // Individual client send failure — remove stale WS
+        session.wsClients.delete(clientWs);
+      }
+    } else {
+      session.wsClients.delete(clientWs);
     }
-  } else {
-    // Buffer the message - keep most recent, drop oldest
+  }
+  if (!sent) {
+    // No connected browsers — buffer the message
     session.buffer.push(message);
     if (session.buffer.length > SESSION_BUFFER_MAX_LINES) {
       // Remove oldest lines, keep newest
@@ -3232,36 +3244,34 @@ function sendToClient(session, message) {
  */
 function replayBuffer(session) {
   if (session.buffer.length === 0) return;
-
-  const ws = session.ws;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (session.wsClients.size === 0) return;
 
   const bufferCopy = [...session.buffer];
   const hadOverflow = session.bufferOverflow;
   session.buffer = [];
   session.bufferOverflow = false;
 
-  console.log(`Replaying ${bufferCopy.length} buffered messages to client${hadOverflow ? ' (older content truncated)' : ''}`);
+  console.log(`Replaying ${bufferCopy.length} buffered messages to ${session.wsClients.size} client(s)${hadOverflow ? ' (older content truncated)' : ''}`);
 
-  ws.send(JSON.stringify({
+  sendToClient(session, {
     type: 'system',
     message: hadOverflow
       ? `--- Reconnected. Showing last ${bufferCopy.length} lines (older content truncated) ---`
       : `--- Reconnected. Replaying ${bufferCopy.length} buffered lines ---`
-  }));
+  });
 
   // Send in batches with delays to let browser DOM breathe
-  const BATCH_SIZE = 25;  // Smaller batches
-  const BATCH_DELAY_MS = 50;  // 50ms between batches
+  const BATCH_SIZE = 25;
+  const BATCH_DELAY_MS = 50;
   let index = 0;
 
   function sendBatch() {
-    if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+    if (session.wsClients.size === 0) return;
 
     const end = Math.min(index + BATCH_SIZE, bufferCopy.length);
     for (let i = index; i < end; i++) {
       try {
-        session.ws.send(JSON.stringify(bufferCopy[i]));
+        sendToClient(session, bufferCopy[i]);
       } catch (e) {
         console.error('Error replaying buffer:', e.message);
         return;
@@ -3275,12 +3285,10 @@ function replayBuffer(session) {
     } else {
       // Done - send end marker after a brief pause
       setTimeout(() => {
-        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-          session.ws.send(JSON.stringify({
-            type: 'system',
-            message: '--- End of buffered content ---'
-          }));
-        }
+        sendToClient(session, {
+          type: 'system',
+          message: '--- End of buffered content ---'
+        });
       }, BATCH_DELAY_MS);
     }
   }
@@ -4323,26 +4331,19 @@ wss.on('connection', (ws, req) => {
                 oldToken: existingToken.substring(0, 8),
                 newToken: token.substring(0, 8),
                 oldMudConnected: oldMudConnected,
-                oldBrowserConnected: !!oldSession.ws,
+                oldBrowserConnected: oldSession.wsClients.size > 0,
                 disconnectedFor: disconnectDuration,
                 wizard: isWizard
               });
 
-              // Notify old browser (if connected) that session was taken
-              if (oldSession.ws && oldSession.ws.readyState === WebSocket.OPEN) {
-                try {
-                  oldSession.ws.send(JSON.stringify({
-                    type: 'session_taken',
-                    message: 'Session taken over by another device.'
-                  }));
-                  oldSession.ws.close();
-                } catch (e) {}
-              }
+              // Multi-device rekey: add new WS to the set, keep existing ones
+              // (they'll be on the old token's connection but still receive broadcasts)
 
               // Re-key: move session from old token to new token, keeping MUD alive
               sessions.delete(existingToken);
               oldSession.token = token;
-              oldSession.ws = ws;
+              oldSession.ws = ws;  // Legacy compat
+              oldSession.wsClients.add(ws);
               oldSession.disconnectedAt = null;
               oldSession.explicitDisconnect = false;
               oldSession.isWizard = isWizard;
@@ -4430,26 +4431,21 @@ wss.on('connection', (ws, req) => {
           if (sessions.has(token)) {
             session = sessions.get(token);
 
-            // Check if another browser is already connected
-            if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-              logSessionEvent('SESSION_TAKEOVER', {
+            // Multi-device: add this browser to the session instead of
+            // taking over. All connected browsers see the same output.
+            // Log if this is an additional device (not the first).
+            if (session.wsClients.size > 0) {
+              logSessionEvent('SESSION_MULTI_DEVICE', {
                 token: token.substring(0, 8),
                 user: session.userId,
                 char: effectiveCharName(session),
-                note: 'new browser taking over from existing browser'
+                devices: session.wsClients.size + 1
               });
-              try {
-                // Send session_taken so old client knows not to reconnect
-                session.ws.send(JSON.stringify({
-                  type: 'session_taken',
-                  message: 'Session taken over by another device.'
-                }));
-                session.ws.close();
-              } catch (e) {}
             }
 
-            // Attach new WebSocket
-            session.ws = ws;
+            // Attach new WebSocket (multi-device: add to Set, keep others)
+            session.ws = ws;  // Legacy compat — points to most recent
+            session.wsClients.add(ws);
             session.disconnectedAt = null;
             session.explicitDisconnect = false;
             session.isWizard = isWizard;  // Update wizard status on reconnect
@@ -4532,7 +4528,8 @@ wss.on('connection', (ws, req) => {
           } else {
             // Create new session
             session = createSession(token);
-            session.ws = ws;
+            session.ws = ws;  // Legacy compat
+            session.wsClients.add(ws);
             session.userId = userId;
             session.characterId = characterId;
             session.characterName = characterName;
@@ -5106,39 +5103,55 @@ wss.on('connection', (ws, req) => {
     console.log('WebSocket closed');
     if (session) {
       if (session.explicitDisconnect) {
-        // Already handled
         return;
       }
 
-      // If session.ws was already replaced by a rekey/takeover, this close
-      // is for the OLD WebSocket — don't null out the new one
-      if (session.ws !== ws) {
-        return;
+      // Remove this WS from the multi-device set
+      session.wsClients.delete(ws);
+      // Update legacy ws pointer
+      if (session.ws === ws) {
+        // Point to another connected client if any, otherwise null
+        session.ws = null;
+        for (const other of session.wsClients) {
+          if (other.readyState === WebSocket.OPEN) {
+            session.ws = other;
+            break;
+          }
+        }
       }
 
-      // Unexpected disconnect - keep MUD connection alive
-      session.ws = null;
-      session.disconnectedAt = Date.now();
+      // Only log disconnect + start timeout if ALL browsers are gone
+      if (session.wsClients.size === 0) {
+        session.disconnectedAt = Date.now();
 
-      const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
-      logSessionEvent('SESSION_BROWSER_DISCONNECT', {
-        token: session.token.substring(0, 8),
-        user: session.userId,
-        char: effectiveCharName(session),
-        mudConnected: mudConnected,
-        wizard: session.isWizard,
-        willTimeout: !session.isWizard
-      });
+        const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
+        logSessionEvent('SESSION_BROWSER_DISCONNECT', {
+          token: session.token.substring(0, 8),
+          user: session.userId,
+          char: effectiveCharName(session),
+          mudConnected: mudConnected,
+          wizard: session.isWizard,
+          willTimeout: !session.isWizard,
+          note: 'last browser disconnected'
+        });
+      } else {
+        logSessionEvent('SESSION_DEVICE_LEFT', {
+          token: session.token.substring(0, 8),
+          char: effectiveCharName(session),
+          remaining: session.wsClients.size
+        });
+      }
     }
   });
 
   ws.on('error', (err) => {
     console.error('WebSocket error:', err.message);
     if (session) {
-      // Don't null out ws if session was rekeyed to a different connection
-      if (session.ws !== ws) return;
-      session.ws = null;
-      session.disconnectedAt = Date.now();
+      session.wsClients.delete(ws);
+      if (session.ws === ws) session.ws = null;
+      if (session.wsClients.size === 0) {
+        session.disconnectedAt = Date.now();
+      }
     }
   });
 });
@@ -7062,20 +7075,19 @@ async function gracefulShutdown(signal) {
 
   // Notify browsers and mark sessions for restart
   for (const [token, session] of sessions) {
-    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+    if (session.wsClients.size > 0) {
       try {
         if (BRIDGE_URL) {
-          // Bridge mode: seamless restart, just show brief status update
-          session.ws.send(JSON.stringify({
+          sendToClient(session, {
             type: 'system',
             subtype: 'status_only',
             message: 'WMT WebSocket updating...'
-          }));
+          });
         } else {
-          session.ws.send(JSON.stringify({
+          sendToClient(session, {
             type: 'system',
             message: 'Server restarting — reconnecting automatically...'
-          }));
+          });
         }
       } catch (e) {}
     }
