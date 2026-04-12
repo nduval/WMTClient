@@ -9061,23 +9061,9 @@ class WMTClient {
             return;
         }
 
-        // TinTin++: 1 arg = show matching gags, 2 args = create gag
-        // #gag {pattern} {priority} to create, #gag {pattern} to show
-        if (args.length === 1) {
-            // Show matching gags (wildcard search)
-            const matching = gags.filter(g => this.matchWild(g.pattern, args[0]));
-            if (matching.length === 0) {
-                this.appendOutput(`#GAG: NO MATCHES FOUND FOR {${args[0]}}.`, 'system');
-            } else {
-                matching.forEach(g => {
-                    const pri = g.priority !== undefined ? g.priority : 5;
-                    this.appendOutput(`#GAG {${g.pattern}} {${pri}}`, 'system');
-                });
-            }
-            return;
-        }
-
-        // 2+ args: create/update gag
+        // TinTin++: #gag {pattern} creates a gag (default priority 5).
+        // #gag {pattern} {priority} creates with explicit priority.
+        // With 0 args (handled above), list all gags.
         const pattern = args[0];
         const priority = args[1] !== undefined ? parseFloat(args[1]) : 5;
 
