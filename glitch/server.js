@@ -4534,6 +4534,13 @@ function connectToMud(session) {
       if (BRIDGE_URL && session._bridgeModeInit) {
         session._bridgeModeInit = false;
         sendToClient(session, { type: 'session_new' });
+        // Replay chat history from DB so ChatMon has previous messages
+        if (session.chatBuffer.length > 0) {
+          sendToClient(session, { type: 'chat_clear' });
+          for (const msg of session.chatBuffer) {
+            sendToClient(session, msg);
+          }
+        }
       }
     } else {
       // Bridge resume succeeded — existing MUD connection restored.
@@ -4546,6 +4553,13 @@ function connectToMud(session) {
       // New clients were silent (bridgeMode). Send session_resumed so they
       // show "Session resumed" message, enable MIP, run startup script.
       sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });
+      // Replay chat history so ChatMon has previous messages
+      if (session.chatBuffer.length > 0) {
+        sendToClient(session, { type: 'chat_clear' });
+        for (const msg of session.chatBuffer) {
+          sendToClient(session, msg);
+        }
+      }
     }
   });
 
@@ -4960,6 +4974,19 @@ wss.on('connection', (ws, req) => {
             });
             writeSessionLog(session, 'session', { event: 'new', user: userId, char: characterName || characterId });
 
+            // Load chat history from DB so ChatMon has previous messages
+            // even on a fresh session (not just on server-restart restore)
+            if (wmtDb && characterId) {
+              try {
+                const chatRows = dbStmts.getRecentChat.all(characterId, CHAT_BUFFER_MAX);
+                if (chatRows.length > 0) {
+                  session.chatBuffer = chatRows.reverse().map(r => {
+                    try { return JSON.parse(r.raw_data); } catch (e) { return null; }
+                  }).filter(Boolean);
+                }
+              } catch (e) {}
+            }
+
             // Fetch Discord prefs from PHP backend (survives server restarts)
             // Do this async so we don't block the session creation
             fetchDiscordPrefsFromPHP(userId, characterId, session);
@@ -4983,6 +5010,13 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({
                 type: 'session_new'
               }));
+              // Replay chat history from DB so ChatMon has previous messages
+              if (session.chatBuffer.length > 0) {
+                try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) {}
+                for (const msg of session.chatBuffer) {
+                  try { ws.send(JSON.stringify(msg)); } catch (e) { break; }
+                }
+              }
             }
           }
 
