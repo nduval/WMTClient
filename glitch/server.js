@@ -3486,7 +3486,38 @@ function botUpdateConfig(session, config) {
  * Send a message to the browser, or buffer it if disconnected
  * Buffer keeps the MOST RECENT lines - old lines are dropped when full
  */
-function sendToClient(session, message) {
+function sendToClient(session, message, targetWs) {
+  // client_command messages cause the browser to execute code (e.g. #send, #delay,
+  // #class read) which sends commands back to the server. On multi-device sessions,
+  // broadcasting to ALL browsers would cause double-execution. Send to only ONE:
+  // the originating ws (if provided via targetWs or session._cmdTargetWs), or
+  // the first active ws as fallback.
+  if (message.type === 'client_command') {
+    const jsonMsg = JSON.stringify(message);
+    const preferred = targetWs || session._cmdTargetWs;
+    if (preferred && preferred.readyState === WebSocket.OPEN) {
+      try { preferred.send(jsonMsg); return; } catch (e) {
+        session.wsClients.delete(preferred);
+      }
+    }
+    // Fallback: first active ws
+    for (const clientWs of session.wsClients) {
+      if (clientWs.readyState === WebSocket.OPEN) {
+        try { clientWs.send(jsonMsg); return; } catch (e) {
+          session.wsClients.delete(clientWs);
+        }
+      }
+    }
+    // No connected browsers — buffer
+    session.buffer.push(message);
+    if (session.buffer.length > SESSION_BUFFER_MAX_LINES) {
+      const dropped = session.buffer.length - SESSION_BUFFER_MAX_LINES;
+      session.buffer = session.buffer.slice(dropped);
+      if (!session.bufferOverflow) session.bufferOverflow = true;
+    }
+    return;
+  }
+
   // Buffer ChatMon messages for replay on session resume
   if (message.type === 'mip_chat' || message.type === 'trigger_chatmon') {
     session.chatBuffer.push(message);
@@ -5125,6 +5156,10 @@ wss.on('connection', (ws, req) => {
                 }
               }
             }
+
+            // Track originating ws so client_command messages route back to the
+            // browser that typed this command (prevents double-execution on multi-device)
+            session._cmdTargetWs = ws;
 
             // If raw flag is set, send as-is without semicolon splitting or alias processing
             // (used by #send for ANSI codes containing semicolons)
