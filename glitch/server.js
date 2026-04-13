@@ -2632,6 +2632,7 @@ const server = http.createServer(async (req, res) => {
         characterName: session.characterName || null,
         mudConnected: !!(session.mudSocket || session.bridgeSocket?.writable),
         wsConnected: session.wsClients.size > 0,
+        wsClientCount: session.wsClients.size,
         targetHost: session.targetHost,
         targetPort: session.targetPort,
         triggerCount: (session.triggers || []).length,
