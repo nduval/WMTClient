@@ -2235,18 +2235,50 @@ function convertMipColors(text) {
 
   let result = '';
   let i = 0;
+  let spanDepth = 0;
 
   while (i < text.length) {
-    if (text[i] === '<' && i + 1 < text.length && colorMap[text[i + 1]]) {
-      result += `<span style="color:${colorMap[text[i + 1]]}">`;
-      i += 2;
-    } else if (text[i] === '>') {
-      result += '</span>';
-      i += 1;
-    } else {
-      result += text[i];
-      i += 1;
+    const ch = text[i];
+
+    // Color start: `<X` where X is a color code letter AND the next char is
+    // NOT alphanumeric (i.e., space/punctuation/end). Prevents user text like
+    // `<blah>` being parsed as blue "lah".
+    if (ch === '<' && i + 1 < text.length && colorMap[text[i + 1]]) {
+      const after = i + 2 < text.length ? text[i + 2] : '';
+      if (!after || /[^a-zA-Z0-9]/.test(after)) {
+        result += `<span style="color:${colorMap[text[i + 1]]}">`;
+        i += 2;
+        spanDepth++;
+        continue;
+      }
     }
+
+    // Literal `<`, `>`, `&` must be HTML-escaped so the browser renders
+    // them as text instead of interpreting as tags.
+    if (ch === '<') {
+      result += '&lt;';
+      i++;
+    } else if (ch === '>') {
+      if (spanDepth > 0) {
+        result += '</span>';
+        spanDepth--;
+      } else {
+        result += '&gt;';
+      }
+      i++;
+    } else if (ch === '&') {
+      result += '&amp;';
+      i++;
+    } else {
+      result += ch;
+      i++;
+    }
+  }
+
+  // Close any unclosed color spans to keep the HTML balanced
+  while (spanDepth > 0) {
+    result += '</span>';
+    spanDepth--;
   }
 
   return result;
@@ -5529,6 +5561,17 @@ wss.on('connection', (ws, req) => {
           // sends test_line and the result broadcasts to all N devices.
           if (data.line) {
             const processed = processTriggers(data.line, session.triggers, null, session.variables || {}, session.functions || {});
+
+            // Handle slow regex (ReDoS protection) — disable the trigger
+            if (processed.slowRegex) {
+              const slow = processed.slowRegex;
+              console.warn(`SLOW_REGEX user=${session.userId} char=${session.characterName} trigger=${slow.id} pattern=${slow.pattern.substring(0, 80)} elapsed=${slow.elapsedMs}ms`);
+              sendToClient(session, {
+                type: 'system',
+                message: `Slow regex detected! Trigger "${slow.name}" took ${slow.elapsedMs}ms to match and has been disabled.`
+              });
+              sendToClient(session, { type: 'disable_trigger', triggerId: slow.id });
+            }
 
             // Send to originating client only (not broadcast)
             try {
