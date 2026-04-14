@@ -2281,6 +2281,21 @@ function convertMipColors(text) {
     spanDepth--;
   }
 
+  // Linkify http(s) URLs. Match only outside HTML attributes (e.g. style="...")
+  // by requiring the preceding char to not be a quote or `=`. target=_blank +
+  // rel=noopener prevents the destination from touching the opener window.
+  // Only http/https schemes — blocks javascript:, data:, etc.
+  result = result.replace(
+    /(^|[^"'=>])(https?:\/\/[^\s<>"']+)/g,
+    (m, pre, url) => {
+      // Trim trailing punctuation that's likely sentence-terminal, not URL
+      const trail = url.match(/[),.!?;:]+$/);
+      const clean = trail ? url.slice(0, -trail[0].length) : url;
+      const suffix = trail ? trail[0] : '';
+      return `${pre}<a href="${clean}" target="_blank" rel="noopener noreferrer">${clean}</a>${suffix}`;
+    }
+  );
+
   return result;
 }
 
