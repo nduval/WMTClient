@@ -3486,6 +3486,22 @@ function botUpdateConfig(session, config) {
  * Send a message to the browser, or buffer it if disconnected
  * Buffer keeps the MOST RECENT lines - old lines are dropped when full
  */
+/**
+ * Broadcast chat replay to all connected browsers WITHOUT re-buffering or re-inserting.
+ * Using sendToClient() for replay would push each message back into chatBuffer and
+ * write it to the DB again, causing the history to multiply on every reconnect.
+ */
+function broadcastChatReplay(session, message) {
+  const jsonMsg = JSON.stringify(message);
+  for (const clientWs of session.wsClients) {
+    if (clientWs.readyState === WebSocket.OPEN) {
+      try { clientWs.send(jsonMsg); } catch (e) {
+        session.wsClients.delete(clientWs);
+      }
+    }
+  }
+}
+
 function sendToClient(session, message, targetWs) {
   // client_command messages cause the browser to execute code (e.g. #send, #delay,
   // #class read) which sends commands back to the server. On multi-device sessions,
@@ -4568,9 +4584,9 @@ function connectToMud(session) {
         sendToClient(session, { type: 'session_new' });
         // Replay chat history from DB so ChatMon has previous messages
         if (session.chatBuffer.length > 0) {
-          sendToClient(session, { type: 'chat_clear' });
+          broadcastChatReplay(session, { type: 'chat_clear' });
           for (const msg of session.chatBuffer) {
-            sendToClient(session, msg);
+            broadcastChatReplay(session, msg);
           }
         }
       }
@@ -4587,9 +4603,9 @@ function connectToMud(session) {
       sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });
       // Replay chat history so ChatMon has previous messages
       if (session.chatBuffer.length > 0) {
-        sendToClient(session, { type: 'chat_clear' });
+        broadcastChatReplay(session, { type: 'chat_clear' });
         for (const msg of session.chatBuffer) {
-          sendToClient(session, msg);
+          broadcastChatReplay(session, msg);
         }
       }
     }
