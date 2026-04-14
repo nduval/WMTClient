@@ -4438,6 +4438,20 @@ function processLine(session, line) {
     });
   }
 
+  // Handle slow regex (ReDoS protection) - disable the trigger
+  if (processed.slowRegex) {
+    const slow = processed.slowRegex;
+    console.warn(`SLOW_REGEX user=${session.userId} char=${session.characterName} trigger=${slow.id} pattern=${slow.pattern.substring(0, 80)} elapsed=${slow.elapsedMs}ms`);
+    sendToClient(session, {
+      type: 'system',
+      message: `Slow regex detected! Trigger "${slow.name}" took ${slow.elapsedMs}ms to match and has been disabled.`
+    });
+    sendToClient(session, {
+      type: 'disable_trigger',
+      triggerId: slow.id
+    });
+  }
+
   // Log all output (sent and gagged) for debugging
   const strippedOut = stripAnsi(line);
   if (strippedOut.length > 0) {
@@ -5312,7 +5326,17 @@ wss.on('connection', (ws, req) => {
           break;
 
         case 'set_triggers':
-          session.triggers = data.triggers || [];
+          // ReDoS protection: drop triggers with pathologically long patterns.
+          // 500 chars is far beyond any reasonable trigger and caps the worst case
+          // for regex compilation/matching cost.
+          const incomingTriggers = (data.triggers || []).filter(t => {
+            if (t && typeof t.pattern === 'string' && t.pattern.length > 500) {
+              console.warn(`DROPPED_LONG_TRIGGER user=${session.userId} char=${session.characterName} length=${t.pattern.length}`);
+              return false;
+            }
+            return true;
+          });
+          session.triggers = incomingTriggers;
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
           // DB dual-write (gated by user during rollout)
           if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
@@ -5327,7 +5351,15 @@ wss.on('connection', (ws, req) => {
           break;
 
         case 'set_aliases':
-          session.aliases = data.aliases || [];
+          // ReDoS protection: drop aliases with pathologically long patterns
+          const incomingAliases = (data.aliases || []).filter(a => {
+            if (a && typeof a.pattern === 'string' && a.pattern.length > 500) {
+              console.warn(`DROPPED_LONG_ALIAS user=${session.userId} char=${session.characterName} length=${a.pattern.length}`);
+              return false;
+            }
+            return true;
+          });
+          session.aliases = incomingAliases;
           writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
           // DB dual-write (gated by user during rollout)
           if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
@@ -6218,12 +6250,14 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
     commands: [],
     sound: null,
     loopDetected: null,  // Will contain trigger info if loop detected
+    slowRegex: null,     // Will contain trigger info if regex took too long (ReDoS protection)
     firedOneshots: []    // Oneshot trigger IDs that fired and should be removed
   };
 
   const now = Date.now();
   const LOOP_WINDOW_MS = 2000;  // 2 second window
   const LOOP_THRESHOLD = 50;    // Max fires in window before considered a loop
+  const REGEX_SLOW_MS = 50;     // Disable a trigger if its regex takes >50ms to match
 
   // Sort triggers by priority (lower = fires first, default 5)
   // TinTin++ processes actions in priority order, first command match wins
@@ -6277,7 +6311,19 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
       try {
         const regexPattern = cachedRegexStr || tinTinToRegex(pattern);
         const regex = new RegExp(regexPattern);
+        const regexStart = Date.now();
         const match = matchLine.match(regex);
+        const regexElapsed = Date.now() - regexStart;
+        // ReDoS protection: if a regex takes too long, flag for disable
+        if (regexElapsed > REGEX_SLOW_MS) {
+          result.slowRegex = {
+            id: trigger.id,
+            name: trigger.name || pattern,
+            pattern: pattern,
+            elapsedMs: regexElapsed
+          };
+          continue; // Skip this trigger's actions
+        }
         if (match) {
           matched = true;
           matches = match;
