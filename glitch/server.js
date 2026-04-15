@@ -966,6 +966,14 @@ function detectMudEvents(session, rawLine) {
       if (p.event === 'password_fail') {
         session._loginAuditAtPasswordPrompt = false;
         session._loginAuditPasswordEntered = false;
+        // Record the failed attempt. The sniffer has already captured the
+        // typed name into _actualMudChar, so the audit row carries the
+        // real MUD character the attempt was against. The session stays
+        // open (MUD drops the TCP connection, WMT cleans up on timeout),
+        // so we log this as its own row — separate from disconnect —
+        // and suppress the later disconnect row in closeSession.
+        session._loginFailedLogged = true;
+        sendAuditLog('login_failed', session, session.clientIp);
       }
       // Quit detection: the band-camp goodbye line is the ground-truth
       // signal that the user voluntarily quit (vs linkdeath / fast close).
@@ -3719,19 +3727,26 @@ function closeSession(session, reason) {
     session._loginAuditPending = false;
     sendAuditLog('login', session, session.clientIp);
   }
+  // Capture whether the session ever authenticated BEFORE clearing flags.
+  // _loginAuditPending starts true at createSession and is cleared only
+  // when a login or reconnect audit row fires. If it's still true here,
+  // the user never got past the auth flow (or got kicked at password).
+  const neverAuthenticated = session._loginAuditPending === true;
   // Always clear deferred-audit state — close event is about to fire anyway.
   session._loginAuditPending = false;
   session._loginAuditAtPasswordPrompt = false;
   session._loginAuditPasswordEntered = false;
 
   // Voluntary quit (sniffer detected the MUD's "band camp" goodbye line)
-  // gets `logout`. Anything else — linkdeath, fast close, browser close,
-  // idle timeout — gets `disconnect`. The wizard distinguishes voluntary
-  // exits from involuntary ones in the audit log this way.
+  // gets `logout`. A session that never authenticated gets NO disconnect
+  // row — either login_failed already captured the failed attempt, or
+  // nothing meaningful happened (user opened the app and closed it before
+  // typing a name/password). Anything else — linkdeath, fast close,
+  // browser close, idle timeout post-login — gets `disconnect`.
   if (session._loginAuditQuit) {
     session._loginAuditQuit = false;
     sendAuditLog('logout', session);
-  } else {
+  } else if (!neverAuthenticated) {
     sendAuditLog('disconnect', session);
   }
 
