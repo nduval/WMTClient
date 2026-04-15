@@ -2225,9 +2225,13 @@ function stripAnsi(str) {
 }
 
 /**
- * Convert MIP color codes to HTML spans
+ * Convert MIP color codes to HTML spans.
+ * strictFollowChar: when true, only treat `<X` as a color code if the next
+ * char is non-alphanumeric — needed for chat (user text like `<blah>`),
+ * but must be false for server-formatted gline data where colored text
+ * often starts with a letter (e.g. `<yCrane>`).
  */
-function convertMipColors(text) {
+function convertMipColors(text, strictFollowChar = true) {
   if (!text) return '';
 
   const colorMap = {
@@ -2248,10 +2252,13 @@ function convertMipColors(text) {
   while (i < text.length) {
     const ch = text[i];
 
-    // Color start: `<X` where X is a color code letter AND the next char is
-    // NOT alphanumeric (i.e., space/punctuation/end). Prevents user text like
-    // `<blah>` being parsed as blue "lah".
     if (ch === '<' && i + 1 < text.length && colorMap[text[i + 1]]) {
+      if (!strictFollowChar) {
+        result += `<span style="color:${colorMap[text[i + 1]]}">`;
+        i += 2;
+        spanDepth++;
+        continue;
+      }
       const after = i + 2 < text.length ? text[i + 2] : '';
       if (!after || /[^a-zA-Z0-9]/.test(after)) {
         result += `<span style="color:${colorMap[text[i + 1]]}">`;
@@ -4140,11 +4147,11 @@ function parseFFFStats(session, data) {
         case 'N': mipStats.round = parseInt(value) || 0; break;
         case 'I':
           mipStats.gline1Raw = value;
-          mipStats.gline1 = convertMipColors(value.replace(/;/g, ' '));
+          mipStats.gline1 = convertMipColors(value.replace(/;/g, ' '), false);
           break;
         case 'J':
           mipStats.gline2Raw = value;
-          mipStats.gline2 = convertMipColors(value.replace(/;/g, ' '));
+          mipStats.gline2 = convertMipColors(value.replace(/;/g, ' '), false);
           break;
       }
       i += 2;
