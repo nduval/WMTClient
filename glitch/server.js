@@ -7539,6 +7539,10 @@ function serverProcessInlineCommand(cmd, session) {
           // server-handled # commands (recursing into nested #if), substitutes
           // vars in other # commands, and alias-expands plain commands.
           const expanded = expandCommandWithAliases(part.commands, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+          // DEBUG: log bot-related #if expansions
+          if (/walk$|step\d/.test(part.commands)) {
+            console.log(`[IF_DBG] char=${session.characterName||'?'} branch=${part.commands} expanded=${expanded.length} cmds=${JSON.stringify(expanded.slice(0,8))} mudOK=${!!(session.mudSocket && !session.mudSocket.destroyed)} depth=${session._ifDepth}`);
+          }
           expanded.forEach(ec => {
             const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
             if (repeatMatch) {
@@ -7552,6 +7556,8 @@ function serverProcessInlineCommand(cmd, session) {
           break;
         }
       }
+    } catch (ifErr) {
+      console.error(`[IF_ERR] char=${session.characterName||'?'} err=${ifErr.message} stack=${(ifErr.stack||'').substring(0,500)}`);
     } finally {
       session._ifDepth--;
     }
