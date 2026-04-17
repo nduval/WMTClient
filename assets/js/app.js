@@ -780,6 +780,7 @@ class WMTClient {
         }
         this.passwordSent = false; // Reset for new connection
         this.mipStarted = false; // Reset MIP flag
+        this._ansiCarry = ''; // Reset cross-line ANSI color state
         this.pendingReconnect = false; // Clear so duplicate name-send in onMessage doesn't fire
 
         // Start periodic health checks to detect zombie connections
@@ -2899,8 +2900,22 @@ class WMTClient {
             const line = document.createElement('div');
             line.className = 'line ' + item.type;
 
+            // Apply ANSI color carry-over from previous MUD line.
+            // Real terminals carry color state across lines — the MUD relies on
+            // setting a color at the end of one line to affect the start of the next
+            // (e.g. equipment labels set green at EOL for the next line's label text).
+            let rawText = item.text;
+            if (item.type === 'mud' && this._ansiCarry) {
+                rawText = this._ansiCarry + rawText;
+            }
+
             // Convert ANSI codes to HTML
-            let html = this.ansiToHtml(item.text);
+            let html = this.ansiToHtml(rawText);
+
+            // Track ANSI state at end of this line for carry-over (MUD lines only)
+            if (item.type === 'mud') {
+                this._ansiCarry = this._extractAnsiState(rawText);
+            }
 
             // Convert <hl style="...">text</hl> tags to styled spans (from server-side highlights)
             html = html.replace(/&lt;hl style="([^"]*)"&gt;(.*?)&lt;\/hl&gt;/gi, '<span style="$1">$2</span>');
@@ -3025,6 +3040,66 @@ class WMTClient {
 
             return result;
         });
+    }
+
+    // Extract the active ANSI state at the end of a text string.
+    // Returns an ANSI escape sequence (e.g. "\x1b[1;32m") representing
+    // the cumulative color/attribute state, or '' if reset/default.
+    // Used to carry color state across MUD output lines — real terminals
+    // persist color across newlines but WMT processes lines independently.
+    _extractAnsiState(text) {
+        let fg = null, bg = null, bold = false, dim = false, italic = false;
+        let underline = false, blink = false, reverse = false;
+
+        const regex = /\x1b\[([0-9;]+)m/g;
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            const codes = match[1].split(';');
+            for (let i = 0; i < codes.length; i++) {
+                const n = parseInt(codes[i]);
+                if (n === 0 || isNaN(n)) {
+                    fg = null; bg = null; bold = false; dim = false;
+                    italic = false; underline = false; blink = false; reverse = false;
+                } else if (n === 1) bold = true;
+                else if (n === 2) dim = true;
+                else if (n === 3) italic = true;
+                else if (n === 4) underline = true;
+                else if (n === 5) blink = true;
+                else if (n === 7) reverse = true;
+                else if (n === 22) { bold = false; dim = false; }
+                else if (n === 23) italic = false;
+                else if (n === 24) underline = false;
+                else if (n === 25) blink = false;
+                else if (n === 27) reverse = false;
+                else if (n === 39) fg = null;
+                else if (n === 49) bg = null;
+                else if (n >= 30 && n <= 37) fg = String(n);
+                else if (n >= 90 && n <= 97) fg = String(n);
+                else if (n >= 40 && n <= 47) bg = String(n);
+                else if (n >= 100 && n <= 107) bg = String(n);
+                else if ((n === 38 || n === 48) && codes[i + 1] === '5' && i + 2 < codes.length) {
+                    if (n === 38) fg = `38;5;${codes[i + 2]}`;
+                    else bg = `48;5;${codes[i + 2]}`;
+                    i += 2;
+                } else if ((n === 38 || n === 48) && codes[i + 1] === '2' && i + 4 < codes.length) {
+                    if (n === 38) fg = `38;2;${codes[i + 2]};${codes[i + 3]};${codes[i + 4]}`;
+                    else bg = `48;2;${codes[i + 2]};${codes[i + 3]};${codes[i + 4]}`;
+                    i += 4;
+                }
+            }
+        }
+
+        const parts = [];
+        if (bold) parts.push('1');
+        if (dim) parts.push('2');
+        if (italic) parts.push('3');
+        if (underline) parts.push('4');
+        if (blink) parts.push('5');
+        if (reverse) parts.push('7');
+        if (fg) parts.push(fg);
+        if (bg) parts.push(bg);
+
+        return parts.length > 0 ? '\x1b[' + parts.join(';') + 'm' : '';
     }
 
     // Convert xterm 256-color index to CSS rgb() string
