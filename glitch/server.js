@@ -7531,9 +7531,17 @@ function serverProcessInlineCommand(cmd, session) {
     session._ifDepth++;
 
     try {
+      const isBotIf = chain.some(p => /walk$|step\d|puppybot|smurfbot|zellbot|celbot|spiritbot|chessbot|alphabot|rimbot|zombiebot/.test(p.commands));
+      const botTrace = [];
+      let matched = false;
       for (const part of chain) {
         const substituted = substituteUserVariables(part.condition, session.variables || {}, session.functions || {});
-        if (evaluateCondition(substituted)) {
+        const result = evaluateCondition(substituted);
+        if (isBotIf) {
+          botTrace.push({ cond: part.condition, sub: substituted, result, cmds: part.commands });
+        }
+        if (result) {
+          matched = true;
           // Run the branch through the same pipeline the trigger dispatcher uses:
           // expandCommandWithAliases calls serverProcessInlineCommand for inline
           // server-handled # commands (recursing into nested #if), substitutes
@@ -7555,6 +7563,17 @@ function serverProcessInlineCommand(cmd, session) {
           });
           break;
         }
+      }
+      if (isBotIf && !matched) {
+        const v = session.variables || {};
+        const mod = session._varServerModified || {};
+        const now = Date.now();
+        const relevant = ['puppybot','smurfbot','zellbot','celbot','spiritbot','chessbot','alphabot','rimbot','zombiebot','botting','puppystepnumber','zellstepnumber','smurfstepnumber'];
+        const vars = {};
+        relevant.forEach(k => {
+          if (k in v || k in mod) vars[k] = `${v[k]===undefined?'<unset>':JSON.stringify(v[k])}${mod[k]?`(${Math.round((now-mod[k])/1000)}s)`:''}`;
+        });
+        console.log(`[IF_FALSE] char=${session.characterName||'?'} trace=${JSON.stringify(botTrace)} vars=${JSON.stringify(vars)} depth=${session._ifDepth}`);
       }
     } catch (ifErr) {
       console.error(`[IF_ERR] char=${session.characterName||'?'} err=${ifErr.message} stack=${(ifErr.stack||'').substring(0,500)}`);
