@@ -3496,6 +3496,15 @@ class WMTClient {
                     setTimeout(() => this.autoResizeInput(), 0);
                     return;
                 }
+                // If the input has unbalanced opening braces (e.g. user typed
+                // "#alias {mfill}" and is mid-definition), treat plain Enter
+                // like Shift+Enter so they can keep typing the body. Submit
+                // only when braces balance. parseMultiLineInput later groups
+                // the brace block into a single command.
+                if (this.hasUnclosedBraces(input.value)) {
+                    setTimeout(() => this.autoResizeInput(), 0);
+                    return;
+                }
                 e.preventDefault();
                 this.sendCommand();
                 break;
@@ -3710,6 +3719,20 @@ class WMTClient {
             input.style.height = input.scrollHeight + 'px';
             input.style.overflowY = 'hidden';
         }
+    }
+
+    // True if `s` has more '{' than '}' (i.e. an open brace block waiting
+    // to be closed). Used to decide whether plain Enter should submit or
+    // insert a newline (mid-multi-line definition like #alias body).
+    hasUnclosedBraces(s) {
+        if (!s || s.indexOf('{') === -1) return false;
+        let depth = 0;
+        for (let i = 0; i < s.length; i++) {
+            const ch = s[i];
+            if (ch === '{') depth++;
+            else if (ch === '}') depth = Math.max(0, depth - 1);
+        }
+        return depth > 0;
     }
 
     // Parse multi-line pasted input into individual commands,
