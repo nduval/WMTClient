@@ -5274,6 +5274,13 @@ wss.on('connection', (ws, req) => {
               // body take effect immediately so later commands in the same body
               // see updated variables (e.g. "#var x 1;dostep$x").
               const ASYNC_READ_RE = /^#(?:class\s+\{[^}]*\}\s+\{read\}|read\b)/i;
+              // Definition verbs whose body args must be stored verbatim. Substituting
+              // would freeze $var references at definition time, breaking aliases like
+              // "#alias {mfill} {... $manacur < $manamax ...}" — the body would get
+              // hardcoded with current values. Loaded-from-#read scripts already bypass
+              // this substitution path; this list extends the same protection to live
+              // command-line definitions.
+              const DEFINITION_VERB_RE = /^#(?:alias|action|sub|substitute|gag|highlight|ticker|t|function)\b/i;
               let hitAsyncRead = false;  // Once set, stop expanding — remaining go to client
 
               const expandCommand = (cmd, depth = 0) => {
@@ -5302,6 +5309,11 @@ wss.on('connection', (ws, req) => {
                   }
                   // Substitute $vars and @funcs AFTER inline processing
                   // so freshly-set vars are visible (e.g. #var {x} {42};#showme {$x})
+                  // Exception: definition verbs (#alias, #action, etc.) — their body
+                  // arg must remain verbatim so $var references resolve at fire time.
+                  if (DEFINITION_VERB_RE.test(trimmed)) {
+                    return [trimmed];
+                  }
                   return [substituteUserVariables(trimmed, session.variables || {}, session.functions || {})];
                 }
 
@@ -6275,6 +6287,14 @@ function expandCommandWithAliases(cmd, aliases, depth = 0, variables = {}, funct
       // Substitute $variables and @functions in # commands before sending to client
       // (e.g. #showme {attacking $target} → #showme {attacking goblin})
       // Must happen AFTER serverProcessInlineCommand so freshly-set vars are available
+      // Exception: definition verbs (#alias, #action, etc.) — their body arg must
+      // remain verbatim so $var references resolve at fire time, not at definition.
+      // Same regex as in expandCommand above.
+      const DEF_VERB_RE = /^#(?:alias|action|sub|substitute|gag|highlight|ticker|t|function)\b/i;
+      if (DEF_VERB_RE.test(partTrimmed)) {
+        results.push(partTrimmed);
+        return;
+      }
       const substitutedCmd = substituteUserVariables(partTrimmed, variables, functions);
       results.push(substitutedCmd);
       return;
