@@ -702,6 +702,14 @@ setcookie($tokenCookieName, $wsToken, [
                 <p class="settings-hint" style="margin-bottom: 15px;">
                     Configure per-channel settings. Channels appear here after receiving messages.
                 </p>
+                <?php if ($isAdmin): ?>
+                <div id="ifttt-key-row" style="margin-bottom: 15px; padding: 10px; border: 1px solid var(--border-color, #444); border-radius: 4px;">
+                    <label style="display: block; font-size: 0.9em; margin-bottom: 4px;">
+                        IFTTT Maker key <span style="opacity: 0.6;">(used by per-channel IFTTT toggle below)</span>
+                    </label>
+                    <input type="text" id="ifttt-key-input" placeholder="paste your maker.ifttt.com key" style="width: 100%; box-sizing: border-box;">
+                </div>
+                <?php endif; ?>
                 <div id="channel-list" class="channel-settings-list">
                     <!-- Channel rows populated dynamically -->
                 </div>
@@ -817,7 +825,8 @@ setcookie($tokenCookieName, $wsToken, [
             csrfToken: '<?= generateCsrfToken() ?>',
             newMudChar: '<?= htmlspecialchars($newMudChar, ENT_QUOTES) ?>',
             wsToken: '<?= $wsToken ?>',
-            isWizard: <?= $isWizard ? 'true' : 'false' ?>
+            isWizard: <?= $isWizard ? 'true' : 'false' ?>,
+            isAdmin: <?= $isAdmin ? 'true' : 'false' ?>
         };
     </script>
     <script src="assets/js/connection.js?v=<?= filemtime('assets/js/connection.js') ?>"></script>

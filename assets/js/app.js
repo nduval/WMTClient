@@ -737,9 +737,11 @@ class WMTClient {
     }
 
     // Send Discord preferences to server for server-side notifications (works when browser closed)
+    // Also carries the IFTTT maker key so server-side IFTTT notifications work when the browser is closed.
     sendDiscordPrefsToServer() {
         const charName = window.WMT_CONFIG?.characterName || 'WMT Client';
-        this.connection.setDiscordPrefs(this.channelPrefs, charName);
+        const iftttKey = (window.WMT_CONFIG?.isAdmin && this.preferences?.iftttKey) || '';
+        this.connection.setDiscordPrefs(this.channelPrefs, charName, iftttKey);
     }
 
     setupConnection() {
@@ -2213,14 +2215,15 @@ class WMTClient {
     async saveChannelPrefs() {
         try {
             this.preferences.channelPrefs = this.channelPrefs;
+            const payload = { channelPrefs: this.channelPrefs };
+            // Only persist iftttKey if admin set one — non-admin users never touch this field.
+            if (window.WMT_CONFIG?.isAdmin && typeof this.preferences.iftttKey === 'string') {
+                payload.iftttKey = this.preferences.iftttKey;
+            }
             const res = await fetch(this.apiUrl('api/preferences.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    preferences: {
-                        channelPrefs: this.channelPrefs
-                    }
-                })
+                body: JSON.stringify({ preferences: payload })
             });
             if (!res.ok) {
                 this.appendOutput(`Failed to save channel preferences (${res.status}) — your session may have expired. Please log in again.`, 'error');
@@ -2239,6 +2242,12 @@ class WMTClient {
         const modal = document.getElementById('channel-settings-modal');
         if (!modal) return;
 
+        const isAdmin = !!window.WMT_CONFIG?.isAdmin;
+
+        // Populate the IFTTT key field for admin
+        const keyInput = document.getElementById('ifttt-key-input');
+        if (keyInput) keyInput.value = this.preferences?.iftttKey || '';
+
         // Render the channel list
         const channelList = document.getElementById('channel-list');
         if (channelList) {
@@ -2252,6 +2261,18 @@ class WMTClient {
                     const hasColors = !!(prefs.headerColor || prefs.bgColor);
                     const headerColor = prefs.headerColor || '#44dddd';
                     const bgColor = prefs.bgColor || '#64c8ff';
+                    const iftttEvent = prefs.iftttEvent || '';
+                    const iftttToggle = isAdmin ? `
+                                <label class="channel-option" title="Send to IFTTT">
+                                    <input type="checkbox" class="channel-ifttt" ${prefs.ifttt ? 'checked' : ''}>
+                                    <span class="channel-icon">📱</span>
+                                </label>` : '';
+                    const iftttRow = isAdmin ? `
+                            <div class="channel-ifttt-row" style="display: ${prefs.ifttt ? 'flex' : 'none'};">
+                                <input type="text" class="channel-ifttt-event"
+                                    placeholder="IFTTT event name (default: 3K)"
+                                    value="${iftttEvent}">
+                            </div>` : '';
                     return `
                         <div class="channel-row" data-channel="${channel}">
                             <div class="channel-row-main">
@@ -2267,7 +2288,7 @@ class WMTClient {
                                 <label class="channel-option" title="Send to Discord">
                                     <input type="checkbox" class="channel-discord" ${prefs.discord ? 'checked' : ''}>
                                     <span class="channel-icon">📤</span>
-                                </label>
+                                </label>${iftttToggle}
                                 <label class="channel-option" title="Custom colors">
                                     <input type="checkbox" class="channel-colors-toggle" ${hasColors ? 'checked' : ''}>
                                     <span class="channel-icon">🎨</span>
@@ -2277,7 +2298,7 @@ class WMTClient {
                                 <input type="text" class="channel-webhook"
                                     placeholder="Discord webhook URL for ${channel}..."
                                     value="${webhookUrl}">
-                            </div>
+                            </div>${iftttRow}
                             <div class="channel-color-row" style="display: ${hasColors ? 'flex' : 'none'};">
                                 <label>Header <input type="color" class="channel-header-color" value="${headerColor}"></label>
                                 <label>Background <input type="color" class="channel-bg-color" value="${bgColor}"></label>
@@ -2294,6 +2315,17 @@ class WMTClient {
                         const webhookRow = row.querySelector('.channel-webhook-row');
                         if (webhookRow) {
                             webhookRow.style.display = e.target.checked ? 'flex' : 'none';
+                        }
+                    });
+                });
+
+                // Toggle IFTTT event-name row visibility (admin only — no-op for others)
+                channelList.querySelectorAll('.channel-ifttt').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => {
+                        const row = e.target.closest('.channel-row');
+                        const iftttRow = row.querySelector('.channel-ifttt-row');
+                        if (iftttRow) {
+                            iftttRow.style.display = e.target.checked ? 'flex' : 'none';
                         }
                     });
                 });
@@ -2335,6 +2367,15 @@ class WMTClient {
 
     // Save channel settings from modal
     saveChannelSettings() {
+        const isAdmin = !!window.WMT_CONFIG?.isAdmin;
+        // Capture admin-only IFTTT key first so it lands in preferences before saveChannelPrefs() POSTs.
+        if (isAdmin) {
+            const keyInput = document.getElementById('ifttt-key-input');
+            if (keyInput) {
+                this.preferences = this.preferences || {};
+                this.preferences.iftttKey = keyInput.value.trim();
+            }
+        }
         const channelRows = document.querySelectorAll('#channel-list .channel-row');
         channelRows.forEach(row => {
             const channel = row.dataset.channel;
@@ -2345,7 +2386,12 @@ class WMTClient {
             const colorsEnabled = row.querySelector('.channel-colors-toggle')?.checked || false;
             const headerColor = colorsEnabled ? (row.querySelector('.channel-header-color')?.value || '') : '';
             const bgColor = colorsEnabled ? (row.querySelector('.channel-bg-color')?.value || '') : '';
-            this.channelPrefs[channel] = { sound, hidden, discord, webhookUrl, headerColor, bgColor };
+            // Preserve any prior IFTTT settings on the channel for non-admin users so we
+            // don't accidentally clear admin-set state if a non-admin opens the modal.
+            const prior = this.channelPrefs[channel] || {};
+            const ifttt = isAdmin ? (row.querySelector('.channel-ifttt')?.checked || false) : (prior.ifttt || false);
+            const iftttEvent = isAdmin ? (row.querySelector('.channel-ifttt-event')?.value?.trim() || '') : (prior.iftttEvent || '');
+            this.channelPrefs[channel] = { sound, hidden, discord, webhookUrl, headerColor, bgColor, ifttt, iftttEvent };
         });
         this.saveChannelPrefs();
         this.closeChannelSettingsModal();

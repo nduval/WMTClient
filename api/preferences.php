@@ -57,6 +57,7 @@ if ($action === 'get_discord_prefs') {
 
     // Extract just the Discord-relevant parts
     $channelPrefs = $preferences['channelPrefs'] ?? [];
+    $iftttKey = isset($preferences['iftttKey']) && is_string($preferences['iftttKey']) ? $preferences['iftttKey'] : '';
 
     // Get character name for Discord username
     $characters = getCharacters($reqUserId);
@@ -70,7 +71,8 @@ if ($action === 'get_discord_prefs') {
 
     successResponse([
         'channelPrefs' => $channelPrefs,
-        'discordUsername' => $characterName
+        'discordUsername' => $characterName,
+        'iftttKey' => $iftttKey
     ]);
     exit;
 }
@@ -248,7 +250,9 @@ switch ($action) {
                     'sound' => isset($prefs['sound']) ? (bool)$prefs['sound'] : false,
                     'hidden' => isset($prefs['hidden']) ? (bool)$prefs['hidden'] : false,
                     'discord' => isset($prefs['discord']) ? (bool)$prefs['discord'] : false,
-                    'webhookUrl' => ''
+                    'webhookUrl' => '',
+                    'ifttt' => isset($prefs['ifttt']) ? (bool)$prefs['ifttt'] : false,
+                    'iftttEvent' => ''
                 ];
 
                 // Validate webhook URL if provided
@@ -257,6 +261,14 @@ switch ($action) {
                     if ($url === '' ||
                         preg_match('#^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$#', $url)) {
                         $channelData['webhookUrl'] = $url;
+                    }
+                }
+
+                // Validate IFTTT event-name override (per-channel; defaults to "3K" at send time)
+                if (isset($prefs['iftttEvent']) && is_string($prefs['iftttEvent'])) {
+                    $ev = trim($prefs['iftttEvent']);
+                    if ($ev === '' || preg_match('/^[A-Za-z0-9_-]{1,64}$/', $ev)) {
+                        $channelData['iftttEvent'] = $ev;
                     }
                 }
 
@@ -288,6 +300,14 @@ switch ($action) {
             if ($url === '' ||
                 preg_match('#^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$#', $url)) {
                 $validated['discordWebhookUrl'] = $url;
+            }
+        }
+
+        // IFTTT Maker key (single per-user key; per-channel toggle lives in channelPrefs)
+        if (isset($preferences['iftttKey'])) {
+            $key = trim((string)$preferences['iftttKey']);
+            if ($key === '' || preg_match('/^[A-Za-z0-9_-]{10,64}$/', $key)) {
+                $validated['iftttKey'] = $key;
             }
         }
 

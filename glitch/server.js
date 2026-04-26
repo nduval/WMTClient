@@ -1133,6 +1133,74 @@ function sendToDiscordWebhook(webhookUrl, message, username = 'WMT Client') {
   }
 }
 
+/**
+ * Send message to IFTTT Maker webhook (fire and forget).
+ * Posts directly to maker.ifttt.com — no proxy needed (IFTTT doesn't block AWS IPs).
+ * Payload mirrors the legacy elmtell bash script: value1 = "<who> <where>:" prefix,
+ * value2 = message body. Existing IFTTT applets keyed off value1/value2 keep working.
+ */
+function sendToIfttt(key, eventName, value1, value2, value3) {
+  if (!key || !eventName) return;
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(key)) return;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(eventName)) return;
+
+  const stripAndCap = (s, cap) => {
+    if (s == null) return '';
+    return String(s).replace(/\x1b\[[0-9;]*m/g, '').substring(0, cap);
+  };
+  const payload = JSON.stringify({
+    value1: stripAndCap(value1, 500),
+    value2: stripAndCap(value2, 1500),
+    value3: stripAndCap(value3, 500)
+  });
+
+  try {
+    const options = {
+      hostname: 'maker.ifttt.com',
+      port: 443,
+      path: `/trigger/${encodeURIComponent(eventName)}/with/key/${encodeURIComponent(key)}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 5000
+    };
+    const req = https.request(options, (res) => {
+      if (res.statusCode !== 200) {
+        let body = '';
+        res.on('data', c => body += c);
+        res.on('end', () => {
+          sessionLogs.push({
+            time: new Date().toISOString(),
+            type: 'IFTTT_WEBHOOK_ERROR',
+            statusCode: res.statusCode,
+            response: body.substring(0, 200),
+            event: eventName
+          });
+          if (sessionLogs.length > SESSION_LOG_MAX) sessionLogs.shift();
+        });
+      } else {
+        res.resume();
+      }
+    });
+    req.on('error', (e) => {
+      sessionLogs.push({
+        time: new Date().toISOString(),
+        type: 'IFTTT_WEBHOOK_ERROR',
+        error: e.message,
+        event: eventName
+      });
+      if (sessionLogs.length > SESSION_LOG_MAX) sessionLogs.shift();
+    });
+    req.on('timeout', () => req.destroy());
+    req.write(payload);
+    req.end();
+  } catch (e) {
+    console.error('IFTTT webhook exception:', e.message);
+  }
+}
+
 // PHP API URLs (survive server restart)
 const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
 const PHP_SESSIONS_URL = 'https://client.wemudtogether.com/api/persistent_sessions.php';
@@ -1228,6 +1296,9 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
         // Populate session with fetched prefs
         session.discordChannelPrefs = response.channelPrefs;
         session.discordUsername = response.discordUsername || 'WMT Client';
+        if (typeof response.iftttKey === 'string' && /^[A-Za-z0-9_-]{10,64}$/.test(response.iftttKey)) {
+          session.iftttKey = response.iftttKey;
+        }
 
         // Count webhooks for logging
         let webhookCount = 0;
@@ -3042,6 +3113,10 @@ function createSession(token) {
     discordUsername: 'WMT Client',
     discordChannelPrefs: {},
 
+    // IFTTT webhook key (per-user Maker key). Per-channel toggle lives in
+    // discordChannelPrefs[channel].ifttt + optional .iftttEvent (defaults to "3K").
+    iftttKey: '',
+
     // Server-side tickers
     tickers: [],           // Array of ticker objects
     tickerIntervals: {},   // Map of ticker id -> interval timer
@@ -4071,6 +4146,12 @@ function parseMipMessage(session, msgType, msgData) {
             }
             sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, discordName);
           }
+          if (channelPrefs?.ifttt && session.iftttKey) {
+            const eventName = channelPrefs.iftttEvent || '3K';
+            const speakerMatch = rawText.match(/^\[[^\]]+\]\s+(\S+)/);
+            const speaker = speakerMatch ? speakerMatch[1] : effectiveCharName(session);
+            sendToIfttt(session.iftttKey, eventName, `${speaker} ${channel}:`, rawText, channel);
+          }
         }
       }
       break;
@@ -4240,6 +4321,12 @@ function flushPendingBab(session, channel) {
         messagePreview: bab.rawText.substring(0, 50)
       });
       sendToDiscordWebhook(channelPrefs.webhookUrl, bab.rawText, session.discordUsername);
+    }
+    if (channelPrefs?.ifttt && session.iftttKey) {
+      const eventName = channelPrefs.iftttEvent || '3K';
+      // For tells/souls the sender is in bab.rawText, not parseable here uniformly —
+      // fall back to character name as the value1 prefix.
+      sendToIfttt(session.iftttKey, eventName, `${effectiveCharName(session)} ${channel}:`, bab.rawText, channel);
     }
   }
 }
@@ -5525,15 +5612,25 @@ wss.on('connection', (ws, req) => {
           session.discordUsername = data.username || 'WMT Client';
           session.discordChannelPrefs = {};
 
+          // IFTTT key is per-user (single Maker key, used across channels).
+          // Validate shape: alphanumeric + underscore + hyphen, 10-64 chars. Empty clears it.
+          if (typeof data.iftttKey === 'string') {
+            const k = data.iftttKey.trim();
+            session.iftttKey = (k === '' || /^[A-Za-z0-9_-]{10,64}$/.test(k)) ? k : '';
+          }
+
           // Validate and store per-channel webhook URLs
           const channelPrefs = data.channelPrefs || {};
           let webhookCount = 0;
+          let iftttChannelCount = 0;
           for (const [channel, prefs] of Object.entries(channelPrefs)) {
             session.discordChannelPrefs[channel] = {
               sound: prefs.sound || false,
               hidden: prefs.hidden || false,
               discord: prefs.discord || false,
-              webhookUrl: null
+              webhookUrl: null,
+              ifttt: prefs.ifttt || false,
+              iftttEvent: ''
             };
             // Validate webhook URL if provided
             if (prefs.webhookUrl && prefs.discord) {
@@ -5543,12 +5640,22 @@ wss.on('connection', (ws, req) => {
                 webhookCount++;
               }
             }
+            // Validate IFTTT event name override if provided (default applied at send time)
+            if (typeof prefs.iftttEvent === 'string') {
+              const ev = prefs.iftttEvent.trim();
+              if (ev === '' || /^[A-Za-z0-9_-]{1,64}$/.test(ev)) {
+                session.discordChannelPrefs[channel].iftttEvent = ev;
+              }
+            }
+            if (prefs.ifttt) iftttChannelCount++;
           }
           logSessionEvent('DISCORD_PREFS_SET', {
             token: session.token.substring(0, 8),
             user: session.userId,
             char: effectiveCharName(session),
             webhookCount: webhookCount,
+            iftttKey: session.iftttKey ? 'set' : 'unset',
+            iftttChannels: iftttChannelCount,
             totalChannels: Object.keys(session.discordChannelPrefs).length,
             channels: Object.keys(session.discordChannelPrefs).join(',')
           });
