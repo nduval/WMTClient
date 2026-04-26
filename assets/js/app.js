@@ -7657,16 +7657,20 @@ class WMTClient {
         // Check if ticker with this name exists
         const existing = this.tickers.find(t => t.name.toLowerCase() === name.toLowerCase());
         if (existing) {
-            // Update existing
+            const unchanged = existing.command === command &&
+                              existing.interval === interval &&
+                              existing.enabled === true;
             existing.command = command;
             existing.interval = interval;
             existing.enabled = true;
             if (this.currentScriptClass) {
                 existing.class = this.currentScriptClass;
             }
-            this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
+            if (!this._silent && !unchanged) {
+                this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
+            }
+            if (unchanged) return;
         } else {
-            // Create new
             const ticker = {
                 id: 'ticker_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
                 name: name,
@@ -7676,7 +7680,9 @@ class WMTClient {
                 class: this.currentScriptClass || null
             };
             this.tickers.push(ticker);
-            this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
+            if (!this._silent) {
+                this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
+            }
         }
 
         await this.saveTickers();
@@ -7698,7 +7704,9 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            if (!this._silent) {
+                this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            }
             await this.saveTickers();
         }
     }
