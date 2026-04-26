@@ -4148,9 +4148,15 @@ function parseMipMessage(session, msgType, msgData) {
           }
           if (channelPrefs?.ifttt && session.iftttKey) {
             const eventName = channelPrefs.iftttEvent || '3K';
+            // Channel format: "[channel] Speaker says: message body" — split off the
+            // "[chan] Speaker <verb>:" prefix so value2 is just the message body, matching
+            // the legacy elmtell shape (-p sender -l verb -m message).
             const speakerMatch = rawText.match(/^\[[^\]]+\]\s+(\S+)/);
             const speaker = speakerMatch ? speakerMatch[1] : effectiveCharName(session);
-            sendToIfttt(session.iftttKey, eventName, `${speaker} ${channel}:`, rawText, channel);
+            const stripped = rawText.replace(/^\[[^\]]+\]\s*/, '');
+            const colonIdx = stripped.indexOf(':');
+            const body = colonIdx >= 0 ? stripped.slice(colonIdx + 1).trim() : stripped;
+            sendToIfttt(session.iftttKey, eventName, `${speaker} ${channel}:`, body, channel);
           }
         }
       }
@@ -4322,11 +4328,16 @@ function flushPendingBab(session, channel) {
       });
       sendToDiscordWebhook(channelPrefs.webhookUrl, bab.rawText, session.discordUsername);
     }
-    if (channelPrefs?.ifttt && session.iftttKey) {
+    // Skip outbound tells/souls — no point waking the phone for messages YOU sent.
+    if (channelPrefs?.ifttt && session.iftttKey && !bab.outbound) {
       const eventName = channelPrefs.iftttEvent || '3K';
-      // For tells/souls the sender is in bab.rawText, not parseable here uniformly —
-      // fall back to character name as the value1 prefix.
-      sendToIfttt(session.iftttKey, eventName, `${effectiveCharName(session)} ${channel}:`, bab.rawText, channel);
+      // bab.rawText format is "[Sender]: message body". Extract speaker + body so the
+      // payload mirrors the elmtell shape: value1 = "<Sender> tells you:" / value2 = msg.
+      const m = bab.rawText.match(/^\[([^\]]+)\]:\s*(.*)$/);
+      const speaker = m ? m[1] : effectiveCharName(session);
+      const body = m ? m[2] : bab.rawText;
+      const verb = channel === 'soul' ? 'souls' : 'tells you';
+      sendToIfttt(session.iftttKey, eventName, `${speaker} ${verb}:`, body, channel);
     }
   }
 }
