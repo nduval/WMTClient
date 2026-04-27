@@ -23,9 +23,39 @@ if (!$characterId) {
 
 $action = $_GET['action'] ?? '';
 
+/**
+ * Fetch aliases for a character from the Lightsail DB. Returns null on any
+ * error so the caller can surface a clean 503 — there is no JSON fallback
+ * because the JSON mirror is stale by design now that DB is source of truth.
+ */
+function fetchAliasesFromDb(string $characterId): ?array {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey) return null;
+    $url = 'https://ws.wemudtogether.com/admin/aliases?characterId=' . urlencode($characterId);
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => "X-Admin-Key: $adminKey\r\n",
+            'timeout' => 5,
+            'ignore_errors' => true
+        ],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) return null;
+    $data = json_decode($body, true);
+    if (!is_array($data) || empty($data['success'])) return null;
+    return $data['aliases'] ?? [];
+}
+
 switch ($action) {
     case 'list':
-        $aliases = loadJsonFile(getAliasesPath($userId, $characterId));
+        // Authoritative source: Lightsail DB. The legacy aliases.json mirror
+        // is no longer read — see GET /admin/aliases on wmt-server.
+        $aliases = fetchAliasesFromDb($characterId);
+        if ($aliases === null) {
+            errorResponse('Alias service unavailable', 503);
+        }
         successResponse(['aliases' => $aliases]);
         break;
 

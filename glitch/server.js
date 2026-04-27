@@ -2941,6 +2941,50 @@ const server = http.createServer(async (req, res) => {
     });
     return;
 
+  } else if (parsedUrl.pathname === '/admin/aliases' && req.method === 'GET') {
+    // Authoritative read of aliases for a character. Used by IONOS PHP
+    // (api/aliases.php?action=list) so the browser sees DB state on page load
+    // instead of the legacy aliases.json mirror — which is what made the
+    // /admin/alias fix invisible across hard refreshes before this endpoint
+    // existed.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    const characterId = parsedUrl.query.characterId;
+    if (!characterId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'characterId required' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      const rows = wmtDb.prepare(
+        'SELECT id, pattern, replacement, match_type, priority, enabled, class_id FROM aliases WHERE character_id=? ORDER BY rowid'
+      ).all(characterId);
+      const aliases = rows.map(r => ({
+        id: r.id,
+        pattern: r.pattern,
+        replacement: r.replacement,
+        matchType: r.match_type || 'exact',
+        priority: r.priority ?? 5,
+        enabled: r.enabled === 1,
+        class: r.class_id || null
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, aliases }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
   } else if (parsedUrl.pathname === '/admin/alias' && req.method === 'POST') {
     // Admin: directly update one alias row in the DB and propagate to any
     // live session for that character. Solves the "I edit the DB, the user's
