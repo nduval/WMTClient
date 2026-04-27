@@ -2953,7 +2953,8 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
       return;
     }
-    const characterId = parsedUrl.query.characterId;
+    const aliasesParams = new URLSearchParams(parsedUrl.query || '');
+    const characterId = aliasesParams.get('characterId');
     if (!characterId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'characterId required' }));
