@@ -3040,6 +3040,10 @@ class WMTClient {
 
         // Track open spans so we can close them all on reset
         let openSpans = 0;
+        // Track which attribute spans are currently open so we don't nest duplicates.
+        // Without this, repeated \x1b[2m sequences stack opacity:0.7 spans → multiplicative
+        // dimming that visually reads as a gradient fading to black.
+        const attrOpen = { '1': false, '2': false, '3': false, '4': false, '5': false, '7': false };
 
         return text.replace(/\x1b\[([0-9;]+)m/g, (match, codes) => {
             const codeList = codes.split(';');
@@ -3052,6 +3056,7 @@ class WMTClient {
                     // Reset: close ALL open spans
                     result += '</span>'.repeat(openSpans);
                     openSpans = 0;
+                    for (const k in attrOpen) attrOpen[k] = false;
                 } else if (code === '38' && codeList[i + 1] === '5' && i + 2 < codeList.length) {
                     // 256-color foreground: 38;5;N
                     result += `<span style="color:${this.xterm256ToRgb(parseInt(codeList[i + 2]))}">`;
@@ -3079,6 +3084,13 @@ class WMTClient {
                 } else if (code === '49') {
                     // Default background - no action needed in most cases
                 } else if (ansiSpans[code]) {
+                    // For attribute codes (1=bold, 2=dim, 3=italic, 4=underline, 5=blink, 7=reverse),
+                    // skip if already open. Repeated identical attribute spans nest CSS effects
+                    // (opacity multiplies, etc.) which produces visual artifacts like gradient fades.
+                    if (attrOpen.hasOwnProperty(code)) {
+                        if (attrOpen[code]) continue;
+                        attrOpen[code] = true;
+                    }
                     result += ansiSpans[code];
                     openSpans++;
                 }
