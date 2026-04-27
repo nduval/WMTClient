@@ -6,6 +6,35 @@
 require_once __DIR__ . '/../config/config.php';
 
 /**
+ * GET data from Lightsail wmt-server (authoritative DB read). Returns the
+ * decoded JSON body on 200/success, null on any error. The caller decides
+ * whether a null response should fall back, surface a 503, or whatever —
+ * there is no JSON fallback here by design now that DB is source of truth.
+ *
+ * Path is the endpoint path (e.g. "/admin/triggers"); characterId is appended
+ * as a query param.
+ */
+function fetchFromLightsail(string $path, string $characterId): ?array {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey) return null;
+    $url = 'https://ws.wemudtogether.com' . $path . '?characterId=' . urlencode($characterId);
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => "X-Admin-Key: $adminKey\r\n",
+            'timeout' => 5,
+            'ignore_errors' => true
+        ],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) return null;
+    $data = json_decode($body, true);
+    if (!is_array($data) || empty($data['success'])) return null;
+    return $data;
+}
+
+/**
  * Sync data (preferences, scripts) to Lightsail DB.
  * Fire-and-forget: short timeout, ignore failures.
  */

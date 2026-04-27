@@ -2941,6 +2941,133 @@ const server = http.createServer(async (req, res) => {
     });
     return;
 
+  } else if (parsedUrl.pathname === '/admin/triggers' && req.method === 'GET') {
+    // Authoritative read of triggers for a character. Used by IONOS PHP
+    // (api/triggers.php?action=list) so the browser sees DB state on init.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    const triggersParams = new URLSearchParams(parsedUrl.query || '');
+    const characterId = triggersParams.get('characterId');
+    if (!characterId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'characterId required' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      const triggers = dbLoadTriggers(characterId) || [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, triggers }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/classes' && req.method === 'GET') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    const classesParams = new URLSearchParams(parsedUrl.query || '');
+    const characterId = classesParams.get('characterId');
+    if (!characterId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'characterId required' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      const rows = dbStmts.getClasses.all(characterId);
+      const classes = rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        enabled: r.enabled === 1
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, classes }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/tickers' && req.method === 'GET') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    const tickersParams = new URLSearchParams(parsedUrl.query || '');
+    const characterId = tickersParams.get('characterId');
+    if (!characterId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'characterId required' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      const tickers = dbLoadTickers(characterId) || [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, tickers }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/preferences' && req.method === 'GET') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    const prefsParams = new URLSearchParams(parsedUrl.query || '');
+    const characterId = prefsParams.get('characterId');
+    if (!characterId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'characterId required' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      const row = dbStmts.getPreferences.get(characterId);
+      let preferences = {};
+      if (row && row.data) {
+        try { preferences = JSON.parse(row.data); } catch {}
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, preferences }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
   } else if (parsedUrl.pathname === '/admin/aliases' && req.method === 'GET') {
     // Authoritative read of aliases for a character. Used by IONOS PHP
     // (api/aliases.php?action=list) so the browser sees DB state on page load

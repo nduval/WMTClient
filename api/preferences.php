@@ -95,7 +95,12 @@ if (!$characterId) {
 
 switch ($action) {
     case 'get':
-        $preferences = loadJsonFile(getPreferencesPath($userId, $characterId));
+        // Authoritative source: Lightsail DB via GET /admin/preferences.
+        $resp = fetchFromLightsail('/admin/preferences', $characterId);
+        if ($resp === null) {
+            errorResponse('Preferences service unavailable', 503);
+        }
+        $preferences = $resp['preferences'] ?? [];
 
         // Merge with defaults
         $defaults = [

@@ -25,8 +25,13 @@ $action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        $triggers = loadJsonFile(getTriggersPath($userId, $characterId));
-        successResponse(['triggers' => $triggers]);
+        // Authoritative source: Lightsail DB via GET /admin/triggers.
+        // The legacy triggers.json mirror is no longer read.
+        $resp = fetchFromLightsail('/admin/triggers', $characterId);
+        if ($resp === null) {
+            errorResponse('Trigger service unavailable', 503);
+        }
+        successResponse(['triggers' => $resp['triggers'] ?? []]);
         break;
 
     case 'save':
