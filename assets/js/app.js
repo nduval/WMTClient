@@ -1109,6 +1109,22 @@ class WMTClient {
                 }
                 break;
 
+            case 'authoritative_state':
+                // Server is telling us the canonical DB state of aliases/triggers/tickers.
+                // Replace our in-memory copies so subsequent bulk_replace messages are
+                // idempotent — eliminates the "stale browser clobbers admin edit on
+                // reconnect after a deploy" race that bit us 2026-04-27.
+                if (Array.isArray(data.aliases)) this.aliases = data.aliases;
+                if (Array.isArray(data.triggers)) this.triggers = data.triggers;
+                if (Array.isArray(data.tickers)) this.tickers = data.tickers;
+                if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
+                if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
+                if (this.currentPanel === 'tickers') this.loadPanelContent('tickers');
+                if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                    this.renderScriptsSidebar();
+                }
+                break;
+
             case 'disable_trigger':
                 // Server detected a trigger loop - disable the offending trigger
                 if (data.triggerId) {

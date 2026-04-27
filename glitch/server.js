@@ -40,6 +40,19 @@ try {
   wmtDb = new Database(DB_PATH);
   wmtDb.pragma('journal_mode = WAL');
   wmtDb.pragma('foreign_keys = ON');
+  // Stale-write guard for /admin/alias edits. Survives restarts so that a
+  // browser reconnecting after a deploy can't clobber an admin fix with its
+  // pre-deploy in-memory copy. See markAliasServerModified / applyAliasServerModifiedGuard.
+  wmtDb.exec(`
+    CREATE TABLE IF NOT EXISTS alias_guard (
+      character_id TEXT NOT NULL,
+      alias_id TEXT NOT NULL,
+      previous TEXT,
+      current TEXT,
+      ts INTEGER NOT NULL,
+      PRIMARY KEY (character_id, alias_id)
+    )
+  `);
   console.log('SQLite database connected:', DB_PATH);
 } catch (e) {
   console.error('SQLite database failed to open:', e.message);
@@ -330,46 +343,122 @@ const sessions = new Map();
 const userCharacterSessions = new Map();
 
 // Stale-write protection for aliases modified by the admin endpoint.
-// Mirrors the _varServerModified pattern that protects #math/#var output from
-// being clobbered by stale client `set_variables` bulk syncs.
 //
-// Map<characterId, Map<aliasId, { previous, current, ts }>>.
-// A periodic client_sync within SERVER_ALIAS_PROTECT_MS that still carries the
-// PREVIOUS replacement gets overridden with CURRENT before write. Any other
-// value (including a deliberate user edit in the UI) passes through untouched.
+// Backed by the `alias_guard` DB table AND a hot in-memory mirror. DB
+// persistence matters because every wmt-server restart lets a stale browser
+// send a bulk_replace before the user can refresh — without persistence,
+// all admin fixes evaporate at the next deploy. Burned by this 2026-04-27.
+//
+// Format: Map<characterId, Map<aliasId, { previous, current, ts }>>.
+//
+// Semantics on bulk_replace (per row):
+//   incoming.replacement === rec.current   → client is in sync; CLEAR entry
+//   incoming.replacement === rec.previous  → client is stale; OVERRIDE to current
+//   anything else                          → deliberate edit; CLEAR entry
+//
+// Observation-based clearing (no time window) means the guard survives
+// arbitrary delays between admin edit and the user's next refresh, which
+// time-based expiry cannot.
 const serverModifiedAliases = new Map();
-const SERVER_ALIAS_PROTECT_MS = 60_000;
+
+if (wmtDb) {
+  try {
+    const rows = wmtDb.prepare('SELECT character_id, alias_id, previous, current, ts FROM alias_guard').all();
+    for (const r of rows) {
+      let perChar = serverModifiedAliases.get(r.character_id);
+      if (!perChar) { perChar = new Map(); serverModifiedAliases.set(r.character_id, perChar); }
+      perChar.set(r.alias_id, { previous: r.previous || '', current: r.current || '', ts: r.ts });
+    }
+    if (rows.length > 0) console.log(`alias_guard: loaded ${rows.length} live entries from DB`);
+  } catch (e) {
+    console.error('alias_guard load failed:', e.message);
+  }
+}
 
 function markAliasServerModified(characterId, aliasId, previous, current) {
   if (!characterId || !aliasId) return;
+  const ts = Date.now();
   let perChar = serverModifiedAliases.get(characterId);
   if (!perChar) { perChar = new Map(); serverModifiedAliases.set(characterId, perChar); }
-  perChar.set(aliasId, { previous: previous || '', current: current || '', ts: Date.now() });
+  perChar.set(aliasId, { previous: previous || '', current: current || '', ts });
+  if (wmtDb) {
+    try {
+      wmtDb.prepare(
+        'INSERT OR REPLACE INTO alias_guard (character_id, alias_id, previous, current, ts) VALUES (?,?,?,?,?)'
+      ).run(characterId, aliasId, previous || '', current || '', ts);
+    } catch (e) {
+      console.error('alias_guard upsert failed:', e.message);
+    }
+  }
+}
+
+/**
+ * On WS auth completion, hydrate session.aliases/triggers/tickers from DB
+ * and push the authoritative state to the browser. New clients use it to
+ * replace their in-memory copies so subsequent bulk_replace messages are
+ * idempotent. Old cached clients ignore the unknown message type — for
+ * those, the persisted alias_guard still protects against stale clobbers.
+ */
+function loadAndPushAuthoritativeState(ws, session) {
+  if (!session || !session.characterId || !wmtDb) return;
+  try {
+    const aliases = dbLoadAliases(session.characterId) || [];
+    const triggers = dbLoadTriggers(session.characterId) || [];
+    const tickers = dbLoadTickers(session.characterId) || [];
+    session.aliases = aliases;
+    session.triggers = triggers;
+    if (tickers.length > 0) updateSessionTickers(session, tickers);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'authoritative_state',
+        aliases,
+        triggers,
+        tickers
+      }));
+    }
+  } catch (e) {
+    console.error('loadAndPushAuthoritativeState failed:', e.message);
+  }
+}
+
+function clearAliasGuard(characterId, aliasId) {
+  const perChar = serverModifiedAliases.get(characterId);
+  if (perChar) perChar.delete(aliasId);
+  if (wmtDb) {
+    try {
+      wmtDb.prepare('DELETE FROM alias_guard WHERE character_id=? AND alias_id=?').run(characterId, aliasId);
+    } catch (e) {
+      console.error('alias_guard clear failed:', e.message);
+    }
+  }
 }
 
 function applyAliasServerModifiedGuard(characterId, incoming) {
   const perChar = serverModifiedAliases.get(characterId);
-  if (!perChar || perChar.size === 0) return { aliases: incoming, overridden: 0 };
-  const now = Date.now();
+  if (!perChar || perChar.size === 0) return { aliases: incoming, overridden: 0, cleared: 0 };
   let overridden = 0;
-  // Prune stale entries first
-  for (const [id, rec] of perChar) {
-    if (now - rec.ts > SERVER_ALIAS_PROTECT_MS) perChar.delete(id);
-  }
-  if (perChar.size === 0) return { aliases: incoming, overridden: 0 };
+  let cleared = 0;
   const out = incoming.map(a => {
     if (!a || !a.id) return a;
     const rec = perChar.get(a.id);
     if (!rec) return a;
-    // Only override when client is sending the previous (stale) value.
-    // Lets explicit user edits and idempotent re-syncs through.
+    if (a.replacement === rec.current) {
+      // Client caught up — guard no longer needed
+      clearAliasGuard(characterId, a.id);
+      cleared++;
+      return a;
+    }
     if (a.replacement === rec.previous && rec.current !== rec.previous) {
+      // Client is stale — swap in authoritative value
       overridden++;
       return { ...a, replacement: rec.current };
     }
+    // Deliberate edit (or unrelated change) — accept and clear
+    clearAliasGuard(characterId, a.id);
+    cleared++;
     return a;
   });
-  return { aliases: out, overridden };
+  return { aliases: out, overridden, cleared };
 }
 
 // Session event log buffer for debugging (circular buffer)
@@ -5542,6 +5631,13 @@ wss.on('connection', (ws, req) => {
             }
           }
 
+          // After ANY auth branch (rekey / resume / new session), push the
+          // authoritative aliases+triggers+tickers from DB to the browser.
+          // This eliminates the stale-browser race: any subsequent
+          // set_aliases bulk_replace will reflect DB state, not whatever
+          // the browser had in memory before the deploy/reconnect.
+          loadAndPushAuthoritativeState(ws, session);
+
           authenticated = true;
         } else {
           ws.send(JSON.stringify({ type: 'error', message: 'Must authenticate first' }));
@@ -5837,9 +5933,9 @@ wss.on('connection', (ws, req) => {
           // serverModifiedAliases above for rationale.
           if (session.characterId) {
             const guarded = applyAliasServerModifiedGuard(session.characterId, incomingAliases);
-            if (guarded.overridden > 0) {
-              console.log(`ALIAS_GUARD overrode ${guarded.overridden} stale entries for char=${session.characterId}`);
-              writeSessionLog(session, 'alias_guard', { overridden: guarded.overridden });
+            if (guarded.overridden > 0 || guarded.cleared > 0) {
+              console.log(`ALIAS_GUARD char=${session.characterId} overrode=${guarded.overridden} cleared=${guarded.cleared}`);
+              writeSessionLog(session, 'alias_guard', { overridden: guarded.overridden, cleared: guarded.cleared });
             }
             incomingAliases = guarded.aliases;
           }
