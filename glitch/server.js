@@ -329,6 +329,49 @@ const sessions = new Map();
 // Used to close old sessions when same user+character connects from different device
 const userCharacterSessions = new Map();
 
+// Stale-write protection for aliases modified by the admin endpoint.
+// Mirrors the _varServerModified pattern that protects #math/#var output from
+// being clobbered by stale client `set_variables` bulk syncs.
+//
+// Map<characterId, Map<aliasId, { previous, current, ts }>>.
+// A periodic client_sync within SERVER_ALIAS_PROTECT_MS that still carries the
+// PREVIOUS replacement gets overridden with CURRENT before write. Any other
+// value (including a deliberate user edit in the UI) passes through untouched.
+const serverModifiedAliases = new Map();
+const SERVER_ALIAS_PROTECT_MS = 60_000;
+
+function markAliasServerModified(characterId, aliasId, previous, current) {
+  if (!characterId || !aliasId) return;
+  let perChar = serverModifiedAliases.get(characterId);
+  if (!perChar) { perChar = new Map(); serverModifiedAliases.set(characterId, perChar); }
+  perChar.set(aliasId, { previous: previous || '', current: current || '', ts: Date.now() });
+}
+
+function applyAliasServerModifiedGuard(characterId, incoming) {
+  const perChar = serverModifiedAliases.get(characterId);
+  if (!perChar || perChar.size === 0) return { aliases: incoming, overridden: 0 };
+  const now = Date.now();
+  let overridden = 0;
+  // Prune stale entries first
+  for (const [id, rec] of perChar) {
+    if (now - rec.ts > SERVER_ALIAS_PROTECT_MS) perChar.delete(id);
+  }
+  if (perChar.size === 0) return { aliases: incoming, overridden: 0 };
+  const out = incoming.map(a => {
+    if (!a || !a.id) return a;
+    const rec = perChar.get(a.id);
+    if (!rec) return a;
+    // Only override when client is sending the previous (stale) value.
+    // Lets explicit user edits and idempotent re-syncs through.
+    if (a.replacement === rec.previous && rec.current !== rec.previous) {
+      overridden++;
+      return { ...a, replacement: rec.current };
+    }
+    return a;
+  });
+  return { aliases: out, overridden };
+}
+
 // Session event log buffer for debugging (circular buffer)
 const SESSION_LOG_MAX = 500;
 const sessionLogs = [];
@@ -2894,6 +2937,85 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/alias' && req.method === 'POST') {
+    // Admin: directly update one alias row in the DB and propagate to any
+    // live session for that character. Solves the "I edit the DB, the user's
+    // browser bulk_replace clobbers it 30s later" race that previously made
+    // out-of-band fixes fragile. The stale-write guard keyed off
+    // serverModifiedAliases takes care of the bulk_replace race.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 50000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, aliasId, replacement } = data;
+        if (!characterId || !aliasId || typeof replacement !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId, aliasId, replacement required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM aliases WHERE id=? AND character_id=?').get(aliasId, characterId);
+        if (!before) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Alias not found for character' }));
+          return;
+        }
+        const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        wmtDb.transaction(() => {
+          wmtDb.prepare('UPDATE aliases SET replacement=?, updated_at=? WHERE id=? AND character_id=?')
+            .run(replacement, now, aliasId, characterId);
+          dbLogChange(
+            characterId, 'aliases', 'update',
+            JSON.stringify({ id: aliasId, replacement: before.replacement }),
+            JSON.stringify({ id: aliasId, replacement }),
+            'admin_api'
+          );
+        })();
+
+        markAliasServerModified(characterId, aliasId, before.replacement, replacement);
+
+        // Update in-memory aliases for any live session(s) on this character so
+        // the next trigger/alias firing uses the new body without a refresh.
+        let livePushed = 0;
+        for (const [, session] of sessions) {
+          if (session.characterId === characterId) {
+            const arr = session.aliases || [];
+            const idx = arr.findIndex(a => a && a.id === aliasId);
+            if (idx >= 0) {
+              arr[idx] = { ...arr[idx], replacement };
+              session.aliases = arr;
+              livePushed++;
+            }
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          aliasId, characterId,
+          before: before.replacement,
+          after: replacement,
+          livePushed,
+          updatedAt: now
+        }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
       }
     });
     return;
@@ -5530,13 +5652,25 @@ wss.on('connection', (ws, req) => {
 
         case 'set_aliases':
           // ReDoS protection: drop aliases with pathologically long patterns
-          const incomingAliases = (data.aliases || []).filter(a => {
+          let incomingAliases = (data.aliases || []).filter(a => {
             if (a && typeof a.pattern === 'string' && a.pattern.length > 500) {
               console.warn(`DROPPED_LONG_ALIAS user=${session.userId} char=${session.characterName} length=${a.pattern.length}`);
               return false;
             }
             return true;
           });
+          // Stale-write guard: if a recent admin/server edit is still within the
+          // protection window and the client is sending the OLD value, swap in
+          // the server-authoritative value before persisting. See definition of
+          // serverModifiedAliases above for rationale.
+          if (session.characterId) {
+            const guarded = applyAliasServerModifiedGuard(session.characterId, incomingAliases);
+            if (guarded.overridden > 0) {
+              console.log(`ALIAS_GUARD overrode ${guarded.overridden} stale entries for char=${session.characterId}`);
+              writeSessionLog(session, 'alias_guard', { overridden: guarded.overridden });
+            }
+            incomingAliases = guarded.aliases;
+          }
           session.aliases = incomingAliases;
           writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
           // DB dual-write (gated by user during rollout)
