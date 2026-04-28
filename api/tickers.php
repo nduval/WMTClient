@@ -56,6 +56,7 @@ switch ($action) {
         }
 
         saveJsonFile(getTickersPath($userId, $characterId), $validatedTickers);
+        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $validatedTickers);
         successResponse(['tickers' => $validatedTickers]);
         break;
 
@@ -89,6 +90,7 @@ switch ($action) {
 
         $tickers[] = $ticker;
         saveJsonFile(getTickersPath($userId, $characterId), $tickers);
+        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $tickers);
 
         successResponse(['ticker' => $ticker]);
         break;
@@ -125,6 +127,7 @@ switch ($action) {
         }
 
         saveJsonFile(getTickersPath($userId, $characterId), $tickers);
+        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $tickers);
         successResponse(['message' => 'Ticker updated']);
         break;
 
@@ -145,7 +148,9 @@ switch ($action) {
             return $t['id'] !== $tickerId;
         });
 
-        saveJsonFile(getTickersPath($userId, $characterId), array_values($tickers));
+        $tickers = array_values($tickers);
+        saveJsonFile(getTickersPath($userId, $characterId), $tickers);
+        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $tickers);
         successResponse(['message' => 'Ticker deleted']);
         break;
 

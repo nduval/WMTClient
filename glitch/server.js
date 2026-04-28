@@ -281,6 +281,8 @@ function dbSaveTickers(characterId, tickers) {
   if (!wmtDb || !tickers) return;
   try {
     wmtDb.transaction(() => {
+      const oldRows = dbStmts.getTickers.all(characterId);
+      const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
       dbStmts.deleteTickers.run(characterId);
       for (const t of tickers) {
         dbStmts.insertTicker.run(
@@ -293,6 +295,9 @@ function dbSaveTickers(characterId, tickers) {
           t.enabled !== false ? 1 : 0
         );
       }
+      if (oldRows.length !== tickers.length || oldData) {
+        dbLogChange(characterId, 'tickers', 'bulk_replace', oldData, JSON.stringify(tickers), 'client_sync');
+      }
     })();
   } catch (e) {
     console.error('DB ticker save failed:', e.message);
@@ -302,7 +307,15 @@ function dbSaveTickers(characterId, tickers) {
 function dbSavePreferences(characterId, prefs) {
   if (!wmtDb || !prefs) return;
   try {
-    dbStmts.upsertPreferences.run(characterId, JSON.stringify(prefs));
+    wmtDb.transaction(() => {
+      const oldRow = dbStmts.getPreferences.get(characterId);
+      const oldData = oldRow ? oldRow.data : null;
+      dbStmts.upsertPreferences.run(characterId, JSON.stringify(prefs));
+      const newData = JSON.stringify(prefs);
+      if (oldData !== newData) {
+        dbLogChange(characterId, 'preferences', 'upsert', oldData, newData, 'client_sync');
+      }
+    })();
   } catch (e) {
     console.error('DB preferences save failed:', e.message);
   }
@@ -3379,6 +3392,474 @@ const server = http.createServer(async (req, res) => {
           livePushed,
           updatedAt: now
         }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/trigger' && req.method === 'POST') {
+    // Update one trigger row. Accepts partial update — pass only the fields
+    // you want to change. characterId + triggerId required.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 200000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, triggerId } = data;
+        if (!characterId || !triggerId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId, triggerId required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM triggers WHERE id=? AND character_id=?').get(triggerId, characterId);
+        if (!before) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Trigger not found for character' }));
+          return;
+        }
+        const next = {
+          pattern: data.pattern !== undefined ? data.pattern : before.pattern,
+          match_type: data.matchType !== undefined ? data.matchType : before.match_type,
+          actions: data.actions !== undefined ? JSON.stringify(data.actions) : before.actions,
+          priority: data.priority !== undefined ? data.priority : before.priority,
+          enabled: data.enabled !== undefined ? (data.enabled ? 1 : 0) : before.enabled,
+          class_id: data.class !== undefined ? (data.class || null) : before.class_id,
+          name: data.name !== undefined ? data.name : before.name,
+          oneshot: data.oneshot !== undefined ? (data.oneshot ? 1 : 0) : before.oneshot,
+        };
+        const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        wmtDb.transaction(() => {
+          wmtDb.prepare(`UPDATE triggers SET pattern=?, match_type=?, actions=?, priority=?, enabled=?, class_id=?, name=?, oneshot=?, updated_at=? WHERE id=? AND character_id=?`)
+            .run(next.pattern, next.match_type, next.actions, next.priority, next.enabled, next.class_id, next.name, next.oneshot, now, triggerId, characterId);
+          dbLogChange(characterId, 'triggers', 'update',
+            JSON.stringify(before), JSON.stringify({ id: triggerId, ...next }), 'admin_api');
+        })();
+
+        // Update in-memory session.triggers for live sessions
+        let livePushed = 0;
+        for (const [, session] of sessions) {
+          if (session.characterId === characterId) {
+            const arr = session.triggers || [];
+            const idx = arr.findIndex(t => t && t.id === triggerId);
+            if (idx >= 0) {
+              arr[idx] = {
+                id: triggerId,
+                pattern: next.pattern,
+                matchType: next.match_type,
+                actions: JSON.parse(next.actions),
+                priority: next.priority,
+                enabled: next.enabled === 1,
+                class: next.class_id,
+                name: next.name,
+                oneshot: next.oneshot === 1,
+              };
+              session.triggers = arr;
+              livePushed++;
+            }
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, triggerId, characterId, livePushed, updatedAt: now }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/class' && req.method === 'POST') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 10000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, classId } = data;
+        if (!characterId || !classId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId, classId required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM classes WHERE id=? AND character_id=?').get(classId, characterId);
+        if (!before) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Class not found for character' }));
+          return;
+        }
+        const nextName = data.name !== undefined ? data.name : before.name;
+        const nextEnabled = data.enabled !== undefined ? (data.enabled ? 1 : 0) : before.enabled;
+        wmtDb.transaction(() => {
+          wmtDb.prepare('UPDATE classes SET name=?, enabled=? WHERE id=? AND character_id=?')
+            .run(nextName, nextEnabled, classId, characterId);
+          dbLogChange(characterId, 'classes', 'update',
+            JSON.stringify(before),
+            JSON.stringify({ id: classId, name: nextName, enabled: nextEnabled === 1 }),
+            'admin_api');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, classId, characterId }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/ticker' && req.method === 'POST') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 50000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, tickerId } = data;
+        if (!characterId || !tickerId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId, tickerId required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM tickers WHERE id=? AND character_id=?').get(tickerId, characterId);
+        if (!before) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Ticker not found for character' }));
+          return;
+        }
+        const next = {
+          name: data.name !== undefined ? data.name : before.name,
+          command: data.command !== undefined ? data.command : before.command,
+          interval_seconds: data.interval !== undefined ? data.interval : before.interval_seconds,
+          class_id: data.class !== undefined ? (data.class || null) : before.class_id,
+          enabled: data.enabled !== undefined ? (data.enabled ? 1 : 0) : before.enabled,
+        };
+        wmtDb.transaction(() => {
+          wmtDb.prepare('UPDATE tickers SET name=?, command=?, interval_seconds=?, class_id=?, enabled=? WHERE id=? AND character_id=?')
+            .run(next.name, next.command, next.interval_seconds, next.class_id, next.enabled, tickerId, characterId);
+          dbLogChange(characterId, 'tickers', 'update',
+            JSON.stringify(before),
+            JSON.stringify({ id: tickerId, ...next }),
+            'admin_api');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, tickerId, characterId }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/preferences' && req.method === 'POST') {
+    // Merge-update preferences blob. Body: { characterId, merge: {key: value, ...} }
+    // OR { characterId, replace: {entire blob} }.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 100000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, merge, replace } = data;
+        if (!characterId || (!merge && !replace)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId and (merge or replace) required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const beforeRow = wmtDb.prepare('SELECT data FROM preferences WHERE character_id=?').get(characterId);
+        let beforeBlob = {};
+        try { beforeBlob = beforeRow ? JSON.parse(beforeRow.data || '{}') : {}; } catch {}
+        const nextBlob = replace ? replace : { ...beforeBlob, ...merge };
+        wmtDb.transaction(() => {
+          wmtDb.prepare('INSERT OR REPLACE INTO preferences (character_id, data) VALUES (?, ?)')
+            .run(characterId, JSON.stringify(nextBlob));
+          dbLogChange(characterId, 'preferences', 'update',
+            JSON.stringify(beforeBlob), JSON.stringify(nextBlob), 'admin_api');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, characterId, keysAfter: Object.keys(nextBlob).length }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/user' && req.method === 'POST') {
+    // Update one user record. Accepts partial update.
+    // Body: { id, username?, email?, password?, isWizard?, banned?, ban_reason? }
+    // Note: this is for ADMIN edits (ban/wizard toggle, manual fixes). Login-time
+    // last_login updates still go through /account-sync as before.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 50000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { id } = data;
+        if (!id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'id required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM users WHERE id=?').get(id);
+        if (!before) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'User not found' }));
+          return;
+        }
+        const next = {
+          username: data.username !== undefined ? data.username : before.username,
+          email: data.email !== undefined ? data.email : before.email,
+          password: data.password !== undefined ? data.password : before.password,
+          is_wizard: data.isWizard !== undefined ? (data.isWizard ? 1 : 0) : before.is_wizard,
+          banned: data.banned !== undefined ? (data.banned ? 1 : 0) : before.banned,
+          ban_reason: data.ban_reason !== undefined ? data.ban_reason : before.ban_reason,
+        };
+        wmtDb.transaction(() => {
+          wmtDb.prepare('UPDATE users SET username=?, email=?, password=?, is_wizard=?, banned=?, ban_reason=? WHERE id=?')
+            .run(next.username, next.email, next.password, next.is_wizard, next.banned, next.ban_reason, id);
+          // Use change_log even though character_id is null — table_name='users' makes it findable
+          try {
+            wmtDb.prepare(`INSERT INTO change_log (character_id, table_name, item_id, action, old_data, new_data, source, created_at) VALUES (?,?,?,?,?,?,?, datetime('now'))`)
+              .run(null, 'users', id, 'update', JSON.stringify(before), JSON.stringify({ id, ...next }), 'admin_api');
+          } catch {}
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, id }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/aliases-bulk' && req.method === 'POST') {
+    // Full-list bulk replace for aliases. Mirrors WS set_aliases / dbSaveAliases.
+    // Used by PHP aliases.php save handlers so JSON-side writes also reach DB.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 5_000_000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, aliases } = data;
+        if (!characterId || !Array.isArray(aliases)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId and aliases[] required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        wmtDb.transaction(() => {
+          const oldRows = dbStmts.getAliases.all(characterId);
+          const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
+          dbStmts.deleteAliases.run(characterId);
+          for (const a of aliases) {
+            dbStmts.insertAlias.run(
+              a.id || null, characterId,
+              a.pattern || '', a.replacement || '',
+              a.matchType || 'exact', a.priority ?? 5,
+              a.enabled !== false ? 1 : 0, a.class || null
+            );
+          }
+          dbLogChange(characterId, 'aliases', 'bulk_replace', oldData, JSON.stringify(aliases), 'php_save');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, characterId, count: aliases.length }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/triggers-bulk' && req.method === 'POST') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 5_000_000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, triggers } = data;
+        if (!characterId || !Array.isArray(triggers)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId and triggers[] required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        wmtDb.transaction(() => {
+          const oldRows = dbStmts.getTriggers.all(characterId);
+          const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
+          dbStmts.deleteTriggers.run(characterId);
+          for (const t of triggers) {
+            dbStmts.insertTrigger.run(
+              t.id || null, characterId,
+              t.pattern || '', t.matchType || 'tintin',
+              JSON.stringify(t.actions || []), t.priority ?? 5,
+              t.enabled !== false ? 1 : 0, t.class || null,
+              t.name || null, t.oneshot ? 1 : 0
+            );
+          }
+          dbLogChange(characterId, 'triggers', 'bulk_replace', oldData, JSON.stringify(triggers), 'php_save');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, characterId, count: triggers.length }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/tickers-bulk' && req.method === 'POST') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 1_000_000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, tickers } = data;
+        if (!characterId || !Array.isArray(tickers)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId and tickers[] required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        wmtDb.transaction(() => {
+          const oldRows = dbStmts.getTickers.all(characterId);
+          const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
+          dbStmts.deleteTickers.run(characterId);
+          for (const tk of tickers) {
+            dbStmts.insertTicker.run(
+              tk.id || null, characterId,
+              tk.name || '', tk.command || '',
+              tk.interval || 0, tk.class || null,
+              tk.enabled !== false ? 1 : 0
+            );
+          }
+          dbLogChange(characterId, 'tickers', 'bulk_replace', oldData, JSON.stringify(tickers), 'php_save');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, characterId, count: tickers.length }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/classes-bulk' && req.method === 'POST') {
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 1_000_000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId, classes } = data;
+        if (!characterId || !Array.isArray(classes)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId and classes[] required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        wmtDb.transaction(() => {
+          const oldRows = dbStmts.getClasses.all(characterId);
+          const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
+          dbStmts.deleteClasses.run(characterId);
+          const insStmt = wmtDb.prepare(`INSERT OR IGNORE INTO classes (id, character_id, name, enabled, created_at) VALUES (?, ?, ?, ?, datetime('now'))`);
+          for (const cl of classes) {
+            insStmt.run(cl.id || null, characterId, cl.name || '', cl.enabled !== false ? 1 : 0);
+          }
+          dbLogChange(characterId, 'classes', 'bulk_replace', oldData, JSON.stringify(classes), 'php_save');
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, characterId, count: classes.length }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: e.message }));

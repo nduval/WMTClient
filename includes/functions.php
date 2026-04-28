@@ -35,6 +35,40 @@ function fetchFromLightsail(string $path, string $characterId): ?array {
 }
 
 /**
+ * POST a full-list bulk replace to a Lightsail admin endpoint.
+ * Used by PHP save handlers so writes reach DB even if the user's WS is
+ * disconnected at save time. Returns true on 2xx success, false otherwise.
+ * Fire-and-forget tone: short timeout, errors logged but not surfaced.
+ */
+function pushBulkToLightsail(string $endpoint, string $listKey, string $characterId, array $list): bool {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey) return false;
+    $url = 'https://ws.wemudtogether.com' . $endpoint;
+    $payload = json_encode(['characterId' => $characterId, $listKey => $list]);
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => "Content-Type: application/json\r\nX-Admin-Key: $adminKey\r\n",
+            'content' => $payload,
+            'timeout' => 5,
+            'ignore_errors' => true
+        ],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) {
+        @error_log("pushBulkToLightsail: HTTP failed for $endpoint cid=$characterId");
+        return false;
+    }
+    $data = json_decode($body, true);
+    if (!is_array($data) || empty($data['success'])) {
+        @error_log("pushBulkToLightsail: non-success for $endpoint cid=$characterId body=" . substr($body, 0, 200));
+        return false;
+    }
+    return true;
+}
+
+/**
  * Authoritative single-user read with JSON-divergence safety net.
  * Tries Lightsail DB via GET /admin/user. If DB has no record (or is unreachable)
  * AND the JSON users_index has a matching user, returns the JSON record.

@@ -67,6 +67,7 @@ switch ($action) {
         });
 
         saveJsonFile(getTriggersPath($userId, $characterId), $validatedTriggers);
+        pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $validatedTriggers);
         successResponse(['triggers' => $validatedTriggers]);
         break;
 
@@ -104,6 +105,7 @@ switch ($action) {
 
         $triggers[] = $trigger;
         saveJsonFile(getTriggersPath($userId, $characterId), $triggers);
+        pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $triggers);
 
         successResponse(['trigger' => $trigger]);
         break;
@@ -142,6 +144,7 @@ switch ($action) {
         }
 
         saveJsonFile(getTriggersPath($userId, $characterId), $triggers);
+        pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $triggers);
         successResponse(['message' => 'Trigger updated']);
         break;
 
@@ -162,7 +165,9 @@ switch ($action) {
             return $t['id'] !== $triggerId;
         });
 
-        saveJsonFile(getTriggersPath($userId, $characterId), array_values($triggers));
+        $triggers = array_values($triggers);
+        saveJsonFile(getTriggersPath($userId, $characterId), $triggers);
+        pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $triggers);
         successResponse(['message' => 'Trigger deleted']);
         break;
 

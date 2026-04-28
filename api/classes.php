@@ -35,10 +35,17 @@ function loadClasses($path) {
 }
 
 /**
- * Save classes for current character
+ * Save classes for current character.
+ * Writes JSON (legacy persistence) AND pushes to Lightsail DB so the change
+ * is reflected end-to-end even when the user's WS is disconnected at save time.
  */
 function saveClasses($path, $classes) {
-    return saveJsonFile($path, $classes);
+    global $characterId;
+    $result = saveJsonFile($path, $classes);
+    if (!empty($characterId)) {
+        pushBulkToLightsail('/admin/classes-bulk', 'classes', $characterId, $classes);
+    }
+    return $result;
 }
 
 /**

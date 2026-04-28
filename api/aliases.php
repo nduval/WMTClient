@@ -60,6 +60,7 @@ switch ($action) {
         }
 
         saveJsonFile(getAliasesPath($userId, $characterId), $validatedAliases);
+        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $validatedAliases);
         successResponse(['aliases' => $validatedAliases]);
         break;
 
@@ -103,6 +104,7 @@ switch ($action) {
 
         $aliases[] = $alias;
         saveJsonFile(getAliasesPath($userId, $characterId), $aliases);
+        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $aliases);
 
         successResponse(['alias' => $alias]);
         break;
@@ -139,6 +141,7 @@ switch ($action) {
         }
 
         saveJsonFile(getAliasesPath($userId, $characterId), $aliases);
+        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $aliases);
         successResponse(['message' => 'Alias updated']);
         break;
 
@@ -159,7 +162,9 @@ switch ($action) {
             return $a['id'] !== $aliasId;
         });
 
-        saveJsonFile(getAliasesPath($userId, $characterId), array_values($aliases));
+        $aliases = array_values($aliases);
+        saveJsonFile(getAliasesPath($userId, $characterId), $aliases);
+        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $aliases);
         successResponse(['message' => 'Alias deleted']);
         break;
 
