@@ -276,34 +276,17 @@ function saveUsersIndex(array $users): bool {
 }
 
 /**
- * Find user by username
+ * Find user by username — DB first, JSON safety-net fallback.
  */
 function findUserByUsername(string $username): ?array {
-    $users = loadUsersIndex();
-    $usernameLower = strtolower($username);
-
-    foreach ($users as $user) {
-        if (strtolower($user['username']) === $usernameLower) {
-            return $user;
-        }
-    }
-
-    return null;
+    return userWithJsonFallback('username', $username);
 }
 
 /**
- * Find user by ID
+ * Find user by ID — DB first, JSON safety-net fallback.
  */
 function findUserById(string $id): ?array {
-    $users = loadUsersIndex();
-
-    foreach ($users as $user) {
-        if ($user['id'] === $id) {
-            return $user;
-        }
-    }
-
-    return null;
+    return userWithJsonFallback('id', $id);
 }
 
 /**
@@ -410,19 +393,10 @@ function registerUser(string $username, string $password, string $email): array 
 }
 
 /**
- * Find user by email
+ * Find user by email — DB first, JSON safety-net fallback.
  */
 function findUserByEmail(string $email): ?array {
-    $users = loadUsersIndex();
-    $emailLower = strtolower($email);
-
-    foreach ($users as $user) {
-        if (isset($user['email']) && strtolower($user['email']) === $emailLower) {
-            return $user;
-        }
-    }
-
-    return null;
+    return userWithJsonFallback('email', $email);
 }
 
 /**
@@ -561,9 +535,15 @@ function authenticateUser(string $username, string $password): array {
 }
 
 /**
- * Check if a user is banned
+ * Check if a user is banned — DB first via findUserById (which uses safety net).
+ * Falls through to profile.json as deepest fallback if both DB and users_index lack a record.
  */
 function isUserBanned(string $userId): bool {
+    $user = findUserById($userId);
+    if ($user !== null && array_key_exists('banned', $user)) {
+        return !empty($user['banned']);
+    }
+    // Deepest fallback: profile.json (legacy ban storage).
     $profile = loadJsonFile(getProfilePath($userId));
     return !empty($profile['banned']);
 }

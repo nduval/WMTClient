@@ -35,6 +35,97 @@ function fetchFromLightsail(string $path, string $characterId): ?array {
 }
 
 /**
+ * Authoritative single-user read with JSON-divergence safety net.
+ * Tries Lightsail DB via GET /admin/user. If DB has no record (or is unreachable)
+ * AND the JSON users_index has a matching user, returns the JSON record.
+ * `lookupKind` is 'id', 'username', or 'email'. `lookupValue` is the value to match.
+ * Returns null if neither DB nor JSON has the user.
+ */
+function userWithJsonFallback(string $lookupKind, string $lookupValue): ?array {
+    $resp = fetchFromLightsail('/admin/user', ''); // path; we'll override the URL below
+    // fetchFromLightsail builds ?characterId=. We need ?id|username|email=. Inline the call.
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    $dbUser = null;
+    if ($adminKey) {
+        $url = 'https://ws.wemudtogether.com/admin/user?' . urlencode($lookupKind) . '=' . urlencode($lookupValue);
+        $ctx = stream_context_create([
+            'http' => ['method' => 'GET', 'header' => "X-Admin-Key: $adminKey\r\n", 'timeout' => 5, 'ignore_errors' => true],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+        ]);
+        $body = @file_get_contents($url, false, $ctx);
+        if ($body !== false) {
+            $data = json_decode($body, true);
+            if (is_array($data) && !empty($data['success'])) {
+                $dbUser = $data['user'] ?? null;
+            }
+        }
+    }
+    if ($dbUser !== null) return $dbUser;
+
+    // Fall back to JSON users_index
+    $usersPath = USERS_PATH . '/users_index.json';
+    if (!file_exists($usersPath)) return null;
+    $users = loadJsonFile($usersPath);
+    if (!is_array($users)) return null;
+    $needle = strtolower($lookupValue);
+    foreach ($users as $u) {
+        if (!is_array($u)) continue;
+        $hit = false;
+        if ($lookupKind === 'id' && ($u['id'] ?? '') === $lookupValue) $hit = true;
+        elseif ($lookupKind === 'username' && strtolower($u['username'] ?? '') === $needle) $hit = true;
+        elseif ($lookupKind === 'email' && strtolower($u['email'] ?? '') === $needle) $hit = true;
+        if ($hit) {
+            @error_log("userWithJsonFallback: JSON fallback for $lookupKind=$lookupValue");
+            return $u;
+        }
+    }
+    return null;
+}
+
+/**
+ * Authoritative full users index with JSON safety net.
+ */
+function usersIndexWithJsonFallback(): array {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    $dbUsers = null;
+    if ($adminKey) {
+        $url = 'https://ws.wemudtogether.com/admin/users';
+        $ctx = stream_context_create([
+            'http' => ['method' => 'GET', 'header' => "X-Admin-Key: $adminKey\r\n", 'timeout' => 5, 'ignore_errors' => true],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+        ]);
+        $body = @file_get_contents($url, false, $ctx);
+        if ($body !== false) {
+            $data = json_decode($body, true);
+            if (is_array($data) && !empty($data['success']) && is_array($data['users'] ?? null)) {
+                $dbUsers = $data['users'];
+            }
+        }
+    }
+    // Always also load JSON index — we'll merge so JSON-only entries (DB drift) survive.
+    $usersPath = USERS_PATH . '/users_index.json';
+    $jsonUsers = file_exists($usersPath) ? loadJsonFile($usersPath) : [];
+    $jsonUsers = is_array($jsonUsers) ? $jsonUsers : [];
+
+    if ($dbUsers === null) {
+        // DB unreachable — JSON only
+        return $jsonUsers;
+    }
+    // Merge: DB authoritative for users that exist in DB, JSON-only users get included too.
+    $byId = [];
+    foreach ($dbUsers as $u) {
+        if (is_array($u) && isset($u['id'])) $byId[$u['id']] = $u;
+    }
+    foreach ($jsonUsers as $u) {
+        if (is_array($u) && isset($u['id']) && !isset($byId[$u['id']])) {
+            @error_log('usersIndexWithJsonFallback: JSON-only user ' . $u['id']);
+            $byId[$u['id']] = $u;
+        }
+    }
+    return array_values($byId);
+}
+
+/**
  * Authoritative list read with JSON-divergence safety net.
  *
  * Tries Lightsail DB first via fetchFromLightsail. If the DB returns success

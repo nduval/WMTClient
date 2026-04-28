@@ -3040,6 +3040,101 @@ const server = http.createServer(async (req, res) => {
     });
     return;
 
+  } else if (parsedUrl.pathname === '/admin/user' && req.method === 'GET') {
+    // Authoritative read of a SINGLE user from the DB.
+    // Lookup by id, username (case-insensitive), or email (case-insensitive).
+    // Used by IONOS PHP (auth.php's findUserById/Username/Email) so login,
+    // ban check, wizard check etc. read DB instead of users_index.json.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    const params = new URLSearchParams(parsedUrl.query || '');
+    const userId = params.get('id');
+    const username = params.get('username');
+    const email = params.get('email');
+    if (!userId && !username && !email) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'id, username, or email required' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      let row = null;
+      if (userId) {
+        row = wmtDb.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+      } else if (username) {
+        row = wmtDb.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)').get(username);
+      } else if (email) {
+        row = wmtDb.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+      }
+      if (!row) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: null }));
+        return;
+      }
+      const user = {
+        id: row.id,
+        username: row.username,
+        email: row.email || '',
+        password: row.password || '',
+        isWizard: row.is_wizard === 1,
+        banned: row.banned === 1,
+        ban_reason: row.ban_reason || '',
+        created_at: row.created_at || '',
+        last_login: row.last_login || '',
+        last_ip: row.last_ip || ''
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, user }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/users' && req.method === 'GET') {
+    // Full user index from DB. Mirrors loadUsersIndex(). Used by admin
+    // panels and code paths that iterate all users.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    try {
+      const rows = wmtDb.prepare('SELECT * FROM users ORDER BY created_at').all();
+      const users = rows.map(r => ({
+        id: r.id,
+        username: r.username,
+        email: r.email || '',
+        password: r.password || '',
+        isWizard: r.is_wizard === 1,
+        banned: r.banned === 1,
+        ban_reason: r.ban_reason || '',
+        created_at: r.created_at || '',
+        last_login: r.last_login || '',
+        last_ip: r.last_ip || ''
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, users }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+    return;
+
   } else if (parsedUrl.pathname === '/admin/triggers' && req.method === 'GET') {
     // Authoritative read of triggers for a character. Used by IONOS PHP
     // (api/triggers.php?action=list) so the browser sees DB state on init.
