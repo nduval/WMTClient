@@ -48,7 +48,12 @@ switch ($action) {
 
             $validated = [
                 'id' => $trigger['id'] ?? generateId(),
-                'name' => sanitize($trigger['name'] ?? ''),
+                // NOTE: do NOT call sanitize() on the name. Each save would
+                // re-htmlspecialchars the field, accumulating &amp;amp;...
+                // every round-trip until the name turns to soup. The UI
+                // escapes at display time (escapeHtml in app.js), so storing
+                // raw text is safe. Bug observed and fixed 2026-04-28.
+                'name' => trim($trigger['name'] ?? ''),
                 'pattern' => $trigger['pattern'],
                 'matchType' => in_array($trigger['matchType'] ?? '', ['exact', 'contains', 'startsWith', 'endsWith', 'regex', 'tintin'])
                     ? $trigger['matchType']
@@ -92,7 +97,7 @@ switch ($action) {
 
         $trigger = [
             'id' => generateId(),
-            'name' => sanitize($data['name'] ?? ''),
+            'name' => trim($data['name'] ?? ''),
             'pattern' => $data['pattern'],
             'matchType' => in_array($data['matchType'] ?? '', ['exact', 'contains', 'startsWith', 'endsWith', 'regex'])
                 ? $data['matchType']
@@ -127,7 +132,7 @@ switch ($action) {
 
         foreach ($triggers as &$trigger) {
             if ($trigger['id'] === $triggerId) {
-                if (isset($data['name'])) $trigger['name'] = sanitize($data['name']);
+                if (isset($data['name'])) $trigger['name'] = trim($data['name']);
                 if (isset($data['pattern'])) $trigger['pattern'] = $data['pattern'];
                 if (isset($data['matchType'])) $trigger['matchType'] = $data['matchType'];
                 if (isset($data['actions'])) $trigger['actions'] = $data['actions'];
