@@ -398,6 +398,13 @@ function markAliasServerModified(characterId, aliasId, previous, current) {
  * replace their in-memory copies so subsequent bulk_replace messages are
  * idempotent. Old cached clients ignore the unknown message type — for
  * those, the persisted alias_guard still protects against stale clobbers.
+ *
+ * IMPORTANT: only includes a list in the push if DB actually has rows for
+ * it. An empty list is indistinguishable from "DB never received a save"
+ * (e.g. characters whose DB writes silently FK-failed because no row in
+ * `characters` table). Sending [] would clobber the browser's correct
+ * in-memory copy that was loaded via the JSON-fallback safety net. The
+ * client only replaces fields that are present in the message.
  */
 function loadAndPushAuthoritativeState(ws, session) {
   if (!session || !session.characterId || !wmtDb) return;
@@ -405,16 +412,19 @@ function loadAndPushAuthoritativeState(ws, session) {
     const aliases = dbLoadAliases(session.characterId) || [];
     const triggers = dbLoadTriggers(session.characterId) || [];
     const tickers = dbLoadTickers(session.characterId) || [];
-    session.aliases = aliases;
-    session.triggers = triggers;
+    if (aliases.length > 0) session.aliases = aliases;
+    if (triggers.length > 0) session.triggers = triggers;
     if (tickers.length > 0) updateSessionTickers(session, tickers);
     if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'authoritative_state',
-        aliases,
-        triggers,
-        tickers
-      }));
+      const msg = { type: 'authoritative_state' };
+      if (aliases.length > 0) msg.aliases = aliases;
+      if (triggers.length > 0) msg.triggers = triggers;
+      if (tickers.length > 0) msg.tickers = tickers;
+      // If everything is empty, skip — let the client keep what it has
+      // (probably loaded via the JSON safety net on this character).
+      if (msg.aliases || msg.triggers || msg.tickers) {
+        ws.send(JSON.stringify(msg));
+      }
     }
   } catch (e) {
     console.error('loadAndPushAuthoritativeState failed:', e.message);

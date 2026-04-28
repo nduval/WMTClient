@@ -1113,15 +1113,33 @@ class WMTClient {
                 // Server is telling us the canonical DB state of aliases/triggers/tickers.
                 // Replace our in-memory copies so subsequent bulk_replace messages are
                 // idempotent — eliminates the "stale browser clobbers admin edit on
-                // reconnect after a deploy" race that bit us 2026-04-27.
-                if (Array.isArray(data.aliases)) this.aliases = data.aliases;
-                if (Array.isArray(data.triggers)) this.triggers = data.triggers;
-                if (Array.isArray(data.tickers)) this.tickers = data.tickers;
-                if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
-                if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
-                if (this.currentPanel === 'tickers') this.loadPanelContent('tickers');
-                if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
-                    this.renderScriptsSidebar();
+                // reconnect after a deploy" race.
+                //
+                // Defensive check: only replace when the incoming list is non-empty.
+                // The server skips empty fields, but if one slips through (or an old
+                // server build sends []), we DON'T want to wipe a populated in-memory
+                // copy that came from the JSON safety-net fallback for a character
+                // whose DB hasn't been backfilled yet.
+                {
+                    let panelsToRefresh = [];
+                    if (Array.isArray(data.aliases) && data.aliases.length > 0) {
+                        this.aliases = data.aliases;
+                        panelsToRefresh.push('aliases');
+                    }
+                    if (Array.isArray(data.triggers) && data.triggers.length > 0) {
+                        this.triggers = data.triggers;
+                        panelsToRefresh.push('triggers');
+                    }
+                    if (Array.isArray(data.tickers) && data.tickers.length > 0) {
+                        this.tickers = data.tickers;
+                        panelsToRefresh.push('tickers');
+                    }
+                    for (const p of panelsToRefresh) {
+                        if (this.currentPanel === p) this.loadPanelContent(p);
+                    }
+                    if (panelsToRefresh.length > 0 && document.getElementById('scripts-sidebar')?.classList.contains('open')) {
+                        this.renderScriptsSidebar();
+                    }
                 }
                 break;
 
