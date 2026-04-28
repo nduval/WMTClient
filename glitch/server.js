@@ -5509,29 +5509,17 @@ function processLine(session, line) {
     return;
   }
 
-  // ANSI color state tracking
-  const ansiPattern = /\x1b\[([0-9;]+)m/g;
-  const startsWithAnsi = /^\x1b\[/.test(line);
-
-  if (!startsWithAnsi && session.currentAnsiState) {
-    line = session.currentAnsiState + line;
-  }
-
-  let ansiMatch;
-  let lastAnsiCode = '';
-  while ((ansiMatch = ansiPattern.exec(line)) !== null) {
-    const codes = ansiMatch[1];
-    if (codes === '0' || codes === '') {
-      session.currentAnsiState = '';
-    } else {
-      lastAnsiCode = ansiMatch[0];
-    }
-  }
-  if (lastAnsiCode && !line.includes('\x1b[0m')) {
-    session.currentAnsiState = lastAnsiCode;
-  } else if (line.includes('\x1b[0m')) {
-    session.currentAnsiState = '';
-  }
+  // ANSI color: each line is independent. We do NOT carry the last ANSI code
+  // from one line to the next. Previously the server tracked
+  // session.currentAnsiState and prepended it to lines that didn't start with
+  // their own ANSI prefix; that mimicked a literal TUI terminal but caused
+  // cross-line color bleeds when the MUD (or a trigger highlight) emitted
+  // codes without an explicit \x1b[0m reset. Reported 2026-04-28: 14 lines
+  // of unintended red after a single un-reset line. Modern MUD content sends
+  // fresh ANSI per line, so dropping the carry-over fixes the bleed without
+  // breaking anything legitimate. Field still exists for compatibility but
+  // is always cleared.
+  session.currentAnsiState = '';
 
   // Bot marker processing — check BEFORE triggers so markers are gagged cleanly
   if (session.bot && session.bot.active) {
