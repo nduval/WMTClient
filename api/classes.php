@@ -68,12 +68,8 @@ function findClassByName($classes, $name) {
 
 switch ($action) {
     case 'list':
-        // Authoritative source: Lightsail DB via GET /admin/classes.
-        $resp = fetchFromLightsail('/admin/classes', $characterId);
-        if ($resp === null) {
-            errorResponse('Class service unavailable', 503);
-        }
-        successResponse(['classes' => $resp['classes'] ?? []]);
+        $r = listWithJsonFallback('/admin/classes', 'classes', $characterId, $classesPath);
+        successResponse(['classes' => $r['list'], 'source' => $r['source']]);
         break;
 
     case 'create':

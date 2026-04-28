@@ -35,6 +35,42 @@ function fetchFromLightsail(string $path, string $characterId): ?array {
 }
 
 /**
+ * Authoritative list read with JSON-divergence safety net.
+ *
+ * Tries Lightsail DB first via fetchFromLightsail. If the DB returns success
+ * with an EMPTY list AND the JSON file on IONOS has data, returns JSON
+ * instead — this protects users whose data was never dual-written to DB
+ * (e.g. characters with no `characters` table row, where every DB save
+ * silently FK-failed). Without this fallback, a hard refresh would show
+ * an empty UI, and any subsequent save action would push `[]` over the
+ * (still-populated) JSON file, destroying it.
+ *
+ * Returns ['list' => array, 'source' => 'db' | 'json_fallback' | 'json_db_unreachable'].
+ */
+function listWithJsonFallback(string $endpoint, string $listKey, string $characterId, string $jsonFallbackPath): array {
+    $resp = fetchFromLightsail($endpoint, $characterId);
+    $dbList = ($resp && isset($resp[$listKey]) && is_array($resp[$listKey])) ? $resp[$listKey] : null;
+
+    // DB returned data — authoritative
+    if (is_array($dbList) && count($dbList) > 0) {
+        return ['list' => $dbList, 'source' => 'db'];
+    }
+
+    // DB empty or unreachable — check JSON
+    $jsonList = file_exists($jsonFallbackPath) ? loadJsonFile($jsonFallbackPath) : [];
+    $jsonList = is_array($jsonList) ? $jsonList : [];
+
+    if (count($jsonList) > 0) {
+        $reason = $resp === null ? 'json_db_unreachable' : 'json_fallback';
+        @error_log("listWithJsonFallback: $reason for $endpoint cid=$characterId json_count=" . count($jsonList));
+        return ['list' => $jsonList, 'source' => $reason];
+    }
+
+    // Both empty — return DB result (treat as truth, user has no data)
+    return ['list' => $dbList ?? [], 'source' => $resp === null ? 'db_unreachable_empty' : 'db_empty'];
+}
+
+/**
  * Sync data (preferences, scripts) to Lightsail DB.
  * Fire-and-forget: short timeout, ignore failures.
  */

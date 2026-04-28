@@ -25,12 +25,10 @@ $action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        // Authoritative source: Lightsail DB via GET /admin/aliases.
-        $resp = fetchFromLightsail('/admin/aliases', $characterId);
-        if ($resp === null) {
-            errorResponse('Alias service unavailable', 503);
-        }
-        successResponse(['aliases' => $resp['aliases'] ?? []]);
+        // DB-first read with JSON safety net for characters whose data was
+        // never dual-written (silent FK-fail). See listWithJsonFallback.
+        $r = listWithJsonFallback('/admin/aliases', 'aliases', $characterId, getAliasesPath($userId, $characterId));
+        successResponse(['aliases' => $r['list'], 'source' => $r['source']]);
         break;
 
     case 'save':

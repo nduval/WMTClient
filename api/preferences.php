@@ -95,12 +95,21 @@ if (!$characterId) {
 
 switch ($action) {
     case 'get':
-        // Authoritative source: Lightsail DB via GET /admin/preferences.
+        // DB-first with JSON safety net. If DB row is missing or has fewer
+        // keys than the JSON file, prefer JSON (silent FK-fail / migration gap).
         $resp = fetchFromLightsail('/admin/preferences', $characterId);
-        if ($resp === null) {
-            errorResponse('Preferences service unavailable', 503);
+        $dbPrefs = ($resp && isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
+        $jsonPath = getPreferencesPath($userId, $characterId);
+        $jsonPrefs = file_exists($jsonPath) ? loadJsonFile($jsonPath) : [];
+        $jsonPrefs = is_array($jsonPrefs) ? $jsonPrefs : [];
+
+        // Pick the richer source
+        if (count($jsonPrefs) > count($dbPrefs)) {
+            $preferences = $jsonPrefs;
+            @error_log("preferences fallback: using JSON for cid=$characterId (json=" . count($jsonPrefs) . " db=" . count($dbPrefs) . ")");
+        } else {
+            $preferences = $dbPrefs;
         }
-        $preferences = $resp['preferences'] ?? [];
 
         // Merge with defaults
         $defaults = [

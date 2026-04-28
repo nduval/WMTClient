@@ -25,12 +25,8 @@ $action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        // Authoritative source: Lightsail DB via GET /admin/tickers.
-        $resp = fetchFromLightsail('/admin/tickers', $characterId);
-        if ($resp === null) {
-            errorResponse('Ticker service unavailable', 503);
-        }
-        successResponse(['tickers' => $resp['tickers'] ?? []]);
+        $r = listWithJsonFallback('/admin/tickers', 'tickers', $characterId, getTickersPath($userId, $characterId));
+        successResponse(['tickers' => $r['list'], 'source' => $r['source']]);
         break;
 
     case 'save':

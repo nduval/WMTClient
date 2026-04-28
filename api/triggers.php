@@ -25,13 +25,10 @@ $action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        // Authoritative source: Lightsail DB via GET /admin/triggers.
-        // The legacy triggers.json mirror is no longer read.
-        $resp = fetchFromLightsail('/admin/triggers', $characterId);
-        if ($resp === null) {
-            errorResponse('Trigger service unavailable', 503);
-        }
-        successResponse(['triggers' => $resp['triggers'] ?? []]);
+        // DB-first read with JSON safety net for characters whose data was
+        // never dual-written (silent FK-fail). See listWithJsonFallback.
+        $r = listWithJsonFallback('/admin/triggers', 'triggers', $characterId, getTriggersPath($userId, $characterId));
+        successResponse(['triggers' => $r['list'], 'source' => $r['source']]);
         break;
 
     case 'save':
