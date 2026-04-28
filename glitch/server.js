@@ -193,6 +193,30 @@ function dbLoadAliases(characterId) {
 /**
  * Write a change_log entry. Records old and new state for undo/audit.
  */
+/**
+ * Iteratively decode HTML entities until the string stabilizes. Used to
+ * undo accumulated `&amp;amp;...&amp;#039;` corruption from stale browser
+ * data hitting bulk_replace. Idempotent — strings without entities pass
+ * through unchanged.
+ */
+function decodeHtmlEntitiesIterative(s) {
+  let prev, cur = s;
+  for (let i = 0; i < 5000; i++) {
+    prev = cur;
+    cur = cur
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'");
+    if (cur === prev) return cur;
+    if (cur.length > prev.length) return prev; // safety
+  }
+  return cur;
+}
+
 function dbLogChange(characterId, tableName, action, oldData, newData, source) {
   if (!wmtDb) return;
   try {
@@ -5989,6 +6013,14 @@ wss.on('connection', (ws, req) => {
                 fetchDiscordPrefsFromPHP(session.userId, session.characterId, session);
               }
 
+              // CRITICAL: send authoritative_state BEFORE session_resumed.
+              // Client's onSessionResumed handler fires sendFilteredTriggersAndAliases
+              // which sends the browser's in-memory copy via WS. If the browser
+              // has stale data from before, that stale data clobbers DB. Sending
+              // authoritative_state first means the client replaces its in-memory
+              // copy with DB state BEFORE the resumed handler fires the sync.
+              loadAndPushAuthoritativeState(ws, session);
+
               ws.send(JSON.stringify({
                 type: 'session_resumed',
                 mudConnected: oldMudConnected,
@@ -6092,6 +6124,9 @@ wss.on('connection', (ws, req) => {
               fetchDiscordPrefsFromPHP(session.userId, session.characterId, session);
             }
 
+            // Send authoritative_state BEFORE session_resumed (see comment in REKEY branch)
+            loadAndPushAuthoritativeState(ws, session);
+
             ws.send(JSON.stringify({
               type: 'session_resumed',
               mudConnected: mudConnected,
@@ -6187,11 +6222,14 @@ wss.on('connection', (ws, req) => {
               // server-side _suppressAutoLogin handles the char name for those.
               session._pendingBridgeResume = true;
               session._bridgeModeInit = true;  // Track that this was a bridgeMode new session
+              // Send authoritative_state BEFORE session_new (see REKEY comment)
+              loadAndPushAuthoritativeState(ws, session);
               ws.send(JSON.stringify({
                 type: 'session_new',
                 bridgeMode: true
               }));
             } else {
+              loadAndPushAuthoritativeState(ws, session);
               ws.send(JSON.stringify({
                 type: 'session_new'
               }));
@@ -6205,13 +6243,9 @@ wss.on('connection', (ws, req) => {
             }
           }
 
-          // After ANY auth branch (rekey / resume / new session), push the
-          // authoritative aliases+triggers+tickers from DB to the browser.
-          // This eliminates the stale-browser race: any subsequent
-          // set_aliases bulk_replace will reflect DB state, not whatever
-          // the browser had in memory before the deploy/reconnect.
-          loadAndPushAuthoritativeState(ws, session);
-
+          // authoritative_state was already sent BEFORE session_resumed/new
+          // in each auth branch above (so the client's onSessionResumed handler
+          // sees fresh data when it fires sendFilteredTriggersAndAliases).
           authenticated = true;
         } else {
           ws.send(JSON.stringify({ type: 'error', message: 'Must authenticate first' }));
@@ -6477,6 +6511,15 @@ wss.on('connection', (ws, req) => {
               return false;
             }
             return true;
+          }).map(t => {
+            // Defensive: if a stale browser sends a name with accumulated
+            // HTML entity escapes (the old sanitize() bug), decode them here
+            // so the corruption can't re-pollute DB on bulk_replace. See
+            // 2026-04-28 incident — `Galan&amp;amp;...amp;#039;s voice...`.
+            if (t && typeof t.name === 'string' && /&(?:amp|lt|gt|quot|apos|#039|#39);/.test(t.name)) {
+              t = { ...t, name: decodeHtmlEntitiesIterative(t.name) };
+            }
+            return t;
           });
           session.triggers = incomingTriggers;
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
