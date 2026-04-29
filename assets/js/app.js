@@ -2980,22 +2980,21 @@ class WMTClient {
             const line = document.createElement('div');
             line.className = 'line ' + item.type;
 
-            // Apply ANSI color carry-over from previous MUD line.
-            // Real terminals carry color state across lines — the MUD relies on
-            // setting a color at the end of one line to affect the start of the next
-            // (e.g. equipment labels set green at EOL for the next line's label text).
+            // ANSI carry-over across MUD lines is DISABLED.
+            // Previously the client applied the residual ANSI state from one line
+            // as a prefix to the next line, mirroring how a real TUI persists color
+            // across newlines. In practice 3K sends fresh ANSI per line, and the
+            // carry-over caused visible color bleeds: if the MUD forgot a \x1b[0m,
+            // every subsequent plain-text line inherited that color until something
+            // else reset it (reported 2026-04-29: 14+ red lines after one un-reset
+            // line). The matching server-side propagation was disabled earlier the
+            // same week. _ansiCarry is left as a no-op for backwards compatibility
+            // with any remaining references; if a multi-line MUD banner ever needs
+            // explicit color persistence, the MUD can emit its own codes per line.
             let rawText = item.text;
-            if (item.type === 'mud' && this._ansiCarry) {
-                rawText = this._ansiCarry + rawText;
-            }
 
             // Convert ANSI codes to HTML
             let html = this.ansiToHtml(rawText);
-
-            // Track ANSI state at end of this line for carry-over (MUD lines only)
-            if (item.type === 'mud') {
-                this._ansiCarry = this._extractAnsiState(rawText);
-            }
 
             // Convert <hl style="...">text</hl> tags to styled spans (from server-side highlights)
             html = html.replace(/&lt;hl style="([^"]*)"&gt;(.*?)&lt;\/hl&gt;/gi, '<span style="$1">$2</span>');
