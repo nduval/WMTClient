@@ -770,6 +770,17 @@ class WMTClient {
             onSessionInit: () => this.onSessionInit()
         });
 
+        // Reset ANSI carry-over on every outbound command. Color persists
+        // across MUD lines (so multi-line room descriptions render correctly)
+        // but a new command starts a fresh action — its response shouldn't
+        // inherit color from whatever the previous output left dangling.
+        // Wraps both user-typed commands and bot/script-dispatched ones.
+        const _origSendCommand = this.connection.sendCommand.bind(this.connection);
+        this.connection.sendCommand = (command, raw) => {
+            this._ansiCarry = '';
+            return _origSendCommand(command, raw);
+        };
+
         this.connection.connect();
     }
 
@@ -2980,21 +2991,27 @@ class WMTClient {
             const line = document.createElement('div');
             line.className = 'line ' + item.type;
 
-            // ANSI carry-over across MUD lines is DISABLED.
-            // Previously the client applied the residual ANSI state from one line
-            // as a prefix to the next line, mirroring how a real TUI persists color
-            // across newlines. In practice 3K sends fresh ANSI per line, and the
-            // carry-over caused visible color bleeds: if the MUD forgot a \x1b[0m,
-            // every subsequent plain-text line inherited that color until something
-            // else reset it (reported 2026-04-29: 14+ red lines after one un-reset
-            // line). The matching server-side propagation was disabled earlier the
-            // same week. _ansiCarry is left as a no-op for backwards compatibility
-            // with any remaining references; if a multi-line MUD banner ever needs
-            // explicit color persistence, the MUD can emit its own codes per line.
+            // ANSI carry-over: re-enabled with a reset on every outbound command.
+            // Pure-on caused 14+ line color bleeds when the MUD forgot a reset.
+            // Pure-off broke multi-line content like room descriptions where the
+            // MUD legitimately sends color once and expects subsequent lines to
+            // inherit. The middle ground: carry color across MUD lines (so room
+            // text renders consistently), but clear `_ansiCarry` whenever a
+            // command is dispatched (see connection wrap in setupConnection).
+            // Result: legitimate continuations work; rapid-fire bot loops reset
+            // frequently enough that bleeds are bounded to a single output block.
             let rawText = item.text;
+            if (item.type === 'mud' && this._ansiCarry) {
+                rawText = this._ansiCarry + rawText;
+            }
 
             // Convert ANSI codes to HTML
             let html = this.ansiToHtml(rawText);
+
+            // Track ANSI state at end of this line for carry-over (MUD lines only)
+            if (item.type === 'mud') {
+                this._ansiCarry = this._extractAnsiState(rawText);
+            }
 
             // Convert <hl style="...">text</hl> tags to styled spans (from server-side highlights)
             html = html.replace(/&lt;hl style="([^"]*)"&gt;(.*?)&lt;\/hl&gt;/gi, '<span style="$1">$2</span>');
