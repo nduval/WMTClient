@@ -194,6 +194,40 @@ function dbLoadAliases(characterId) {
  * Write a change_log entry. Records old and new state for undo/audit.
  */
 /**
+ * Convert TinTin++ <NNN> color codes (and 256-color variants) to ANSI escape
+ * sequences. Mirrors the client's parseTinTinColors so substitute replacements
+ * containing things like `<139>chaos<088>` render with actual color rather than
+ * showing the literal angle-bracket codes as text. Limited to the syntax forms
+ * that show up in user content; the client has the full implementation for
+ * anything fancier.
+ */
+function parseTinTinColorsServer(str) {
+  if (!str) return str;
+  const fgColors = { '0': 30, '1': 31, '2': 32, '3': 33, '4': 34, '5': 35, '6': 36, '7': 37, '9': 39 };
+  const bgColors = { '0': 40, '1': 41, '2': 42, '3': 43, '4': 44, '5': 45, '6': 46, '7': 47, '9': 49 };
+  const attrs    = { '0': 0,  '1': 1,  '2': 2,  '3': 3,  '4': 4,  '5': 5,  '7': 7  };
+  return str.replace(/<([a-fA-F0-9gG]{3,8})>/g, (m, code) => {
+    if (/^[0-9]{3}$/.test(code)) {
+      const a = code[0], f = code[1], b = code[2];
+      const parts = [];
+      if (a !== '8' && attrs[a] !== undefined) parts.push(attrs[a]);
+      if (f !== '8' && fgColors[f] !== undefined) parts.push(fgColors[f]);
+      if (b !== '8' && bgColors[b] !== undefined) parts.push(bgColors[b]);
+      return parts.length > 0 ? '\x1b[' + parts.join(';') + 'm' : '';
+    }
+    if (/^[a-f]{3}$/.test(code)) {
+      const r = code.charCodeAt(0) - 97, g = code.charCodeAt(1) - 97, b = code.charCodeAt(2) - 97;
+      return `\x1b[38;5;${16 + 36 * r + 6 * g + b}m`;
+    }
+    if (/^[A-F]{3}$/.test(code)) {
+      const r = code.charCodeAt(0) - 65, g = code.charCodeAt(1) - 65, b = code.charCodeAt(2) - 65;
+      return `\x1b[48;5;${16 + 36 * r + 6 * g + b}m`;
+    }
+    return m;
+  });
+}
+
+/**
  * Iteratively decode HTML entities until the string stabilizes. Used to
  * undo accumulated `&amp;amp;...&amp;#039;` corruption from stale browser
  * data hitting bulk_replace. Idempotent — strings without entities pass
@@ -7653,11 +7687,15 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
             // TinTin++ two-pass substitution:
             // Pass 1 (SUB_ARG): replace %1-%99 with captured groups
             // Pass 2 (SUB_VAR): substitute $variables
+            // Pass 3 (color codes): convert <NNN>/<aaa>/<AAA> to ANSI escapes
+            // so highlights like `<139>chaos<088>` render as actual color
+            // rather than literal angle-bracket text.
             let replacement = action.replacement || '';
             if (matches.length) {
               replacement = replaceTinTinVars(replacement, matches);
             }
             replacement = substituteUserVariables(replacement, variables, functions);
+            replacement = parseTinTinColorsServer(replacement);
             // Find and replace the matched portion (case-sensitive)
             if (useTinTin) {
               const regexPattern = cachedRegexStr || tinTinToRegex(pattern);
