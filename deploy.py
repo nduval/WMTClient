@@ -183,6 +183,21 @@ def deploy_test_server():
         print(f"  SCP failed: {result.stderr.strip()}")
         return False
 
+    # Push any repo-tracked test scripts so sandbox runs the version we
+    # commit. Test files live in tests/sandbox/ and target /opt/wmt/tests/.
+    test_dir = BASE_DIR / 'tests' / 'sandbox'
+    if test_dir.exists():
+        for tf in test_dir.glob('*.js'):
+            r = subprocess.run(
+                f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{tf}" ubuntu@{host}:/tmp/{tf.name}',
+                shell=True, capture_output=True, text=True
+            )
+            if r.returncode == 0:
+                subprocess.run(
+                    f'{ssh_cmd} "sudo cp /tmp/{tf.name} /opt/wmt/tests/{tf.name} && sudo chown wmt:wmt /opt/wmt/tests/{tf.name}"',
+                    shell=True, capture_output=True, text=True
+                )
+
     # Copy, patch allowedServers to include localhost:4000 (mock MUD), restart
     # Write a patch script remotely to avoid Windows/SSH quoting issues
     patch_lines = [
@@ -237,6 +252,7 @@ def run_test_suites():
         ('Pipeline',  'test_wmt_client.js'),
         ('Aliases',   'test_alias_compare.js'),
         ('Triggers',  'test_trigger_compare.js'),
+        ('DelayAnon', 'test_delay_anon.js'),
     ]
 
     total_passed = 0
@@ -576,9 +592,25 @@ def main():
             success = False
 
     elif args.target == 'lightsail':
+        # Same test-gate as 'all' so a quick `lightsail` deploy can't bypass
+        # regression checks. The April-May 2026 #delay regression shipped via
+        # this code path because tests weren't run. Use --force to override.
+        if deploy_test_server():
+            passed, failed, details = run_test_suites()
+            if failed > 0:
+                print(f"\nWARNING: {failed} test(s) failed on sandbox.")
+                if args.force:
+                    print("  --force specified, proceeding to production anyway.")
+                else:
+                    print("  Aborting production deploy. Use --force to override.")
+                    sys.exit(1)
+        else:
+            print("\nWARNING: Test sandbox deploy failed.")
+            if not args.force:
+                print("  Aborting production deploy. Use --force to override.")
+                sys.exit(1)
         if not deploy_lightsail('server'):
             success = False
-        deploy_test_server()  # Keep sandbox in sync (non-blocking)
 
     elif args.target == 'bridge':
         if not deploy_lightsail('bridge', force_bridge=args.yes):

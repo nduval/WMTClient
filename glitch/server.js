@@ -8862,7 +8862,9 @@ function serverProcessInlineCommand(cmd, session) {
         rawSeconds = dargs[0];
         command = dargs[1];
         if (!session._delayCounter) session._delayCounter = 0;
-        name = '__anon_' + (++session._delayCounter);
+        // Timestamp prefix avoids collision with anonymous timers restored
+        // from persistence after a server restart (their counter resets to 0).
+        name = '__anon_' + Date.now() + '_' + (++session._delayCounter);
       } else {
         // Named: {name} {command} {seconds}
         name = dargs[0];
