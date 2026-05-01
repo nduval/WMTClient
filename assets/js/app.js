@@ -7598,7 +7598,7 @@ class WMTClient {
             if (this.currentScriptClass) {
                 this.aliases[existing].class = this.currentScriptClass;
             }
-            this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
         } else {
             this.aliases.push({
                 id: this.generateId(),
@@ -7609,7 +7609,7 @@ class WMTClient {
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: #ALIAS {${pattern}} {${replacement}} @ {${priority}}.`, 'system');
         }
 
         await this.saveAliases();
@@ -7631,7 +7631,7 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} ALIAS${removed > 1 ? 'ES' : ''} REMOVED.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: ${removed} ALIAS${removed > 1 ? 'ES' : ''} REMOVED.`, 'system');
             await this.saveAliases();
         }
     }
@@ -7698,7 +7698,7 @@ class WMTClient {
             enabled: true,
             class: this.currentScriptClass || null
         });
-        this.appendOutput(`#OK: #ACTION {${pattern}} {${command}} @ {${priority}}.`, 'system');
+        if (!this._silent) this.appendOutput(`#OK: #ACTION {${pattern}} {${command}} @ {${priority}}.`, 'system');
 
         await this.saveTriggers();
     }
@@ -7720,7 +7720,7 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} ACTION${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: ${removed} ACTION${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             await this.saveTriggers();
         }
     }
@@ -7775,7 +7775,7 @@ class WMTClient {
                 existing.class = this.currentScriptClass;
             }
             if (!this._silent && !unchanged) {
-                this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
+                if (!this._silent) this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
             }
             if (unchanged) return;
         } else {
@@ -7789,7 +7789,7 @@ class WMTClient {
             };
             this.tickers.push(ticker);
             if (!this._silent) {
-                this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
+                if (!this._silent) this.appendOutput(`#OK: #TICKER {${name}} NOW EXECUTES {${command}} EVERY {${interval}} SECONDS.`, 'system');
             }
         }
 
@@ -7813,7 +7813,7 @@ class WMTClient {
         }
         if (removed > 0) {
             if (!this._silent) {
-                this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+                if (!this._silent) this.appendOutput(`#OK: ${removed} TICKER${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             }
             await this.saveTickers();
         }
@@ -7913,7 +7913,7 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} DELAY${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: ${removed} DELAY${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
         }
     }
 
@@ -7983,14 +7983,14 @@ class WMTClient {
                         await this.setClassEnabled(classId, true);
                     }
                 }
-                this.appendOutput(`#CLASS {${className}} OPENED.`, 'system');
+                if (!this._silent) this.appendOutput(`#CLASS {${className}} OPENED.`, 'system');
                 break;
             }
 
             case 'close':
                 // Pop back to previous class from stack
                 this.currentScriptClass = this.classStack.pop() || null;
-                this.appendOutput(`#CLASS {${className}} CLOSED.`, 'system');
+                if (!this._silent) this.appendOutput(`#CLASS {${className}} CLOSED.`, 'system');
                 break;
 
             case 'assign': {
@@ -9518,7 +9518,7 @@ class WMTClient {
             if (this.currentScriptClass) {
                 this.triggers[existing].class = this.currentScriptClass;
             }
-            this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
         } else {
             this.triggers.push({
                 id: this.generateId(),
@@ -9530,7 +9530,7 @@ class WMTClient {
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: {${pattern}} NOW GAGS @ {${priority}}.`, 'system');
         }
         await this.saveTriggers();
     }
@@ -9552,7 +9552,7 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} GAG${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: ${removed} GAG${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             await this.saveTriggers();
         }
     }
@@ -9691,7 +9691,7 @@ class WMTClient {
             if (this.currentScriptClass) {
                 this.triggers[existing].class = this.currentScriptClass;
             }
-            this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
         } else {
             // Create new with TinTin++ pattern matching
             this.triggers.push({
@@ -9704,7 +9704,7 @@ class WMTClient {
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: {${pattern}} NOW HIGHLIGHTS {${color}} @ {${priority}}.`, 'system');
         }
 
         await this.saveTriggers();
@@ -9727,7 +9727,7 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} HIGHLIGHT${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: ${removed} HIGHLIGHT${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             await this.saveTriggers();
         }
     }
@@ -9785,7 +9785,7 @@ class WMTClient {
             if (this.currentScriptClass) {
                 this.triggers[existing].class = this.currentScriptClass;
             }
-            this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
         } else {
             // Create new with TinTin++ pattern matching
             this.triggers.push({
@@ -9798,7 +9798,7 @@ class WMTClient {
                 enabled: true,
                 class: this.currentScriptClass || null
             });
-            this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: {${pattern}} IS NOW SUBSTITUTED AS {${replacement}} @ {${priority}}.`, 'system');
         }
 
         await this.saveTriggers();
@@ -9821,7 +9821,7 @@ class WMTClient {
             }
         }
         if (removed > 0) {
-            this.appendOutput(`#OK: ${removed} SUBSTITUTE${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: ${removed} SUBSTITUTE${removed > 1 ? 'S' : ''} REMOVED.`, 'system');
             await this.saveTriggers();
         }
     }
@@ -9978,7 +9978,7 @@ class WMTClient {
                     this.setNestedVariable(name, keys, table);
                     if (!this._silent) {
                         const displayVal = this.formatVariableValue(table);
-                        this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO ${displayVal}.`, 'system');
+                        if (!this._silent) this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO ${displayVal}.`, 'system');
                     }
                     return;
                 }
@@ -9988,7 +9988,7 @@ class WMTClient {
         // Set the variable (handles nested if keys present)
         this.setNestedVariable(name, keys, value);
         if (!this._silent) {
-            this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO {${value}}.`, 'system');
+            if (!this._silent) this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO {${value}}.`, 'system');
         }
     }
 
