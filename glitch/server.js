@@ -8833,7 +8833,9 @@ function serverProcessInlineCommand(cmd, session) {
     }
   }
 
-  // #delay {name} {command} {seconds}
+  // #delay {seconds} {command}            (anonymous — TinTin++ standard)
+  // #delay {name}    {command} {seconds}  (named — cancellable via #undelay)
+  //
   // Server-side delayed execution. The command fires through the full
   // expansion pipeline (alias expansion, #var/#math/#if server-side)
   // after the specified delay. Unlike the client-side #delay (which
@@ -8844,13 +8846,29 @@ function serverProcessInlineCommand(cmd, session) {
   // Variables in the command are substituted at FIRE time (not schedule
   // time), matching TinTin++ behavior. The seconds arg is substituted
   // immediately (we need its numeric value for setTimeout).
+  //
+  // Anonymous form is critical for triggers like the ring-skill ones that
+  // chain `#sub {x} {...}; #delay {2} {#unsub {x}}; #sub {y} {...}; #delay {2} {#unsub {y}}`
+  // — if both got the same name "2", each new schedule clears the prior
+  // timer and the un-subs leak forever. Anonymous delays get unique
+  // counter-based names so they coexist.
   const delayMatch = trimmed.match(/^#delay\s+(.*)/i);
   if (delayMatch) {
     const dargs = parseBracedArgs(delayMatch[1]);
     if (dargs.length >= 2) {
-      const name = dargs[0];
-      const command = dargs[1];
-      const rawSeconds = dargs[2] || '1';
+      let name, command, rawSeconds;
+      if (dargs.length === 2) {
+        // Anonymous: {seconds} {command}
+        rawSeconds = dargs[0];
+        command = dargs[1];
+        if (!session._delayCounter) session._delayCounter = 0;
+        name = '__anon_' + (++session._delayCounter);
+      } else {
+        // Named: {name} {command} {seconds}
+        name = dargs[0];
+        command = dargs[1];
+        rawSeconds = dargs[2];
+      }
       const subSeconds = substituteUserVariables(rawSeconds, session.variables || {}, session.functions || {});
       let seconds = parseFloat(subSeconds);
       if (isNaN(seconds) || seconds < 0) seconds = 1;
