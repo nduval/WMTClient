@@ -962,10 +962,14 @@ class WMTClient {
     onMessage(data) {
         switch (data.type) {
             case 'mud':
-                // Check for password prompt and auto-send password
+                // Check for password prompt and auto-send password.
+                // Strip ANSI color codes BEFORE the substring match — a runaway
+                // substitute trigger like Sub: sword can wrap the "sword" inside
+                // "Password:" with color codes, breaking the literal includes()
+                // check and stalling auto-login (observed 2026-05-01).
                 if (!this.passwordSent && this.characterPassword && data.line) {
-                    // Check if this line contains "Password:" prompt
-                    if (data.line.includes('Password:') || data.line.match(/password\s*:/i)) {
+                    const stripped = data.line.replace(/\x1b\[[0-9;]*m/g, '');
+                    if (stripped.includes('Password:') || stripped.match(/password\s*:/i)) {
                         this.passwordSent = true;
                         setTimeout(() => {
                             this.appendOutput('Sending password...', 'system');
