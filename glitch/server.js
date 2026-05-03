@@ -9383,7 +9383,11 @@ function serverProcessInlineCommand(cmd, session) {
       const subSeconds = substituteUserVariables(rawSeconds, session.variables || {}, session.functions || {});
       let seconds = parseFloat(subSeconds);
       if (isNaN(seconds) || seconds < 0) seconds = 1;
-      seconds = Math.min(seconds, 300);
+      // 24-hour cap. Original 300s cap (from 2026-04-11 when server-side #delay
+      // was first implemented) silently clamped legit cooldown timers — Nathan's
+      // {Smurfs} 1-hour reminder was firing at 5 minutes. 86400s covers any
+      // practical bot reminder while still bounding setTimeout memory.
+      seconds = Math.min(seconds, 86400);
 
       if (!session._delays) session._delays = {};
       if (session._delays[name]) {
