@@ -1173,6 +1173,21 @@ function effectiveCharName(session) {
   return session._actualMudChar || session.characterName || session.characterId || 'unknown';
 }
 
+// Returns true when a chat message originated from this session's character.
+// Used to gate the suppressSelfAlerts preference for ChatMon ding/Discord/IFTTT.
+// `msg.outbound` covers MIP "x~" tells (always-self by definition).
+// `msg.sender` is parts[2] of CAA channel payloads or parts[1] of inbound BAB —
+// case-insensitive comparison handles channel-vs-MUD casing differences
+// (e.g. "Elminster" on mage vs "elminster" on ptell).
+function isSelfAuthoredChat(session, msg) {
+  if (!session || !msg) return false;
+  if (msg.outbound) return true;
+  if (!msg.sender) return false;
+  const selfName = effectiveCharName(session);
+  if (!selfName || selfName === 'unknown') return false;
+  return String(msg.sender).toLowerCase() === String(selfName).toLowerCase();
+}
+
 function writeSessionLog(session, type, data) {
   if (!session) return;
   // Only log for the configured user (if filter is set)
@@ -5373,8 +5388,10 @@ function parseMipMessage(session, msgType, msgData) {
         let rawText = '';
         let isSoulEcho = false;
         let isSentByUser = false;
+        let babSender = '';
         if (parts[0] === '' && parts.length >= 3) {
           const sender = parts[1];
+          babSender = sender;
           const message = parts.slice(2).join('~');
           // [you]: lines are soul/emote echoes — show in chatmon but skip Discord
           if (sender.toLowerCase() === 'you') {
@@ -5401,7 +5418,8 @@ function parseMipMessage(session, msgType, msgData) {
           // processLine flushes this buffer before processing the next line.
           session._pendingBab = {
             formatted, rawText, raw: msgData,
-            outbound: isSentByUser || undefined
+            outbound: isSentByUser || undefined,
+            sender: babSender
           };
           // Fallback: if no more lines arrive, flush as tell after 100ms
           if (session._pendingBabTimeout) clearTimeout(session._pendingBabTimeout);
@@ -5428,8 +5446,12 @@ function parseMipMessage(session, msgType, msgData) {
         let formatted;
         let channel = 'chat';
         let rawText = '';
+        // MIP CAA payload format: channel~ChannelDisplay~Speaker~MessageBody
+        // parts[2] is the speaker name when present, otherwise empty.
+        let sender = '';
         if (parts.length >= 4) {
           channel = parts[0];
+          sender = parts[2] || '';
           const message = parts.slice(3).join('~');
           formatted = `<span style="color:#44dddd">[${channel}]</span> ${convertMipColors(message)}`;
           rawText = `[${channel}] ${stripAnsi(message)}`;
@@ -5442,17 +5464,21 @@ function parseMipMessage(session, msgType, msgData) {
           formatted = convertMipColors(msgData);
           rawText = stripAnsi(msgData);
         }
+        const selfAuthored = isSelfAuthoredChat(session, { sender });
+        const suppressAlert = !!(session.suppressSelfAlerts && selfAuthored);
         sendToClient(session, {
           type: 'mip_chat',
           chatType: 'channel',
           channel: channel,
           raw: msgData,
           rawText: rawText,
-          message: formatted
+          message: formatted,
+          sender: sender,
+          suppressAlert: suppressAlert
         });
 
         // Server-side Discord notification (works even when browser is closed)
-        if (rawText && channel) {
+        if (rawText && channel && !suppressAlert) {
           const channelPrefs = session.discordChannelPrefs[channel] || session.discordChannelPrefs[channel.toLowerCase()];
           if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
             logSessionEvent('DISCORD_SEND', {
@@ -5462,22 +5488,15 @@ function parseMipMessage(session, msgType, msgData) {
               channel: channel,
               messagePreview: rawText.substring(0, 50)
             });
-            // Extract speaker name from channel message for Discord username
-            // Format: "[channel] Name flaps : message" or "[channel] Name says : message"
-            let discordName = session.discordUsername;
-            const speakerMatch = rawText.match(/^\[[^\]]+\]\s+(\S+)/);
-            if (speakerMatch) {
-              discordName = speakerMatch[1];
-            }
+            // Use captured MIP sender for the Discord display name when available.
+            const discordName = sender || session.discordUsername;
             sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, discordName);
           }
           if (channelPrefs?.ifttt && session.iftttKey) {
             const eventName = channelPrefs.iftttEvent || '3K';
             // Three structured values for the IFTTT applet to compose:
             //   value1 = speaker, value2 = channel/type, value3 = message body.
-            // Channel format: "[channel] Speaker says: message body".
-            const speakerMatch = rawText.match(/^\[[^\]]+\]\s+(\S+)/);
-            const speaker = speakerMatch ? speakerMatch[1] : effectiveCharName(session);
+            const speaker = sender || effectiveCharName(session);
             const stripped = rawText.replace(/^\[[^\]]+\]\s*/, '');
             const colonIdx = stripped.indexOf(':');
             const body = colonIdx >= 0 ? stripped.slice(colonIdx + 1).trim() : stripped;
@@ -5630,6 +5649,11 @@ function flushPendingBab(session, channel) {
     session._pendingBabTimeout = null;
   }
 
+  // Self-authored = outbound tell/soul, or (theoretically) inbound where sender == self.
+  // Real inbound self-tells are filtered as soul echoes earlier, but the helper handles both.
+  const selfAuthored = isSelfAuthoredChat(session, { outbound: bab.outbound, sender: bab.sender });
+  const suppressAlert = !!(session.suppressSelfAlerts && selfAuthored);
+
   sendToClient(session, {
     type: 'mip_chat',
     chatType: channel === 'soul' ? 'soul' : 'tell',
@@ -5637,11 +5661,13 @@ function flushPendingBab(session, channel) {
     raw: bab.raw,
     rawText: bab.rawText,
     message: bab.formatted,
-    outbound: bab.outbound
+    outbound: bab.outbound,
+    sender: bab.sender || '',
+    suppressAlert: suppressAlert
   });
 
-  // Server-side Discord notification
-  if (bab.rawText) {
+  // Server-side Discord notification — gate on self-authored when the user opted in.
+  if (bab.rawText && !suppressAlert) {
     const channelPrefs = session.discordChannelPrefs[channel] || session.discordChannelPrefs['tell'];
     if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
       logSessionEvent('DISCORD_SEND', {
@@ -7133,6 +7159,10 @@ wss.on('connection', (ws, req) => {
           // Each channel can have its own webhook URL
           session.discordUsername = data.username || 'WMT Client';
           session.discordChannelPrefs = {};
+          // Global ChatMon "no alerts from self" preference. Default false preserves
+          // existing behavior; opt-in flag suppresses ding + Discord + IFTTT for
+          // chat messages where the sender is this session's character.
+          session.suppressSelfAlerts = !!data.suppressSelfAlerts;
 
           // IFTTT key is per-user (single Maker key, used across channels).
           // Validate shape: alphanumeric + underscore + hyphen, 10-64 chars. Empty clears it.

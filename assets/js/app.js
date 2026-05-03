@@ -741,7 +741,8 @@ class WMTClient {
     sendDiscordPrefsToServer() {
         const charName = window.WMT_CONFIG?.characterName || 'WMT Client';
         const iftttKey = (window.WMT_CONFIG?.isAdmin && this.preferences?.iftttKey) || '';
-        this.connection.setDiscordPrefs(this.channelPrefs, charName, iftttKey);
+        const suppressSelfAlerts = !!this.preferences?.suppressSelfAlerts;
+        this.connection.setDiscordPrefs(this.channelPrefs, charName, iftttKey, suppressSelfAlerts);
     }
 
     setupConnection() {
@@ -1221,7 +1222,9 @@ class WMTClient {
             case 'mip_chat':
                 // Handle MIP chat/tell messages
                 if (data.message) {
-                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound });
+                    // suppressAlert: server already evaluated the "no alerts from self"
+                    // preference + sender match. Outbound tells fall back to noSound too.
+                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound || data.suppressAlert });
                 }
                 break;
 
@@ -5816,6 +5819,14 @@ class WMTClient {
                     <input type="range" id="pref-notification-volume" min="0" max="100" value="${prefs.notificationVolume ?? 30}"
                         style="width: 100%; cursor: pointer;">
                 </div>
+                <div class="settings-toggle">
+                    <span class="settings-toggle-label">No alerts from messages I send myself</span>
+                    <label class="settings-toggle-switch">
+                        <input type="checkbox" id="pref-suppress-self-alerts" ${prefs.suppressSelfAlerts ? 'checked' : ''}>
+                        <span class="settings-toggle-slider"></span>
+                    </label>
+                </div>
+                <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">When on, ChatMon won't ding or send a Discord/IFTTT notification for chat messages where you are the speaker. The messages still appear in the chat panel.</p>
             </div>
 
             <div class="settings-section">
@@ -6143,6 +6154,7 @@ class WMTClient {
             debugIf: document.getElementById('pref-debug-if')?.checked ?? this.preferences.debugIf ?? false,
             notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
             notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30,
+            suppressSelfAlerts: document.getElementById('pref-suppress-self-alerts')?.checked ?? this.preferences.suppressSelfAlerts ?? false,
             startupScript: document.getElementById('pref-startup-script')?.value || this.preferences.startupScript || '',
             packetPatch: this.preferences.packetPatch ?? 1.0
         };
@@ -6164,6 +6176,9 @@ class WMTClient {
             }
 
             this.applyPreferences();
+            // Re-sync server-side notification prefs so the suppressSelfAlerts toggle
+            // takes effect immediately without requiring a reconnect.
+            this.sendDiscordPrefsToServer();
 
             // Visual feedback on button
             if (saveBtn) {

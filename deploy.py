@@ -255,6 +255,7 @@ def run_test_suites():
         ('DelayAnon',    'test_delay_anon.js'),
         ('EntityGuard',  'test_entity_guard.js'),
         ('BlockTrigger', 'test_block_trigger.js'),
+        ('SelfAlerts',   'test_self_alerts.js'),
     ]
 
     total_passed = 0
