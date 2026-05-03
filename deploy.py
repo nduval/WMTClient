@@ -249,10 +249,11 @@ def run_test_suites():
     KNOWN_FAILURES = 0
 
     suites = [
-        ('Pipeline',  'test_wmt_client.js'),
-        ('Aliases',   'test_alias_compare.js'),
-        ('Triggers',  'test_trigger_compare.js'),
-        ('DelayAnon', 'test_delay_anon.js'),
+        ('Pipeline',     'test_wmt_client.js'),
+        ('Aliases',      'test_alias_compare.js'),
+        ('Triggers',     'test_trigger_compare.js'),
+        ('DelayAnon',    'test_delay_anon.js'),
+        ('EntityGuard',  'test_entity_guard.js'),
     ]
 
     total_passed = 0

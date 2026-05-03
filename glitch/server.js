@@ -53,6 +53,40 @@ try {
       PRIMARY KEY (character_id, alias_id)
     )
   `);
+  // Generic per-table stale-write guard. Same purpose as alias_guard but
+  // keyed by table_name so triggers, tickers, classes, etc. share one
+  // mechanism. previous_row / current_row are full-row JSON blobs; per-table
+  // GUARD_EXTRACTORS pull the comparison key from them. current_row=null
+  // marks a tombstone (admin deleted; client must observe deletion).
+  wmtDb.exec(`
+    CREATE TABLE IF NOT EXISTS entity_guard (
+      character_id TEXT NOT NULL,
+      table_name   TEXT NOT NULL,
+      item_id      TEXT NOT NULL,
+      previous_row TEXT,
+      current_row  TEXT,
+      ts           INTEGER NOT NULL,
+      PRIMARY KEY (character_id, table_name, item_id)
+    )
+  `);
+  // One-time idempotent migration: copy any live alias_guard rows into
+  // entity_guard with table_name='aliases'. INSERT OR IGNORE means running
+  // this twice is safe. Aliases continue using the original alias_guard
+  // path for now; this populates entity_guard so future unification is a
+  // routing change, not a data move.
+  try {
+    wmtDb.exec(`
+      INSERT OR IGNORE INTO entity_guard
+        (character_id, table_name, item_id, previous_row, current_row, ts)
+      SELECT character_id, 'aliases', alias_id,
+             CASE WHEN previous IS NULL THEN NULL ELSE json_object('replacement', previous) END,
+             CASE WHEN current  IS NULL THEN NULL ELSE json_object('replacement', current)  END,
+             ts
+        FROM alias_guard
+    `);
+  } catch (e) {
+    console.error('entity_guard migration from alias_guard failed:', e.message);
+  }
   console.log('SQLite database connected:', DB_PATH);
 } catch (e) {
   console.error('SQLite database failed to open:', e.message);
@@ -513,6 +547,180 @@ function clearAliasGuard(characterId, aliasId) {
     }
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// entity_guard — generic per-table version of alias_guard. Used for
+// triggers / tickers / classes (and future tables). Aliases still use
+// alias_guard above; the entity_guard table holds a copy of those rows
+// for future unification but the alias bulk_replace path is unchanged.
+//
+// Shape: Map<characterId, Map<tableName, Map<itemId, { previousRow, currentRow, ts }>>>
+//   previousRow / currentRow are full row objects (or null for tombstone).
+//   Comparison happens via GUARD_EXTRACTORS — each table picks the fields
+//   that meaningfully define "the row" for clobber-detection.
+//
+// Semantics on bulk_replace:
+//   incoming row's extracted key === extract(currentRow)  → client caught up; clear
+//   incoming row's extracted key === extract(previousRow) → client stale; swap to currentRow
+//   incoming row missing entirely AND currentRow non-null → client trying to delete; re-insert currentRow
+//   incoming row missing entirely AND currentRow IS null  → tombstone; client confirmed deletion; clear
+//   anything else                                          → deliberate edit; accept and clear
+const entityGuards = new Map();
+
+const GUARD_EXTRACTORS = {
+  aliases:  (row) => row && typeof row === 'object' ? (row.replacement || '') : '',
+  triggers: (row) => row && typeof row === 'object' ? JSON.stringify({
+    pattern:   row.pattern || '',
+    matchType: row.matchType || row.match_type || '',
+    actions:   row.actions || []
+  }) : '',
+  tickers:  (row) => row && typeof row === 'object' ? JSON.stringify({
+    command:  row.command || '',
+    interval: row.interval || row.interval_seconds || 0
+  }) : '',
+  classes:  (row) => row && typeof row === 'object' ? JSON.stringify({
+    name:    row.name || '',
+    enabled: !!(row.enabled === undefined ? true : row.enabled)
+  }) : '',
+};
+
+if (wmtDb) {
+  try {
+    const rows = wmtDb.prepare('SELECT character_id, table_name, item_id, previous_row, current_row, ts FROM entity_guard').all();
+    for (const r of rows) {
+      let perChar = entityGuards.get(r.character_id);
+      if (!perChar) { perChar = new Map(); entityGuards.set(r.character_id, perChar); }
+      let perTable = perChar.get(r.table_name);
+      if (!perTable) { perTable = new Map(); perChar.set(r.table_name, perTable); }
+      let prev = null; let cur = null;
+      try { if (r.previous_row) prev = JSON.parse(r.previous_row); } catch {}
+      try { if (r.current_row)  cur  = JSON.parse(r.current_row);  } catch {}
+      perTable.set(r.item_id, { previousRow: prev, currentRow: cur, ts: r.ts });
+    }
+    if (rows.length > 0) console.log(`entity_guard: loaded ${rows.length} live entries from DB`);
+  } catch (e) {
+    console.error('entity_guard load failed:', e.message);
+  }
+}
+
+function markGuarded(table, charId, itemId, previousRow, currentRow) {
+  if (!charId || !itemId) return;
+  const ts = Date.now();
+  let perChar = entityGuards.get(charId);
+  if (!perChar) { perChar = new Map(); entityGuards.set(charId, perChar); }
+  let perTable = perChar.get(table);
+  if (!perTable) { perTable = new Map(); perChar.set(table, perTable); }
+  perTable.set(itemId, { previousRow: previousRow || null, currentRow: currentRow || null, ts });
+  if (wmtDb) {
+    try {
+      wmtDb.prepare(
+        'INSERT OR REPLACE INTO entity_guard (character_id, table_name, item_id, previous_row, current_row, ts) VALUES (?,?,?,?,?,?)'
+      ).run(
+        charId, table, itemId,
+        previousRow ? JSON.stringify(previousRow) : null,
+        currentRow  ? JSON.stringify(currentRow)  : null,
+        ts
+      );
+    } catch (e) {
+      console.error(`entity_guard upsert failed (${table}):`, e.message);
+    }
+  }
+}
+
+function clearEntityGuard(table, charId, itemId) {
+  const perTable = entityGuards.get(charId)?.get(table);
+  if (perTable) perTable.delete(itemId);
+  if (wmtDb) {
+    try {
+      wmtDb.prepare('DELETE FROM entity_guard WHERE character_id=? AND table_name=? AND item_id=?').run(charId, table, itemId);
+    } catch (e) {
+      console.error(`entity_guard clear failed (${table}):`, e.message);
+    }
+  }
+}
+
+function applyGuard(table, charId, incomingList) {
+  const perTable = entityGuards.get(charId)?.get(table);
+  if (!perTable || perTable.size === 0) {
+    return { list: incomingList, overridden: 0, cleared: 0, reinserted: 0, tombstoned: 0 };
+  }
+  const extractor = GUARD_EXTRACTORS[table];
+  if (!extractor) return { list: incomingList, overridden: 0, cleared: 0, reinserted: 0, tombstoned: 0 };
+
+  let overridden = 0, cleared = 0, reinserted = 0, tombstoned = 0;
+  // Build map of incoming by id (preserve original order via separate array)
+  const incomingById = new Map();
+  for (const item of incomingList) {
+    if (item && item.id) incomingById.set(item.id, item);
+  }
+
+  // Walk guarded entries (snapshot keys to allow concurrent mutation during clearing)
+  const guardedIds = Array.from(perTable.keys());
+  for (const itemId of guardedIds) {
+    const guard = perTable.get(itemId);
+    if (!guard) continue;
+    const { previousRow, currentRow } = guard;
+    const incoming = incomingById.get(itemId);
+
+    if (currentRow === null) {
+      // Tombstone — admin deleted this row
+      if (!incoming) {
+        // Client also has it gone — observation matches; clear guard
+        clearEntityGuard(table, charId, itemId);
+        cleared++;
+      } else {
+        // Client still has it — drop it from the resulting list
+        incomingById.delete(itemId);
+        tombstoned++;
+      }
+      continue;
+    }
+
+    if (!incoming) {
+      // Row missing from client list but admin's currentRow says it should exist.
+      // Re-insert the canonical current row to preserve admin intent.
+      incomingById.set(itemId, { id: itemId, ...currentRow });
+      reinserted++;
+      continue;
+    }
+
+    const incomingKey = extractor(incoming);
+    const currentKey  = extractor(currentRow);
+    const previousKey = previousRow ? extractor(previousRow) : null;
+
+    if (incomingKey === currentKey) {
+      // Client caught up to current — clear guard
+      clearEntityGuard(table, charId, itemId);
+      cleared++;
+    } else if (previousKey !== null && incomingKey === previousKey && currentKey !== previousKey) {
+      // Client still has stale value — substitute the authoritative current row
+      incomingById.set(itemId, { ...incoming, ...currentRow, id: itemId });
+      overridden++;
+    } else {
+      // Client has a different value (deliberate edit, or unrelated change) — accept and clear
+      clearEntityGuard(table, charId, itemId);
+      cleared++;
+    }
+  }
+
+  // Rebuild list preserving original incoming order; drop tombstoned ids; append re-inserted
+  const seenIds = new Set();
+  const out = [];
+  for (const item of incomingList) {
+    if (!item || !item.id) { out.push(item); continue; }
+    if (seenIds.has(item.id)) continue;
+    seenIds.add(item.id);
+    const final = incomingById.get(item.id);
+    if (final !== undefined) out.push(final);
+    // (else: tombstoned, drop)
+  }
+  for (const [id, item] of incomingById) {
+    if (!seenIds.has(id)) out.push(item);
+  }
+
+  return { list: out, overridden, cleared, reinserted, tombstoned };
+}
+// ────────────────────────────────────────────────────────────────────────
 
 function applyAliasServerModifiedGuard(characterId, incoming) {
   const perChar = serverModifiedAliases.get(characterId);
@@ -3506,6 +3714,33 @@ const server = http.createServer(async (req, res) => {
             JSON.stringify(before), JSON.stringify({ id: triggerId, ...next }), 'admin_api');
         })();
 
+        // Stale-write guard: record the before/after row so a subsequent
+        // bulk_replace from the browser carrying the OLD trigger content
+        // can't undo this admin edit. The guard clears once the browser
+        // catches up (observation-based, not time-based).
+        markGuarded('triggers', characterId, triggerId,
+          {
+            pattern: before.pattern,
+            matchType: before.match_type,
+            actions: (() => { try { return JSON.parse(before.actions); } catch { return []; } })(),
+            priority: before.priority,
+            enabled: before.enabled === 1,
+            class: before.class_id,
+            name: before.name,
+            oneshot: before.oneshot === 1,
+          },
+          {
+            pattern: next.pattern,
+            matchType: next.match_type,
+            actions: (() => { try { return JSON.parse(next.actions); } catch { return []; } })(),
+            priority: next.priority,
+            enabled: next.enabled === 1,
+            class: next.class_id,
+            name: next.name,
+            oneshot: next.oneshot === 1,
+          }
+        );
+
         // Update in-memory session.triggers for live sessions
         let livePushed = 0;
         for (const [, session] of sessions) {
@@ -3577,6 +3812,13 @@ const server = http.createServer(async (req, res) => {
             JSON.stringify({ id: classId, name: nextName, enabled: nextEnabled === 1 }),
             'admin_api');
         })();
+
+        // Stale-write guard for the class
+        markGuarded('classes', characterId, classId,
+          { name: before.name, enabled: before.enabled === 1 },
+          { name: nextName,    enabled: nextEnabled === 1   }
+        );
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, classId, characterId }));
       } catch (e) {
@@ -3630,6 +3872,13 @@ const server = http.createServer(async (req, res) => {
             JSON.stringify({ id: tickerId, ...next }),
             'admin_api');
         })();
+
+        // Stale-write guard for the ticker
+        markGuarded('tickers', characterId, tickerId,
+          { command: before.command, interval: before.interval_seconds, name: before.name, enabled: before.enabled === 1, class: before.class_id },
+          { command: next.command,   interval: next.interval_seconds,   name: next.name,   enabled: next.enabled === 1,   class: next.class_id   }
+        );
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, tickerId, characterId }));
       } catch (e) {
@@ -3802,7 +4051,7 @@ const server = http.createServer(async (req, res) => {
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
-        const { characterId, triggers } = data;
+        let { characterId, triggers } = data;
         if (!characterId || !Array.isArray(triggers)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'characterId and triggers[] required' }));
@@ -3813,6 +4062,12 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ success: false, error: 'DB not available' }));
           return;
         }
+        // Stale-write guard for PHP-fed bulk pushes too — same DB, same risk
+        const guardResult = applyGuard('triggers', characterId, triggers);
+        if (guardResult.overridden || guardResult.cleared || guardResult.reinserted || guardResult.tombstoned) {
+          console.log(`TRIGGER_GUARD(php_bulk) char=${characterId} overrode=${guardResult.overridden} cleared=${guardResult.cleared} reinserted=${guardResult.reinserted} tombstoned=${guardResult.tombstoned}`);
+        }
+        triggers = guardResult.list;
         wmtDb.transaction(() => {
           const oldRows = dbStmts.getTriggers.all(characterId);
           const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
@@ -3849,7 +4104,7 @@ const server = http.createServer(async (req, res) => {
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
-        const { characterId, tickers } = data;
+        let { characterId, tickers } = data;
         if (!characterId || !Array.isArray(tickers)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'characterId and tickers[] required' }));
@@ -3860,6 +4115,11 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ success: false, error: 'DB not available' }));
           return;
         }
+        const tkGuardResult = applyGuard('tickers', characterId, tickers);
+        if (tkGuardResult.overridden || tkGuardResult.cleared || tkGuardResult.reinserted || tkGuardResult.tombstoned) {
+          console.log(`TICKER_GUARD(php_bulk) char=${characterId} overrode=${tkGuardResult.overridden} cleared=${tkGuardResult.cleared} reinserted=${tkGuardResult.reinserted} tombstoned=${tkGuardResult.tombstoned}`);
+        }
+        tickers = tkGuardResult.list;
         wmtDb.transaction(() => {
           const oldRows = dbStmts.getTickers.all(characterId);
           const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
@@ -3895,7 +4155,7 @@ const server = http.createServer(async (req, res) => {
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
-        const { characterId, classes } = data;
+        let { characterId, classes } = data;
         if (!characterId || !Array.isArray(classes)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'characterId and classes[] required' }));
@@ -3906,6 +4166,11 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ success: false, error: 'DB not available' }));
           return;
         }
+        const clGuardResult = applyGuard('classes', characterId, classes);
+        if (clGuardResult.overridden || clGuardResult.cleared || clGuardResult.reinserted || clGuardResult.tombstoned) {
+          console.log(`CLASS_GUARD(php_bulk) char=${characterId} overrode=${clGuardResult.overridden} cleared=${clGuardResult.cleared} reinserted=${clGuardResult.reinserted} tombstoned=${clGuardResult.tombstoned}`);
+        }
+        classes = clGuardResult.list;
         wmtDb.transaction(() => {
           const oldRows = dbStmts.getClasses.all(characterId);
           const oldData = oldRows.length > 0 ? JSON.stringify(oldRows) : null;
@@ -6539,7 +6804,7 @@ wss.on('connection', (ws, req) => {
           // ReDoS protection: drop triggers with pathologically long patterns.
           // 500 chars is far beyond any reasonable trigger and caps the worst case
           // for regex compilation/matching cost.
-          const incomingTriggers = (data.triggers || []).filter(t => {
+          let incomingTriggers = (data.triggers || []).filter(t => {
             if (t && typeof t.pattern === 'string' && t.pattern.length > 500) {
               console.warn(`DROPPED_LONG_TRIGGER user=${session.userId} char=${session.characterName} length=${t.pattern.length}`);
               return false;
@@ -6555,6 +6820,17 @@ wss.on('connection', (ws, req) => {
             }
             return t;
           });
+          // Stale-write guard: if /admin/trigger recently patched a trigger
+          // and this bulk_replace from the browser carries the old content,
+          // swap in the authoritative current value. See entity_guard above.
+          if (session.characterId) {
+            const guardResult = applyGuard('triggers', session.characterId, incomingTriggers);
+            if (guardResult.overridden || guardResult.cleared || guardResult.reinserted || guardResult.tombstoned) {
+              console.log(`TRIGGER_GUARD char=${session.characterId} overrode=${guardResult.overridden} cleared=${guardResult.cleared} reinserted=${guardResult.reinserted} tombstoned=${guardResult.tombstoned}`);
+              writeSessionLog(session, 'trigger_guard', { overridden: guardResult.overridden, cleared: guardResult.cleared, reinserted: guardResult.reinserted, tombstoned: guardResult.tombstoned });
+            }
+            incomingTriggers = guardResult.list;
+          }
           session.triggers = incomingTriggers;
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
           // DB dual-write (gated by user during rollout)
@@ -6615,11 +6891,22 @@ wss.on('connection', (ws, req) => {
 
         case 'set_tickers':
           // Update tickers and restart intervals
-          updateSessionTickers(session, data.tickers || []);
-          writeSessionLog(session, 'settings', { what: 'tickers', count: (data.tickers || []).length });
-          // DB dual-write
-          if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
-            dbSaveTickers(session.characterId, data.tickers || []);
+          {
+            let incomingTickers = data.tickers || [];
+            // Stale-write guard for /admin/ticker edits
+            if (session.characterId) {
+              const guardResult = applyGuard('tickers', session.characterId, incomingTickers);
+              if (guardResult.overridden || guardResult.cleared || guardResult.reinserted || guardResult.tombstoned) {
+                console.log(`TICKER_GUARD char=${session.characterId} overrode=${guardResult.overridden} cleared=${guardResult.cleared} reinserted=${guardResult.reinserted} tombstoned=${guardResult.tombstoned}`);
+                writeSessionLog(session, 'ticker_guard', { overridden: guardResult.overridden, cleared: guardResult.cleared, reinserted: guardResult.reinserted, tombstoned: guardResult.tombstoned });
+              }
+              incomingTickers = guardResult.list;
+            }
+            updateSessionTickers(session, incomingTickers);
+            writeSessionLog(session, 'settings', { what: 'tickers', count: incomingTickers.length });
+            if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
+              dbSaveTickers(session.characterId, incomingTickers);
+            }
           }
           break;
 
