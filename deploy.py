@@ -262,8 +262,11 @@ def run_test_suites():
 
     for label, script in suites:
         try:
+            # sudo -n: tests like test_entity_guard.js need to read /opt/wmt/wmt.db
+            # which is root-owned. -n fails fast if sudo would prompt (NOPASSWD
+            # is configured for ubuntu on the sandbox).
             result = subprocess.run(
-                f'{ssh_cmd} "cd /opt/wmt/tests && node {script} ws://localhost:3000"',
+                f'{ssh_cmd} "cd /opt/wmt/tests && sudo -n node {script} ws://localhost:3000"',
                 shell=True, capture_output=True, text=True, timeout=60
             )
         except subprocess.TimeoutExpired:
