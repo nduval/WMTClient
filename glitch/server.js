@@ -87,6 +87,26 @@ try {
   } catch (e) {
     console.error('entity_guard migration from alias_guard failed:', e.message);
   }
+
+  // Block-trigger schema additions: idempotent ADD COLUMN guarded by
+  // PRAGMA table_info check (SQLite 3.35 lacks "IF NOT EXISTS" for columns).
+  // When both block_start and block_end are non-null, the trigger buffers
+  // multiple lines into one block and runs actions on the joined text.
+  // Designed for cases like ring-identify where MUD wrap splits the
+  // semantically-single output across packets.
+  try {
+    const triggerCols = new Set(wmtDb.prepare('PRAGMA table_info(triggers)').all().map(c => c.name));
+    if (!triggerCols.has('block_start')) {
+      wmtDb.exec('ALTER TABLE triggers ADD COLUMN block_start TEXT');
+      console.log('triggers: added block_start column');
+    }
+    if (!triggerCols.has('block_end')) {
+      wmtDb.exec('ALTER TABLE triggers ADD COLUMN block_end TEXT');
+      console.log('triggers: added block_end column');
+    }
+  } catch (e) {
+    console.error('block_trigger column migration failed:', e.message);
+  }
   console.log('SQLite database connected:', DB_PATH);
 } catch (e) {
   console.error('SQLite database failed to open:', e.message);
@@ -127,8 +147,8 @@ const dbStmts = {};
 if (wmtDb) {
   dbStmts.deleteTriggers = wmtDb.prepare('DELETE FROM triggers WHERE character_id = ?');
   dbStmts.insertTrigger = wmtDb.prepare(`
-    INSERT INTO triggers (id, character_id, pattern, match_type, actions, priority, enabled, class_id, name, oneshot, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO triggers (id, character_id, pattern, match_type, actions, priority, enabled, class_id, name, oneshot, block_start, block_end, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `);
   dbStmts.deleteAliases = wmtDb.prepare('DELETE FROM aliases WHERE character_id = ?');
   dbStmts.insertAlias = wmtDb.prepare(`
@@ -194,7 +214,9 @@ function dbLoadTriggers(characterId) {
       enabled: r.enabled === 1,
       class: r.class_id,
       name: r.name,
-      oneshot: r.oneshot === 1
+      oneshot: r.oneshot === 1,
+      blockStart: r.block_start || null,
+      blockEnd: r.block_end || null
     }));
   } catch (e) {
     console.error('DB trigger load failed:', e.message);
@@ -322,7 +344,9 @@ function dbSaveTriggers(characterId, triggers) {
           t.enabled !== false ? 1 : 0,
           t.class || null,
           t.name || null,
-          t.oneshot ? 1 : 0
+          t.oneshot ? 1 : 0,
+          t.blockStart || null,
+          t.blockEnd || null
         );
       }
 
@@ -3705,11 +3729,13 @@ const server = http.createServer(async (req, res) => {
           class_id: data.class !== undefined ? (data.class || null) : before.class_id,
           name: data.name !== undefined ? data.name : before.name,
           oneshot: data.oneshot !== undefined ? (data.oneshot ? 1 : 0) : before.oneshot,
+          block_start: data.blockStart !== undefined ? (data.blockStart || null) : (before.block_start || null),
+          block_end:   data.blockEnd   !== undefined ? (data.blockEnd   || null) : (before.block_end   || null),
         };
         const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
         wmtDb.transaction(() => {
-          wmtDb.prepare(`UPDATE triggers SET pattern=?, match_type=?, actions=?, priority=?, enabled=?, class_id=?, name=?, oneshot=?, updated_at=? WHERE id=? AND character_id=?`)
-            .run(next.pattern, next.match_type, next.actions, next.priority, next.enabled, next.class_id, next.name, next.oneshot, now, triggerId, characterId);
+          wmtDb.prepare(`UPDATE triggers SET pattern=?, match_type=?, actions=?, priority=?, enabled=?, class_id=?, name=?, oneshot=?, block_start=?, block_end=?, updated_at=? WHERE id=? AND character_id=?`)
+            .run(next.pattern, next.match_type, next.actions, next.priority, next.enabled, next.class_id, next.name, next.oneshot, next.block_start, next.block_end, now, triggerId, characterId);
           dbLogChange(characterId, 'triggers', 'update',
             JSON.stringify(before), JSON.stringify({ id: triggerId, ...next }), 'admin_api');
         })();
@@ -3728,6 +3754,8 @@ const server = http.createServer(async (req, res) => {
             class: before.class_id,
             name: before.name,
             oneshot: before.oneshot === 1,
+            blockStart: before.block_start || null,
+            blockEnd:   before.block_end   || null,
           },
           {
             pattern: next.pattern,
@@ -3738,6 +3766,8 @@ const server = http.createServer(async (req, res) => {
             class: next.class_id,
             name: next.name,
             oneshot: next.oneshot === 1,
+            blockStart: next.block_start,
+            blockEnd:   next.block_end,
           }
         );
 
@@ -3758,6 +3788,8 @@ const server = http.createServer(async (req, res) => {
                 class: next.class_id,
                 name: next.name,
                 oneshot: next.oneshot === 1,
+                blockStart: next.block_start,
+                blockEnd:   next.block_end,
               };
               session.triggers = arr;
               livePushed++;
@@ -4078,7 +4110,8 @@ const server = http.createServer(async (req, res) => {
               t.pattern || '', t.matchType || 'tintin',
               JSON.stringify(t.actions || []), t.priority ?? 5,
               t.enabled !== false ? 1 : 0, t.class || null,
-              t.name || null, t.oneshot ? 1 : 0
+              t.name || null, t.oneshot ? 1 : 0,
+              t.blockStart || null, t.blockEnd || null
             );
           }
           dbLogChange(characterId, 'triggers', 'bulk_replace', oldData, JSON.stringify(triggers), 'php_save');
@@ -5636,6 +5669,139 @@ function flushPendingBab(session, channel) {
 /**
  * Process a single line from MUD
  */
+// ────────────────────────────────────────────────────────────────────────
+// Block triggers — buffer multi-line MUD output that's semantically one
+// thing (e.g. ring identify) so triggers can match patterns spanning
+// MUD-side line wraps. A trigger with both `blockStart` and `blockEnd`
+// regexes becomes a block trigger: its `actions` run on the joined buffer
+// when the end pattern is observed, then the (possibly modified) buffered
+// lines are flushed to the client. Lines outside any block flow normally.
+//
+// Per-session state lives in session.activeBlocks: Map<triggerId, {lines, startedAt}>.
+// Stale buffers (no end within BLOCK_TIMEOUT_MS) flush as-is on the next
+// line arrival, so memory can't grow unbounded.
+const BLOCK_TIMEOUT_MS = 5000;
+
+function compileBlockRegex(pattern, useTinTin) {
+  if (!pattern) return null;
+  try {
+    if (useTinTin) {
+      // ~ prefix: strip and treat the rest as raw PCRE (matches the
+      // existing ~ semantics in tinTinToRegex / processTriggers).
+      if (pattern.startsWith('~')) {
+        let rx = pattern.substring(1);
+        // {} → () for capture groups, same as elsewhere
+        rx = rx.replace(/\{/g, '(').replace(/\}/g, ')');
+        return new RegExp(rx);
+      }
+      return new RegExp(tinTinToRegex(pattern));
+    }
+    return new RegExp(pattern);
+  } catch (e) {
+    console.warn(`block regex compile failed: ${pattern} — ${e.message}`);
+    return null;
+  }
+}
+
+function flushBlockTriggerBuffer(session, trigger, buffered) {
+  // Apply each highlight action to the joined block. Other action types
+  // (command, gag, etc.) are intentionally NOT applied here — block
+  // triggers in this iteration are scoped to highlight only. Adding
+  // command/gag for blocks would require deciding where the side-effect
+  // happens (per-line? once for whole block?) and isn't needed for the
+  // ring-identify case driving this build.
+  let joined = buffered.join('\n');
+  const matchRegex = compileBlockRegex(trigger.pattern, true);
+
+  if (matchRegex) {
+    for (const action of (trigger.actions || [])) {
+      if (action.type !== 'highlight') continue;
+      const fgColor = action.fgColor || action.color || null;
+      const bgColor = action.bgColor || null;
+      const blink = action.blink || false;
+      const underline = action.underline || false;
+      let styleStr = '';
+      if (fgColor) styleStr += `color:${fgColor};`;
+      if (bgColor) styleStr += `background:${bgColor};`;
+      if (underline) styleStr += `text-decoration:underline;`;
+      if (blink) styleStr += `animation:blink 1s step-end infinite;`;
+      if (!styleStr) continue;
+
+      // Wrap each match. If the match contains a newline (because the
+      // capture spans the joined block's line break), split the wrap so
+      // each output line carries its own balanced <hl>...</hl> — otherwise
+      // a tag opened on line N and closed on line N+1 produces broken
+      // markup once the joined text is split back into separate `mud`
+      // messages.
+      const globalRegex = new RegExp(matchRegex.source, matchRegex.flags.includes('g') ? matchRegex.flags : matchRegex.flags + 'g');
+      joined = joined.replace(globalRegex, (match) => {
+        if (match.includes('\n')) {
+          return match.split('\n')
+            .map(part => part ? `<hl style="${styleStr}">${part}</hl>` : '')
+            .join('\n');
+        }
+        return `<hl style="${styleStr}">${match}</hl>`;
+      });
+    }
+  }
+
+  const finalLines = joined.split('\n');
+  for (const ln of finalLines) {
+    sendToClient(session, { type: 'mud', line: ln });
+  }
+}
+
+// Returns true if the line was buffered (caller should NOT also send to client).
+// Returns false if no block trigger consumed the line (caller sends as normal).
+function processBlockTriggers(session, line) {
+  if (!session.triggers || session.triggers.length === 0) return false;
+  if (!session.activeBlocks) session.activeBlocks = new Map();
+
+  // Force-flush any stale buffers before processing (timeout safety).
+  const now = Date.now();
+  for (const [tid, block] of Array.from(session.activeBlocks.entries())) {
+    if (now - block.startedAt > BLOCK_TIMEOUT_MS) {
+      // Flush as-is, no actions applied (we never saw the end marker).
+      for (const ln of block.lines) {
+        sendToClient(session, { type: 'mud', line: ln });
+      }
+      session.activeBlocks.delete(tid);
+    }
+  }
+
+  let consumed = false;
+  for (const trigger of session.triggers) {
+    if (!trigger || trigger.enabled === false) continue;
+    if (!trigger.blockStart || !trigger.blockEnd) continue;
+
+    const startRx = compileBlockRegex(trigger.blockStart, true);
+    const endRx   = compileBlockRegex(trigger.blockEnd,   true);
+    if (!startRx || !endRx) continue;
+
+    const block = session.activeBlocks.get(trigger.id);
+    if (block) {
+      // Active — append and check for end.
+      block.lines.push(line);
+      consumed = true;
+      if (endRx.test(line)) {
+        flushBlockTriggerBuffer(session, trigger, block.lines);
+        session.activeBlocks.delete(trigger.id);
+      }
+    } else if (startRx.test(line)) {
+      // Activate. If end matches the same line, flush immediately (1-line block).
+      if (endRx.test(line)) {
+        flushBlockTriggerBuffer(session, trigger, [line]);
+      } else {
+        session.activeBlocks.set(trigger.id, { lines: [line], startedAt: now });
+      }
+      consumed = true;
+    }
+  }
+
+  return consumed;
+}
+// ────────────────────────────────────────────────────────────────────────
+
 function processLine(session, line) {
   // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
   line = line.replace(/\r/g, '');
@@ -5910,12 +6076,18 @@ function processLine(session, line) {
   }
 
   if (!processed.gag) {
-    sendToClient(session, {
-      type: 'mud',
-      line: processed.line,
-      highlight: processed.highlight,
-      sound: processed.sound
-    });
+    // Route through block-trigger buffering first. If a block trigger
+    // is active or starts/ends here, it owns the line and will flush
+    // when ready (or on timeout). Otherwise send normally.
+    const buffered = processBlockTriggers(session, processed.line);
+    if (!buffered) {
+      sendToClient(session, {
+        type: 'mud',
+        line: processed.line,
+        highlight: processed.highlight,
+        sound: processed.sound
+      });
+    }
   }
 
   // Remove oneshot triggers that fired
@@ -7826,6 +7998,10 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
 
   for (const trigger of sorted) {
     if (!trigger.enabled) continue;
+    // Block triggers (have both blockStart and blockEnd) are handled
+    // by processBlockTriggers, not the per-line pipeline. Skip them
+    // here so their actions don't fire on each individual line.
+    if (trigger.blockStart && trigger.blockEnd) continue;
 
     // Check for trigger loop if we have a tracker
     if (loopTracker && trigger.id) {

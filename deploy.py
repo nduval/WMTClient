@@ -254,6 +254,7 @@ def run_test_suites():
         ('Triggers',     'test_trigger_compare.js'),
         ('DelayAnon',    'test_delay_anon.js'),
         ('EntityGuard',  'test_entity_guard.js'),
+        ('BlockTrigger', 'test_block_trigger.js'),
     ]
 
     total_passed = 0
