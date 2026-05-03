@@ -6475,7 +6475,15 @@ wss.on('connection', (ws, req) => {
               // the MUD connection stays alive on the bridge. The audit log
               // tracks MUD-level player activity (login / disconnect), not
               // browser session machinery. See journalctl for SESSION_REKEY.
-              oldSession._bridgeModeInit = false;  // Clear stale flag
+              //
+              // Only clear _bridgeModeInit when MUD is actually alive — if the
+              // bridge has no live socket (oldMudConnected=false), the next MUD
+              // connect will be FRESH and we need session_new dispatched so the
+              // browser auto-logs in. Beowulf hit this on 2026-05-03 deploy and
+              // sat at the name prompt because rekey clobbered the flag.
+              if (oldMudConnected) {
+                oldSession._bridgeModeInit = false;  // Clear stale flag
+              }
               oldSession._pendingBridgeResume = false;
               if (oldSession.timeoutHandle) {
                 clearTimeout(oldSession.timeoutHandle);
@@ -6588,7 +6596,15 @@ wss.on('connection', (ws, req) => {
             // (login when a new MUD socket opens, disconnect when one
             // actually closes). See journalctl SESSION_RESUME for the
             // browser-side reattach event.
-            session._bridgeModeInit = false;  // Clear stale flag — prevents duplicate session_new
+            //
+            // Only clear _bridgeModeInit when MUD is actually alive — same
+            // reasoning as the rekey path above. If the bridge socket is dead,
+            // the next MUD connect is fresh and needs session_new for browser
+            // auto-login.
+            const sessionMudAlive = session.mudSocket && !session.mudSocket.destroyed;
+            if (sessionMudAlive) {
+              session._bridgeModeInit = false;  // Clear stale flag — prevents duplicate session_new
+            }
             session._pendingBridgeResume = false;
             if (session.timeoutHandle) {
               clearTimeout(session.timeoutHandle);
