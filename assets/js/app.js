@@ -2151,6 +2151,11 @@ class WMTClient {
         // Append to chat window
         const chatOutput = document.getElementById('chat-output');
         if (chatOutput) {
+            // Sticky scroll: only auto-scroll if user was already near the bottom.
+            // If they scrolled up to read history, don't yank them back down.
+            // Threshold of 50px tolerates typical line-height drift.
+            const wasNearBottom = (chatOutput.scrollHeight - chatOutput.scrollTop - chatOutput.clientHeight) < 50;
+
             const line = document.createElement('div');
             line.className = `chat-line ${chatType}`;
             line.dataset.channel = channelKey;
@@ -2162,8 +2167,8 @@ class WMTClient {
             }
             chatOutput.appendChild(line);
 
-            // Auto-scroll to bottom (only if the line is visible)
-            if (!line.classList.contains('chat-filtered-hidden')) {
+            // Auto-scroll to bottom (only if the line is visible AND user was following)
+            if (wasNearBottom && !line.classList.contains('chat-filtered-hidden')) {
                 chatOutput.scrollTop = chatOutput.scrollHeight;
             }
         }
@@ -2172,6 +2177,8 @@ class WMTClient {
         if (this.chatPopoutWindow && !this.chatPopoutWindow.closed) {
             const popoutOutput = this.chatPopoutWindow.document.getElementById('chat-output');
             if (popoutOutput) {
+                const wasNearBottom = (popoutOutput.scrollHeight - popoutOutput.scrollTop - popoutOutput.clientHeight) < 50;
+
                 const line = this.chatPopoutWindow.document.createElement('div');
                 line.className = `chat-line ${chatType}`;
                 line.dataset.channel = channelKey;
@@ -2181,7 +2188,7 @@ class WMTClient {
                     line.classList.add('chat-filtered-hidden');
                 }
                 popoutOutput.appendChild(line);
-                if (!line.classList.contains('chat-filtered-hidden')) {
+                if (wasNearBottom && !line.classList.contains('chat-filtered-hidden')) {
                     popoutOutput.scrollTop = popoutOutput.scrollHeight;
                 }
             }
