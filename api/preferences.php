@@ -356,6 +356,11 @@ switch ($action) {
             $validated['notificationVolume'] = max(0, min(100, $volume));
         }
 
+        // Suppress alerts for self-authored ChatMon messages
+        if (isset($preferences['suppressSelfAlerts'])) {
+            $validated['suppressSelfAlerts'] = (bool)$preferences['suppressSelfAlerts'];
+        }
+
         // ChatMon window mode (whitelist allowed values)
         $allowedChatModes = ['floating', 'docked', 'docked-left', 'docked-right'];
         if (isset($preferences['chatWindowMode']) && in_array($preferences['chatWindowMode'], $allowedChatModes)) {
