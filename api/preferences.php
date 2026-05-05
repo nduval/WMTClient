@@ -129,6 +129,13 @@ switch ($action) {
         break;
 
     case 'save':
+        // ⚠️ DEFAULT-DENY WHITELIST. Any preference field NOT explicitly
+        // validated below is silently dropped before saving — it never persists
+        // to disk or DB. When you add a new preference in the client (see
+        // assets/js/app.js → savePreferences), you MUST add a matching block
+        // here for that field, or the toggle will appear to save but won't
+        // stick across reloads. Confirmed gotcha: suppressSelfAlerts on
+        // 2026-05-04. See memory: feedback_preferences_whitelist_breadcrumb.md.
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             errorResponse('Method not allowed', 405);
         }

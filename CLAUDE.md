@@ -38,6 +38,18 @@ Critical behaviors (summary — see checklist for details):
 
 ---
 
+## IMPORTANT: Adding a Preference Touches THREE Files
+
+When adding a new preference (settings toggle, dropdown, slider, etc.), updates are required in **all three** of these places or the value won't persist:
+
+1. **`assets/js/app.js`** — UI markup in the settings panel render code AND read the value into `this.preferences` inside `savePreferences()`.
+2. **`api/preferences.php`** — add a validation block in `case 'save'`. This is a **default-deny whitelist**: fields not listed here are silently dropped before being saved to disk/DB. Easy to forget; symptom is "I toggle it, click save, reload, and it's back to default."
+3. **`glitch/server.js`** (only if server-side behavior cares) — handle the field on the relevant WS message (`set_discord_prefs`, etc.).
+
+If a user reports "this new toggle doesn't save," the cause is almost always missing step 2.
+
+---
+
 ## IMPORTANT: Maintaining Documentation
 
 **After solving any significant bug or discovering important technical details, update the appropriate file:**

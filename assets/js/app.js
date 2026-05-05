@@ -6126,6 +6126,11 @@ class WMTClient {
     }
 
     // Full save from settings panel (reads all values from DOM)
+    //
+    // ⚠️ CROSS-FILE GOTCHA — when adding a NEW preference field here, you MUST
+    // also add it to the whitelist in `api/preferences.php` (case 'save').
+    // Fields not in that whitelist are silently dropped on save and never
+    // persist. This bit suppressSelfAlerts on 2026-05-04 (one-line PHP fix).
     async savePreferences() {
         const saveBtn = document.getElementById('save-settings-btn');
         const originalText = saveBtn?.textContent;
