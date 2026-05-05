@@ -2636,9 +2636,43 @@ body {
     flex-direction: column;
     z-index: 50;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    /* Anchor for the floating "N new messages" pill below. The .docked
+       and .floating modes already set position; this is a no-op for those
+       and only matters for the default flow. */
+    position: relative;
 }
 
 .chat-window.hidden {
+    display: none !important;
+}
+
+/* "↓ N new" pill — appears when user has scrolled up and new chat arrives.
+   Click to jump to bottom; auto-hides when user scrolls back near the bottom. */
+.chat-new-pill {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent-color, #00ff00);
+    color: #000;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 0.85em;
+    font-weight: bold;
+    font-family: inherit;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    z-index: 60;
+    user-select: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    opacity: 0.95;
+}
+.chat-new-pill:hover {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-1px);
+}
+.chat-new-pill.hidden {
     display: none !important;
 }
 

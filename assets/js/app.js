@@ -1216,6 +1216,10 @@ class WMTClient {
                         const popout = this.chatPopoutWindow.document.getElementById('chat-output');
                         if (popout) popout.innerHTML = '';
                     }
+                    // Reset "↓ N new" pill on both surfaces — the count from the
+                    // previous session shouldn't carry over into the replay.
+                    this.resetChatNewPill('main');
+                    this.resetChatNewPill('popout');
                 }
                 break;
 
@@ -2170,6 +2174,9 @@ class WMTClient {
             // Auto-scroll to bottom (only if the line is visible AND user was following)
             if (wasNearBottom && !line.classList.contains('chat-filtered-hidden')) {
                 chatOutput.scrollTop = chatOutput.scrollHeight;
+            } else if (!line.classList.contains('chat-filtered-hidden')) {
+                // User is reading history — don't yank them, just count + show pill
+                this.bumpChatNewPill('main');
             }
         }
 
@@ -2190,6 +2197,8 @@ class WMTClient {
                 popoutOutput.appendChild(line);
                 if (wasNearBottom && !line.classList.contains('chat-filtered-hidden')) {
                     popoutOutput.scrollTop = popoutOutput.scrollHeight;
+                } else if (!line.classList.contains('chat-filtered-hidden')) {
+                    this.bumpChatNewPill('popout');
                 }
             }
         }
@@ -2213,6 +2222,63 @@ class WMTClient {
                 chatWindow.classList.add('has-new');
             }
         }
+    }
+
+    // "↓ N new" pill helpers — shown when the user has scrolled up to read
+    // history and a new chat message arrives. Click to jump to bottom; auto-
+    // hides when the user scrolls back near the bottom on their own.
+    //
+    // Two surfaces share the logic:
+    //   target='main'   → main app's #chat-window in document
+    //   target='popout' → window.open()'d chatPopoutWindow's document
+    bumpChatNewPill(target) {
+        const ctx = this._chatPillCtx(target);
+        if (!ctx) return;
+        ctx.count = (ctx.count || 0) + 1;
+        if (ctx.countEl) ctx.countEl.textContent = String(ctx.count);
+        if (ctx.pillEl) ctx.pillEl.classList.remove('hidden');
+    }
+    resetChatNewPill(target) {
+        const ctx = this._chatPillCtx(target);
+        if (!ctx) return;
+        ctx.count = 0;
+        if (ctx.countEl) ctx.countEl.textContent = '0';
+        if (ctx.pillEl) ctx.pillEl.classList.add('hidden');
+    }
+    _chatPillCtx(target) {
+        if (target === 'popout') {
+            if (!this.chatPopoutWindow || this.chatPopoutWindow.closed) return null;
+            const doc = this.chatPopoutWindow.document;
+            if (!this._popoutPill) this._popoutPill = { count: 0 };
+            this._popoutPill.pillEl = doc.getElementById('chat-new-pill');
+            this._popoutPill.countEl = doc.getElementById('chat-new-count');
+            this._popoutPill.outputEl = doc.getElementById('chat-output');
+            return this._popoutPill;
+        }
+        if (!this._mainPill) this._mainPill = { count: 0 };
+        this._mainPill.pillEl = document.getElementById('chat-new-pill');
+        this._mainPill.countEl = document.getElementById('chat-new-count');
+        this._mainPill.outputEl = document.getElementById('chat-output');
+        return this._mainPill;
+    }
+    initChatNewPill(target) {
+        const ctx = this._chatPillCtx(target);
+        if (!ctx || !ctx.outputEl || !ctx.pillEl) return;
+        // Avoid double-binding on re-init (popout reopens, etc.)
+        if (ctx._wired) return;
+        ctx._wired = true;
+
+        // Hide the pill when the user scrolls back near the bottom on their own.
+        ctx.outputEl.addEventListener('scroll', () => {
+            const nearBottom = (ctx.outputEl.scrollHeight - ctx.outputEl.scrollTop - ctx.outputEl.clientHeight) < 50;
+            if (nearBottom && ctx.count > 0) this.resetChatNewPill(target);
+        });
+
+        // Click to jump to bottom + clear counter.
+        ctx.pillEl.addEventListener('click', () => {
+            ctx.outputEl.scrollTop = ctx.outputEl.scrollHeight;
+            this.resetChatNewPill(target);
+        });
     }
 
     // Rebuild the channel filter dropdown options from the current channelPrefs.
@@ -2548,6 +2614,28 @@ class WMTClient {
                         font-size: 14px;
                         line-height: 1.4;
                     }
+                    .chat-output-wrap { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+                    .chat-new-pill {
+                        position: absolute;
+                        bottom: 14px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        background: #00ff00;
+                        color: #000;
+                        border: none;
+                        padding: 6px 14px;
+                        border-radius: 16px;
+                        font-size: 0.85em;
+                        font-weight: bold;
+                        font-family: inherit;
+                        cursor: pointer;
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+                        z-index: 60;
+                        user-select: none;
+                        opacity: 0.95;
+                    }
+                    .chat-new-pill:hover { opacity: 1; }
+                    .chat-new-pill.hidden { display: none !important; }
                     .chat-line { margin-bottom: 4px; padding: 2px 4px; border-radius: 2px; }
                     .chat-line.chat-filtered-hidden { display: none; }
                     .chat-line.tell { background: rgba(255, 100, 100, 0.1); border-left: 2px solid #ff6464; padding-left: 8px; }
@@ -2591,7 +2679,10 @@ class WMTClient {
                         </select>
                     </div>
                 </div>
-                <div id="chat-output">${chatContent}</div>
+                <div class="chat-output-wrap">
+                    <div id="chat-output">${chatContent}</div>
+                    <button type="button" class="chat-new-pill hidden" id="chat-new-pill" title="Jump to latest">↓ <span id="chat-new-count">0</span> new</button>
+                </div>
                 <div class="input-container">
                     <input type="text" id="chat-input" placeholder="Type chat command...">
                     <button id="send-btn">Send</button>
@@ -2637,6 +2728,11 @@ class WMTClient {
 
         // Populate the popout's filter dropdown with known channels + current state
         this.populateChatFilterOptions();
+
+        // Wire the "↓ N new" pill scroll-listener + click handler in popout.
+        // Reset _wired flag if the popout was previously opened (re-open after close).
+        if (this._popoutPill) this._popoutPill._wired = false;
+        this.initChatNewPill('popout');
 
         // Hide main chat window
         this.chatWindowOpen = false;
@@ -3472,6 +3568,10 @@ class WMTClient {
 
         // Initialize chat window dragging
         this.initChatDragging();
+
+        // Wire the "↓ N new" pill scroll-listener + click handler in main window.
+        // Popout gets its own wiring at openChatPopout time.
+        this.initChatNewPill('main');
 
         // New dropdown menu
         const newBtn = document.getElementById('new-btn');

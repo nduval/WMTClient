@@ -225,6 +225,7 @@ setcookie($tokenCookieName, $wsToken, [
                     </div>
                 </div>
                 <div class="chat-output" id="chat-output"></div>
+                <button type="button" class="chat-new-pill hidden" id="chat-new-pill" title="Jump to latest">↓ <span id="chat-new-count">0</span> new</button>
                 <div class="chat-resize-handle"></div>
             </div>
 
