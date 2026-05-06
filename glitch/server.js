@@ -6215,9 +6215,19 @@ function connectToMud(session) {
   }
 
   session.mudSocket.connect(session.targetPort, session.targetHost, () => {
-    const wasResumed = BRIDGE_URL && session.mudSocket.resumed;
-    console.log(`${wasResumed ? 'Resumed' : 'Connected to'} MUD: ${session.targetHost}:${session.targetPort}${BRIDGE_URL ? ' (via bridge)' : ''}`);
-    writeSessionLog(session, 'mud_connect', { host: session.targetHost, port: session.targetPort, resumed: wasResumed });
+    const bridgeResumed = BRIDGE_URL && session.mudSocket.resumed;
+    // bridgeResumed only means "bridge had a TCP socket" — it does NOT mean
+    // the MUD is logged in. If the previous session got kicked back to the
+    // name prompt, mudChar is null and we should treat this like a fresh
+    // connect (run auto-login, defer MIP) rather than a clean resume
+    // (suppress auto-login, fire MIP immediately). Without this gate, MIP
+    // handshake bytes ('3klient 12345~~PortalWMT1.0.0') hit the MUD's name
+    // prompt as junk and we get "Invalid character in position N" spam.
+    // Confirmed bug 2026-05-06 with beowulf at name prompt.
+    const mudLoggedIn = !!session._actualMudChar;
+    const wasResumed = bridgeResumed && mudLoggedIn;
+    console.log(`${wasResumed ? 'Resumed' : 'Connected to'} MUD: ${session.targetHost}:${session.targetPort}${BRIDGE_URL ? ' (via bridge)' : ''}${bridgeResumed && !mudLoggedIn ? ' [bridge had socket but MUD at name prompt — fresh login flow]' : ''}`);
+    writeSessionLog(session, 'mud_connect', { host: session.targetHost, port: session.targetPort, resumed: wasResumed, bridgeResumed: bridgeResumed, mudLoggedIn: mudLoggedIn });
     logSessionEvent('MUD_LINK_GAINED', {
       token: session.token ? session.token.substring(0, 8) : null,
       user: session.userId,
@@ -6225,7 +6235,8 @@ function connectToMud(session) {
       mudChar: session._actualMudChar || null,
       host: session.targetHost,
       port: session.targetPort,
-      resumed: wasResumed
+      resumed: wasResumed,
+      bridgeResumed: bridgeResumed
     });
 
     if (!wasResumed) {
@@ -6234,10 +6245,20 @@ function connectToMud(session) {
         type: 'system',
         message: `Connected to ${session.targetHost}:${session.targetPort}!`
       });
-      // Bridge mode: only send session_new for new sessions (bridgeMode init).
-      // Session resumes already triggered onConnect via onSessionResumed(false) —
-      // sending session_new again would cause duplicate char name → bad password.
-      if (BRIDGE_URL && session._bridgeModeInit) {
+      // Bridge mode: dispatch session_new in two cases —
+      //   1. Fresh bridgeMode auth (session._bridgeModeInit). The browser
+      //      ran the silent bridgeMode init, expects session_new for the
+      //      onConnect (char name + password) flow.
+      //   2. Bridge had a TCP socket but MUD was at name prompt (bridgeResumed
+      //      && !mudLoggedIn). The browser is waiting for session_new or
+      //      session_resumed; we route it through the auto-login path so the
+      //      char name actually gets typed instead of MIP handshake hitting
+      //      the name prompt as junk (the original beowulf bug, 2026-05-06).
+      // Suppression: comment elsewhere warned about double-send if a client
+      // already ran onConnect — that scenario is gated by _bridgeModeInit
+      // being true on the FIRST connect, false after. For (2), the browser
+      // never ran onConnect for this session yet (silent bridgeMode init).
+      if (BRIDGE_URL && (session._bridgeModeInit || (bridgeResumed && !mudLoggedIn))) {
         session._bridgeModeInit = false;
         sendToClient(session, { type: 'session_new' });
         // Replay chat history from DB so ChatMon has previous messages
