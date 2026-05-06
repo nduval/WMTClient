@@ -1445,6 +1445,26 @@ function detectMudEvents(session, rawLine) {
         session._loginAuditQuit = true;
       }
 
+      // ─── Multi-device password leak suppression ───
+      // Capture is driven by the EAGER `_eagerAtPasswordPrompt` flag (set
+      // from data-handler chunk inspection — fires the moment "Password:"
+      // appears, not when a complete line is parsed). The line-completion
+      // event below only handles the cleanup path, because mock MUDs that
+      // send "Password: " without immediate \r\n cause password_prompt to
+      // fire LATE — after the password has already been transmitted —
+      // and capturing on that delayed event would grab the wrong command.
+      if (p.event === 'password_fail') {
+        // Real password failure — retry incoming, clear cache so the next
+        // password attempt can be captured fresh.
+        session._suppressionPassword = null;
+        session._suppressionExpiresAt = 0;
+      }
+      if (p.event === 'relink_complete') {
+        // Linkdeath welcome — auth window done.
+        session._suppressionPassword = null;
+        session._suppressionExpiresAt = 0;
+      }
+
       // One line can only be one event — stop scanning.
       return;
     }
@@ -6309,6 +6329,13 @@ function connectToMud(session) {
     if (text.includes('Password:') && session._loginAuditPending) {
       session._loginAuditAtPasswordPrompt = true;
     }
+    // Separate eager flag for password-leak suppression (multi-device race).
+    // Unlike _loginAuditAtPasswordPrompt this is NOT gated on the audit
+    // state, so it fires for linkdeath relink prompts too. Cleared in the
+    // command handler when the first command after the prompt arrives.
+    if (text.includes('Password:')) {
+      session._eagerAtPasswordPrompt = true;
+    }
 
     if (session.lineBufferTimeout) {
       clearTimeout(session.lineBufferTimeout);
@@ -6360,6 +6387,11 @@ function connectToMud(session) {
       mudChar: session._actualMudChar || null,
       explicitDisconnect: !!session.explicitDisconnect
     });
+    // Reset password-suppression state — a new MUD connection will go
+    // through fresh auth and may legitimately need to capture again.
+    session._eagerAtPasswordPrompt = false;
+    session._suppressionPassword = null;
+    session._suppressionExpiresAt = 0;
     // Don't send misleading messages during server restart — browser already got notified
     if (!session.serverRestarting) {
       sendToClient(session, {
@@ -6790,6 +6822,32 @@ wss.on('connection', (ws, req) => {
       // Handle authenticated messages
       switch (data.type) {
         case 'command':
+          // Multi-device password leak suppression: when "Password:" was
+          // recently seen in MUD output (eager flag set in the data handler),
+          // capture the FIRST command that arrives as the password and arm a
+          // 5-second window during which any duplicate send (from a second
+          // browser racing with the first) gets dropped before reaching the
+          // MUD. Without this, the second browser's auto-send arrives after
+          // login completes and the MUD echoes the password back as an
+          // unrecognized command — leaking the password to channels/logs.
+          // Confirmed Nathan-reported 2026-05-06.
+          {
+            const cmd = data.command || '';
+            if (session._eagerAtPasswordPrompt && cmd) {
+              session._suppressionPassword = cmd;
+              session._suppressionExpiresAt = Date.now() + 5000;
+              session._eagerAtPasswordPrompt = false;
+              // Allow this first send through to the MUD normally.
+            } else if (session._suppressionPassword &&
+                       cmd === session._suppressionPassword &&
+                       Date.now() < session._suppressionExpiresAt) {
+              // Duplicate password send from a second browser racing with
+              // the first. Drop it silently — do NOT forward to MUD or write
+              // to the input log.
+              console.log(`SUPPRESSED duplicate password send (multi-device race) for token=${session.token ? session.token.substring(0, 8) : '?'}`);
+              break;
+            }
+          }
           // Queue commands until aliases have synced from client (prevents
           // commands being sent raw to MUD before alias expansion is ready).
           if (!session._aliasesSynced) {
