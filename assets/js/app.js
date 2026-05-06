@@ -449,7 +449,16 @@ class WMTClient {
         const splitTop = document.getElementById('split-top');
         const splitBottom = document.getElementById('split-bottom');
 
+        // Push font vars to documentElement (root) too. CSS custom properties
+        // only cascade DOWN the DOM, so setting them on #mud-output alone
+        // leaves siblings like #chat-window without access. Anything that
+        // references var(--mud-font*) — chat panel, popouts, future widgets —
+        // now inherits from :root. Confirmed bug 2026-05-05: chatmon font was
+        // falling back to browser default (~16px) while terminal honored prefs.
+        const root = document.documentElement;
         if (prefs.fontFamily) {
+            root.style.setProperty('--mud-font', prefs.fontFamily);
+            root.style.setProperty('--mud-font-family', prefs.fontFamily);
             output.style.setProperty('--mud-font', prefs.fontFamily);
             if (mipBar) mipBar.style.setProperty('--mud-font', prefs.fontFamily);
             splitTop?.style.setProperty('--mud-font', prefs.fontFamily);
@@ -460,6 +469,7 @@ class WMTClient {
             ? (prefs.fontSizeMobile || prefs.fontSize || 14)
             : (prefs.fontSize || 14);
         if (effectiveFontSize) {
+            root.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
             output.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
             if (mipBar) mipBar.style.setProperty('--mud-font-size', effectiveFontSize + 'px');
             splitTop?.style.setProperty('--mud-font-size', effectiveFontSize + 'px');

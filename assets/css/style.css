@@ -2894,8 +2894,10 @@ body {
     flex: 1;
     overflow-y: auto;
     padding: 10px;
-    font-family: var(--mud-font-family);
-    font-size: var(--mud-font-size);
+    font-family: var(--mud-font-family, 'Consolas', 'Monaco', 'Courier New', monospace);
+    /* 14px fallback matches the rest of the app's defaults — applies pre-JS
+       and on browsers where the user has bumped the default font size */
+    font-size: var(--mud-font-size, 14px);
     line-height: 1.4;
     background: var(--bg-main);
 }
@@ -2934,8 +2936,8 @@ body {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     color: var(--text-color);
-    font-family: var(--mud-font-family);
-    font-size: var(--mud-font-size);
+    font-family: var(--mud-font-family, 'Consolas', 'Monaco', 'Courier New', monospace);
+    font-size: var(--mud-font-size, 14px);
 }
 
 .chat-input:focus {
