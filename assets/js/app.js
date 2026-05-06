@@ -2260,16 +2260,48 @@ class WMTClient {
             if (!this.chatPopoutWindow || this.chatPopoutWindow.closed) return null;
             const doc = this.chatPopoutWindow.document;
             if (!this._popoutPill) this._popoutPill = { count: 0 };
+            this._popoutPill.outputEl = doc.getElementById('chat-output');
             this._popoutPill.pillEl = doc.getElementById('chat-new-pill');
             this._popoutPill.countEl = doc.getElementById('chat-new-count');
-            this._popoutPill.outputEl = doc.getElementById('chat-output');
+            // Self-heal: if the cached popout HTML didn't include the pill
+            // markup (e.g. user installed as PWA before this feature shipped),
+            // build it on the fly. The popout's <style> already has rules.
+            if (!this._popoutPill.pillEl && this._popoutPill.outputEl) {
+                this._popoutPill.pillEl = this._buildChatPill(doc, this._popoutPill.outputEl.parentElement || this._popoutPill.outputEl);
+                this._popoutPill.countEl = this._popoutPill.pillEl.querySelector('#chat-new-count');
+            }
             return this._popoutPill;
         }
         if (!this._mainPill) this._mainPill = { count: 0 };
+        this._mainPill.outputEl = document.getElementById('chat-output');
         this._mainPill.pillEl = document.getElementById('chat-new-pill');
         this._mainPill.countEl = document.getElementById('chat-new-count');
-        this._mainPill.outputEl = document.getElementById('chat-output');
+        // Self-heal for the main app: if cached app.php is older than the
+        // pill feature, create the element dynamically inside #chat-window.
+        if (!this._mainPill.pillEl && this._mainPill.outputEl) {
+            const host = document.getElementById('chat-window') || this._mainPill.outputEl.parentElement;
+            this._mainPill.pillEl = this._buildChatPill(document, host);
+            this._mainPill.countEl = this._mainPill.pillEl.querySelector('#chat-new-count');
+        }
         return this._mainPill;
+    }
+    _buildChatPill(doc, host) {
+        if (!host) return null;
+        const btn = doc.createElement('button');
+        btn.type = 'button';
+        btn.id = 'chat-new-pill';
+        btn.className = 'chat-new-pill hidden';
+        btn.title = 'Jump to latest';
+        const arrow = doc.createTextNode('↓ ');
+        const span = doc.createElement('span');
+        span.id = 'chat-new-count';
+        span.textContent = '0';
+        const tail = doc.createTextNode(' new');
+        btn.appendChild(arrow);
+        btn.appendChild(span);
+        btn.appendChild(tail);
+        host.appendChild(btn);
+        return btn;
     }
     initChatNewPill(target) {
         const ctx = this._chatPillCtx(target);
