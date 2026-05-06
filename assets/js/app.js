@@ -982,10 +982,21 @@ class WMTClient {
                     const stripped = data.line.replace(/\x1b\[[0-9;]*m/g, '');
                     if (stripped.includes('Password:') || stripped.match(/password\s*:/i)) {
                         this.passwordSent = true;
-                        setTimeout(() => {
-                            this.appendOutput('Sending password...', 'system');
-                            this.connection.sendCommand(this.characterPassword);
-                        }, 500);
+                        // Send synchronously — the previous 500ms setTimeout
+                        // opened a race window where ANY other browser code
+                        // (tickers firing, startup-script commands, MIP
+                        // handshake) could fire a sendCommand in between
+                        // detecting the password prompt and sending the
+                        // password. Those interleaved commands would arrive
+                        // at the MUD as the password attempt, producing
+                        // bogus "Incorrect password." rejections — which
+                        // left -1 Logon zombies on the MUD as users got
+                        // kicked + auto-retried. Sending in the same tick
+                        // as the prompt detection means nothing else can
+                        // race ahead of it. (Reported by Nathan 2026-05-06,
+                        // confirmed via session log analysis.)
+                        this.appendOutput('Sending password...', 'system');
+                        this.connection.sendCommand(this.characterPassword);
                     }
                 }
 

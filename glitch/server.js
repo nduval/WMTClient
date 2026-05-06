@@ -6811,6 +6811,7 @@ wss.on('connection', (ws, req) => {
             }
             break;
           }
+
           // Suppress auto-login character name after bridge resume.
           // onConnect sends the name after 1.5s, but for resumed sessions
           // the MUD is already logged in — silently drop it.
