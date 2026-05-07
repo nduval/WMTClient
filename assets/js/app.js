@@ -752,7 +752,8 @@ class WMTClient {
         const charName = window.WMT_CONFIG?.characterName || 'WMT Client';
         const iftttKey = (window.WMT_CONFIG?.isAdmin && this.preferences?.iftttKey) || '';
         const suppressSelfAlerts = !!this.preferences?.suppressSelfAlerts;
-        this.connection.setDiscordPrefs(this.channelPrefs, charName, iftttKey, suppressSelfAlerts);
+        const suppressAfkAlerts = !!this.preferences?.suppressAfkAlerts;
+        this.connection.setDiscordPrefs(this.channelPrefs, charName, iftttKey, suppressSelfAlerts, suppressAfkAlerts);
     }
 
     setupConnection() {
@@ -5987,6 +5988,14 @@ class WMTClient {
                     </label>
                 </div>
                 <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">When on, ChatMon won't ding or send a Discord/IFTTT notification for chat messages where you are the speaker. The messages still appear in the chat panel.</p>
+                <div class="settings-toggle">
+                    <span class="settings-toggle-label">No alerts from AFK auto-replies</span>
+                    <label class="settings-toggle-switch">
+                        <input type="checkbox" id="pref-suppress-afk-alerts" ${prefs.suppressAfkAlerts ? 'checked' : ''}>
+                        <span class="settings-toggle-slider"></span>
+                    </label>
+                </div>
+                <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">When on, ChatMon won't ding or notify when the MUD auto-replies "[Someone]: is afk: ..." after you soul or tell an AFK player. The reply still appears in the chat panel.</p>
             </div>
 
             <div class="settings-section">
@@ -6332,6 +6341,7 @@ class WMTClient {
                 return Number.isFinite(prev) ? prev : 30;
             })(),
             suppressSelfAlerts: document.getElementById('pref-suppress-self-alerts')?.checked ?? this.preferences.suppressSelfAlerts ?? false,
+            suppressAfkAlerts: document.getElementById('pref-suppress-afk-alerts')?.checked ?? this.preferences.suppressAfkAlerts ?? false,
             startupScript: document.getElementById('pref-startup-script')?.value || this.preferences.startupScript || '',
             packetPatch: this.preferences.packetPatch ?? 1.0
         };

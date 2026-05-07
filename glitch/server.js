@@ -5408,6 +5408,7 @@ function parseMipMessage(session, msgType, msgData) {
         let rawText = '';
         let isSoulEcho = false;
         let isSentByUser = false;
+        let isAfkReply = false;
         let babSender = '';
         if (parts[0] === '' && parts.length >= 3) {
           const sender = parts[1];
@@ -5416,6 +5417,14 @@ function parseMipMessage(session, msgType, msgData) {
           // [you]: lines are soul/emote echoes — show in chatmon but skip Discord
           if (sender.toLowerCase() === 'you') {
             isSoulEcho = true;
+          }
+          // AFK auto-reply: when the user souls/tells someone who's AFK, the
+          // MUD auto-replies with "[Sender]: is afk: <reason>". These aren't
+          // real interactions — the AFK person didn't actually do anything —
+          // so the suppressAfkAlerts preference can hide them from ChatMon
+          // alerts (still shown in the chat panel). 2026-05-07.
+          if (/^is afk:/i.test(stripAnsi(message).trim())) {
+            isAfkReply = true;
           }
           formatted = `<span style="color:#ff8844">[${sender}]:</span> ${convertMipColors(message)}`;
           rawText = `[${sender}]: ${stripAnsi(message)}`;
@@ -5439,7 +5448,8 @@ function parseMipMessage(session, msgType, msgData) {
           session._pendingBab = {
             formatted, rawText, raw: msgData,
             outbound: isSentByUser || undefined,
-            sender: babSender
+            sender: babSender,
+            isAfkReply: isAfkReply || undefined
           };
           // Fallback: if no more lines arrive, flush as tell after 100ms
           if (session._pendingBabTimeout) clearTimeout(session._pendingBabTimeout);
@@ -5672,7 +5682,14 @@ function flushPendingBab(session, channel) {
   // Self-authored = outbound tell/soul, or (theoretically) inbound where sender == self.
   // Real inbound self-tells are filtered as soul echoes earlier, but the helper handles both.
   const selfAuthored = isSelfAuthoredChat(session, { outbound: bab.outbound, sender: bab.sender });
-  const suppressAlert = !!(session.suppressSelfAlerts && selfAuthored);
+  // suppressAfkAlerts: MUD's "[Sender]: is afk: <reason>" auto-reply when the
+  // user souls/tells someone who's AFK. The AFK person didn't actually do
+  // anything — no need to ding/Discord/IFTTT — but the message still appears
+  // in the chat panel.
+  const suppressAlert = !!(
+    (session.suppressSelfAlerts && selfAuthored) ||
+    (session.suppressAfkAlerts && bab.isAfkReply)
+  );
 
   sendToClient(session, {
     type: 'mip_chat',
@@ -7259,6 +7276,8 @@ wss.on('connection', (ws, req) => {
           // existing behavior; opt-in flag suppresses ding + Discord + IFTTT for
           // chat messages where the sender is this session's character.
           session.suppressSelfAlerts = !!data.suppressSelfAlerts;
+          // Suppress alerts on the MUD's AFK auto-reply (`[Sender]: is afk: ...`).
+          session.suppressAfkAlerts = !!data.suppressAfkAlerts;
 
           // IFTTT key is per-user (single Maker key, used across channels).
           // Validate shape: alphanumeric + underscore + hyphen, 10-64 chars. Empty clears it.

@@ -210,8 +210,8 @@ class MudConnection {
         return this.send('set_server', { host, port });
     }
 
-    setDiscordPrefs(channelPrefs, username = 'WMT Client', iftttKey = '', suppressSelfAlerts = false) {
-        return this.send('set_discord_prefs', { channelPrefs, username, iftttKey, suppressSelfAlerts });
+    setDiscordPrefs(channelPrefs, username = 'WMT Client', iftttKey = '', suppressSelfAlerts = false, suppressAfkAlerts = false) {
+        return this.send('set_discord_prefs', { channelPrefs, username, iftttKey, suppressSelfAlerts, suppressAfkAlerts });
     }
 
     reconnect() {

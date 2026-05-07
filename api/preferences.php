@@ -368,6 +368,11 @@ switch ($action) {
             $validated['suppressSelfAlerts'] = (bool)$preferences['suppressSelfAlerts'];
         }
 
+        // Suppress alerts for the MUD's AFK auto-reply (`[Sender]: is afk: ...`).
+        if (isset($preferences['suppressAfkAlerts'])) {
+            $validated['suppressAfkAlerts'] = (bool)$preferences['suppressAfkAlerts'];
+        }
+
         // ChatMon window mode (whitelist allowed values)
         $allowedChatModes = ['floating', 'docked', 'docked-left', 'docked-right'];
         if (isset($preferences['chatWindowMode']) && in_array($preferences['chatWindowMode'], $allowedChatModes)) {
