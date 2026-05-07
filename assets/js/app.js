@@ -5975,8 +5975,8 @@ class WMTClient {
                     <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: 5px;">Used for #bell command and channel alerts</p>
                 </div>
                 <div class="form-group" style="margin-bottom: 15px;">
-                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Alert Volume: <span id="volume-display">${prefs.notificationVolume ?? 30}%</span></label>
-                    <input type="range" id="pref-notification-volume" min="0" max="100" value="${prefs.notificationVolume ?? 30}"
+                    <label style="display: block; margin-bottom: 5px; color: #ccc;">Alert Volume: <span id="volume-display">${Number.isFinite(prefs.notificationVolume) ? prefs.notificationVolume : 30}%</span></label>
+                    <input type="range" id="pref-notification-volume" min="0" max="100" value="${Number.isFinite(prefs.notificationVolume) ? prefs.notificationVolume : 30}"
                         style="width: 100%; cursor: pointer;">
                 </div>
                 <div class="settings-toggle">
@@ -6206,9 +6206,11 @@ class WMTClient {
 
         // Notification volume slider
         document.getElementById('pref-notification-volume')?.addEventListener('input', (e) => {
-            const volume = parseInt(e.target.value);
+            const raw = parseInt(e.target.value);
+            const volume = Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : 30;
             this.preferences.notificationVolume = volume;
-            document.getElementById('volume-display').textContent = volume + '%';
+            const display = document.getElementById('volume-display');
+            if (display) display.textContent = volume + '%';
         });
 
         // Test sound button
@@ -6318,7 +6320,17 @@ class WMTClient {
             mipDebug: document.getElementById('pref-mip-debug')?.checked ?? this.preferences.mipDebug ?? false,
             debugIf: document.getElementById('pref-debug-if')?.checked ?? this.preferences.debugIf ?? false,
             notificationSound: document.getElementById('pref-notification-sound')?.value || this.preferences.notificationSound || 'classic',
-            notificationVolume: parseInt(document.getElementById('pref-notification-volume')?.value) ?? this.preferences.notificationVolume ?? 30,
+            notificationVolume: (() => {
+                // parseInt('') / parseInt(undefined) → NaN. NaN ?? x DOESN'T fall back
+                // (?? only catches null/undefined). Without this guard the slider's
+                // missing/empty value poisons preferences with NaN and the volume
+                // display shows "NaN%" + sounds silently no-op (NaN / 100 = NaN
+                // sent to Web Audio gain). Fixed 2026-05-07.
+                const raw = parseInt(document.getElementById('pref-notification-volume')?.value);
+                if (Number.isFinite(raw)) return Math.max(0, Math.min(100, raw));
+                const prev = this.preferences.notificationVolume;
+                return Number.isFinite(prev) ? prev : 30;
+            })(),
             suppressSelfAlerts: document.getElementById('pref-suppress-self-alerts')?.checked ?? this.preferences.suppressSelfAlerts ?? false,
             startupScript: document.getElementById('pref-startup-script')?.value || this.preferences.startupScript || '',
             packetPatch: this.preferences.packetPatch ?? 1.0
@@ -11872,7 +11884,13 @@ class WMTClient {
     playBell(soundType = null) {
         try {
             const sound = soundType || this.preferences.notificationSound || 'classic';
-            const volume = (this.preferences.notificationVolume ?? 30) / 100;
+            // Guard against NaN/non-numeric values that may have been saved by
+            // older versions of savePreferences (?? doesn't catch NaN, so a
+            // bad parseInt result poisoned preferences and produced NaN volume
+            // → silent Web Audio gain). 2026-05-07.
+            const rawVol = this.preferences.notificationVolume;
+            const volPct = Number.isFinite(rawVol) ? Math.max(0, Math.min(100, rawVol)) : 30;
+            const volume = volPct / 100;
 
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
