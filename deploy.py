@@ -256,6 +256,7 @@ def run_test_suites():
         ('EntityGuard',  'test_entity_guard.js'),
         ('BlockTrigger', 'test_block_trigger.js'),
         ('SelfAlerts',   'test_self_alerts.js'),
+        ('VarSubst',     'test_var_substitution.js'),
     ]
 
     total_passed = 0

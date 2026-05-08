@@ -11335,6 +11335,24 @@ class WMTClient {
             }
         }
 
+        // Resolve any $var/${var} inside a bracket key before parsing it.
+        // Without this, $list[+$idx] doesn't expand the inner $idx and the
+        // index lookup fails. The brace form ${list[+${idx}]} already works
+        // because the outer regex iterates inside-out, but matching upstream
+        // TinTin++ behavior here means non-brace indexing also works.
+        // Fixed 2026-05-08 (was breaking the {findtv} alias).
+        const resolveBracketKey = (rawKey) => {
+            let k = rawKey;
+            let iter = 5;
+            while (iter-- > 0) {
+                const before = k;
+                k = k.replace(/\$\{(\w+)\}/g, (m, n) => (this.variables[n] !== undefined ? String(this.variables[n]) : m));
+                k = k.replace(/\$(\w+)/g, (m, n) => (this.variables[n] !== undefined ? String(this.variables[n]) : m));
+                if (k === before) break;
+            }
+            return k;
+        };
+
         // Handle $variable[key] and $variable[key][subkey] patterns
         // This regex matches $varname followed by one or more [key] brackets
         str = str.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
@@ -11347,7 +11365,7 @@ class WMTClient {
             const keyRegex = /\[([^\]]*)\]/g;
             let keyMatch;
             while ((keyMatch = keyRegex.exec(brackets)) !== null) {
-                keys.push(keyMatch[1]);
+                keys.push(resolveBracketKey(keyMatch[1]));
             }
 
             // Navigate through the nested structure
@@ -11360,6 +11378,18 @@ class WMTClient {
                 if (key === '') {
                     // $var[] returns all values
                     return Object.values(val).join(';');
+                } else if (key.includes('..')) {
+                    // Range: $var[+2..4] - values from index 2 to 4
+                    // CHECKED BEFORE +N branch because "+2..4" startsWith('+')
+                    // and would otherwise be parsed as a single-item index.
+                    const [startStr, endStr] = key.split('..');
+                    const start = parseInt(startStr.replace('+', '')) - 1;
+                    const end = parseInt(endStr) - 1;
+                    const values = Object.values(val);
+                    if (start >= 0 && end >= start && end < values.length) {
+                        return values.slice(start, end + 1).join(';');
+                    }
+                    return '';
                 } else if (key.startsWith('+')) {
                     // Positive index from start (+1 = first)
                     const idx = parseInt(key.substring(1)) - 1;
@@ -11378,16 +11408,6 @@ class WMTClient {
                     } else {
                         return '';
                     }
-                } else if (key.includes('..')) {
-                    // Range: $var[+2..4] - values from index 2 to 4
-                    const [startStr, endStr] = key.split('..');
-                    const start = parseInt(startStr.replace('+', '')) - 1;
-                    const end = parseInt(endStr) - 1;
-                    const values = Object.values(val);
-                    if (start >= 0 && end >= start && end < values.length) {
-                        return values.slice(start, end + 1).join(';');
-                    }
-                    return '';
                 } else {
                     // Regular key access
                     val = val[key];

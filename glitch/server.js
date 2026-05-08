@@ -8415,6 +8415,56 @@ function substituteUserVariables(message, variables, functions) {
     return name;
   });
 
+  // Index lookup for $var[key] — supports TinTin++-style indexing:
+  //   $var[]       → all values joined by ;
+  //   $var[+N]     → 1-based index from start (+1 = first item)
+  //   $var[-N]     → 1-based index from end (-1 = last item)
+  //   $var[+S..E]  → range of values from S to E (joined by ;)
+  //   $var[key]    → literal key (object property lookup)
+  // Mirrors the client-side substituteVariables logic for parity. Without
+  // this, server-side trigger/alias expansion couldn't index into list
+  // variables created by #list, so things like {findtv}'s
+  // $tvpath[+$tvpathnum] returned empty. Fixed 2026-05-08.
+  function lookupBracketKey(val, key) {
+    if (typeof val !== 'object' || val === null) return undefined;
+    if (key === '') return Object.values(val).join(';');
+    // Range check FIRST — `+2..4` matches both `startsWith('+')` and
+    // `includes('..')`, so order matters or the range branch is dead.
+    if (key.includes('..')) {
+      const [s, e] = key.split('..');
+      const start = parseInt(s.replace('+', '')) - 1;
+      const end = parseInt(e) - 1;
+      const values = Object.values(val);
+      return (start >= 0 && end >= start && end < values.length)
+        ? values.slice(start, end + 1).join(';')
+        : '';
+    }
+    if (key.startsWith('+')) {
+      const idx = parseInt(key.substring(1)) - 1;
+      const values = Object.values(val);
+      return (idx >= 0 && idx < values.length) ? values[idx] : '';
+    }
+    if (/^-\d+$/.test(key)) {
+      const idx = parseInt(key);
+      const values = Object.values(val);
+      return (Math.abs(idx) <= values.length) ? values[values.length + idx] : '';
+    }
+    return val[key];
+  }
+  // Resolve any $var or ${var} inside a bracket key BEFORE applying lookup.
+  // This is what makes $tvpath[+$tvpathnum] work in non-brace form.
+  function resolveBracketKey(rawKey) {
+    let k = rawKey;
+    let iter = 5;
+    while (iter-- > 0) {
+      const before = k;
+      k = k.replace(/\$\{(\w+)\}/g, (m, name) => (variables[name] !== undefined ? String(variables[name]) : m));
+      k = k.replace(/\$(\w+)/g, (m, name) => (variables[name] !== undefined ? String(variables[name]) : m));
+      if (k === before) break;
+    }
+    return k;
+  }
+
   // Handle ${var} and ${var[key][subkey]} brace-delimited
   // Resolve inside-out so ${bot[steps][${bot[step]}]} works
   {
@@ -8435,9 +8485,14 @@ function substituteUserVariables(message, variables, functions) {
           while ((keyMatch = keyRegex.exec(brackets)) !== null) {
             keys.push(keyMatch[1]);
           }
-          for (const key of keys) {
+          for (const rawKey of keys) {
             if (val === undefined || val === null || typeof val !== 'object') return '';
-            val = val[key];
+            const key = resolveBracketKey(rawKey);
+            const next = lookupBracketKey(val, key);
+            if (next === '' && (key === '' || key.startsWith('+') || /^-\d+$/.test(key) || key.includes('..'))) {
+              return next; // index forms always return final string
+            }
+            val = next;
           }
         }
         if (val === undefined) return '';
@@ -8449,7 +8504,9 @@ function substituteUserVariables(message, variables, functions) {
     }
   }
 
-  // Handle $var[key][subkey]...
+  // Handle $var[key][subkey]... (non-brace form). Same indexing semantics
+  // as the brace form above, plus nested-var resolution in the bracket key
+  // (so $list[+$idx] works without forcing the user to type ${list[+${idx}]}).
   message = message.replace(/\$(\w+)((?:\[[^\]]*\])+)/g, (match, name, brackets) => {
     let val = variables[name];
     if (val === undefined) return match;
@@ -8459,9 +8516,14 @@ function substituteUserVariables(message, variables, functions) {
     while ((keyMatch = keyRegex.exec(brackets)) !== null) {
       keys.push(keyMatch[1]);
     }
-    for (const key of keys) {
+    for (const rawKey of keys) {
       if (val === undefined || val === null || typeof val !== 'object') return '';
-      val = val[key];
+      const key = resolveBracketKey(rawKey);
+      const next = lookupBracketKey(val, key);
+      if (next === '' && (key === '' || key.startsWith('+') || /^-\d+$/.test(key) || key.includes('..'))) {
+        return next; // index forms always return final string
+      }
+      val = next;
     }
     if (val === undefined) return '';
     if (typeof val === 'object') return JSON.stringify(val);
