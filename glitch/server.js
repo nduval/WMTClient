@@ -6939,6 +6939,36 @@ wss.on('connection', (ws, req) => {
             }
           }
 
+          // Guest-mode name-prompt restriction: when a guest session is at
+          // the MUD's name prompt, the only allowed name is "guest". Any
+          // other typed name gets dropped before reaching the MUD. Without
+          // this, attackers can use guest mode to type real player names +
+          // password guesses, which the MUD validates and sends "Someone is
+          // attempting to login to your character." notifications to the
+          // real player — a direct harassment vector. Confirmed Nathan-
+          // reported 2026-05-10.
+          //
+          // Allow: empty input (just enter — re-prompts the banner), "guest"
+          // (case-insensitive). Drop everything else with a system message.
+          // Once "guest" goes through, _atNamePrompt clears and subsequent
+          // commands flow normally.
+          if (session.userId && String(session.userId).startsWith('guest_') && session._atNamePrompt) {
+            const cmd = String(data.command || '').trim();
+            if (cmd && cmd.toLowerCase() !== 'guest') {
+              sendToClient(session, {
+                type: 'system',
+                message: 'Guest sessions can only log in as the "guest" character.'
+              });
+              logSessionEvent('GUEST_NAME_BLOCKED', {
+                token: session.token ? session.token.substring(0, 8) : null,
+                user: session.userId,
+                ip: session.clientIp || null,
+                attemptedName: cmd
+              });
+              break;
+            }
+          }
+
           // Multi-device password leak suppression: when "Password:" was
           // recently seen in MUD output (eager flag set in the data handler),
           // capture the FIRST command that arrives as the password and arm a
