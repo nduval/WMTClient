@@ -301,7 +301,7 @@ if ($adminKey) {
                 <span class="ban-type"><?= htmlspecialchars($ban['type'] ?? '') ?></span>
                 <span class="ban-value"><?= htmlspecialchars($ban['value'] ?? '') ?></span>
                 <span class="ban-reason"><?= htmlspecialchars($ban['reason'] ?? '') ?></span>
-                <span class="ban-date"><?= isset($ban['banned_at']) ? date('M j, Y', strtotime($ban['banned_at'])) : '' ?></span>
+                <span class="ban-date"><?= isset($ban['banned_at']) ? date('M j, Y H:i', strtotime($ban['banned_at'])) : '' ?></span>
             </li>
 <?php endforeach; ?>
         </ul>
