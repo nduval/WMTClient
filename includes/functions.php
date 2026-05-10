@@ -83,6 +83,112 @@ function isIpBanned(string $ip): array {
 }
 
 /**
+ * Per-/24 registration rate limit.
+ *
+ * Returns ['allowed' => bool, 'reason' => string|null]. Counts the number
+ * of registrations from the IP's /24 subnet within the last 24 hours; if
+ * the count meets or exceeds REG_LIMIT_PER_24H, blocks the registration.
+ *
+ * Storage: data/logs/registration_attempts.json. The file is a flat list of
+ * `{ip, ts}` entries; old entries (> 24h) are pruned on every check so the
+ * file doesn't grow unbounded. Concurrent writes are guarded with flock so
+ * two simultaneous registrations can't both pass the check by reading stale
+ * state.
+ *
+ * Recurring abuse pattern (Yggdrasil/Dwolin attacker, 2026-05): comes back
+ * monthly and creates 3+ throwaway WMT accounts from the same VPN range
+ * within minutes. This rate limit caps that to 2 per /24 per 24h. Legit
+ * household/family signups still pass since they happen rarely; if it ever
+ * blocks a real user they'll know to wait or contact admin.
+ */
+const REG_LIMIT_PER_24H = 2;
+const REG_WINDOW_SECONDS = 86400;
+
+function checkRegistrationRateLimit(string $ip): array {
+    if (empty($ip)) return ['allowed' => true, 'reason' => null];
+    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        // IPv6 or malformed — skip rate limit (don't block legit users
+        // on networks we don't have /24 logic for).
+        return ['allowed' => true, 'reason' => null];
+    }
+
+    $logDir = __DIR__ . '/../data/logs';
+    @mkdir($logDir, 0755, true);
+    $path = $logDir . '/registration_attempts.json';
+
+    // Compute /24 of the requesting IP.
+    $ipLong = ip2long($ip);
+    if ($ipLong === false) return ['allowed' => true, 'reason' => null];
+    $subnet24 = long2ip($ipLong & 0xFFFFFF00);
+
+    $now = time();
+    $cutoff = $now - REG_WINDOW_SECONDS;
+
+    // Open the file with an exclusive lock so the read-prune-check-write
+    // sequence is atomic. The window is short; contention should be near-
+    // zero in practice.
+    $fp = @fopen($path, 'c+');
+    if (!$fp) {
+        // Filesystem error — fail open, log, but don't block legit users.
+        @error_log("checkRegistrationRateLimit: cannot open $path");
+        return ['allowed' => true, 'reason' => null];
+    }
+
+    try {
+        if (!flock($fp, LOCK_EX)) {
+            fclose($fp);
+            return ['allowed' => true, 'reason' => null];
+        }
+        $raw = stream_get_contents($fp);
+        $entries = $raw ? json_decode($raw, true) : [];
+        if (!is_array($entries)) $entries = [];
+
+        // Prune entries older than the window.
+        $entries = array_values(array_filter($entries, function($e) use ($cutoff) {
+            return is_array($e) && isset($e['ts']) && $e['ts'] >= $cutoff;
+        }));
+
+        // Count entries from the same /24.
+        $matches = 0;
+        foreach ($entries as $e) {
+            if (!isset($e['ip'])) continue;
+            $entryLong = ip2long($e['ip']);
+            if ($entryLong === false) continue;
+            $entrySubnet = long2ip($entryLong & 0xFFFFFF00);
+            if ($entrySubnet === $subnet24) $matches++;
+        }
+
+        if ($matches >= REG_LIMIT_PER_24H) {
+            // Don't append — they're being blocked, not registered.
+            // Write back the pruned list so old entries don't accumulate.
+            ftruncate($fp, 0);
+            rewind($fp);
+            fwrite($fp, json_encode($entries));
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            return [
+                'allowed' => false,
+                'reason' => "Registration limit reached for this network ($matches in last 24h)"
+            ];
+        }
+
+        // Append this attempt and write back.
+        $entries[] = ['ip' => $ip, 'ts' => $now];
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($entries));
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return ['allowed' => true, 'reason' => null];
+    } catch (\Throwable $e) {
+        @error_log("checkRegistrationRateLimit: " . $e->getMessage());
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+        return ['allowed' => true, 'reason' => null];
+    }
+}
+
+/**
  * Test if an IPv4 falls inside a CIDR range (e.g., "10.0.0.0/8").
  * Returns false on parse error rather than throwing.
  */

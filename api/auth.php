@@ -34,6 +34,18 @@ switch ($action) {
             errorResponse('This IP has been suspended. Please reach out to Elminster for details.');
         }
 
+        // Per-/24 registration rate limit. Caps casual account-spam from a
+        // single VPN range — the recurring attacker who comes back monthly
+        // and burns through 3+ throwaway accounts in minutes from the same
+        // /24 (DataCamp/M247/etc) only gets 2 attempts now before the next
+        // signup is blocked. Legit household / family signups happen rarely
+        // and well below the limit.
+        $rateCheck = checkRegistrationRateLimit($clientIp);
+        if (!$rateCheck['allowed']) {
+            authLog("REGISTER_RATE_LIMITED: ip=$clientIp reason={$rateCheck['reason']}");
+            errorResponse('Too many recent registrations from your network. Please try again tomorrow or contact Elminster.');
+        }
+
         $data = json_decode(file_get_contents('php://input'), true);
         $username = $data['username'] ?? '';
         $password = $data['password'] ?? '';
