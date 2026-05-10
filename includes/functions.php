@@ -35,6 +35,71 @@ function fetchFromLightsail(string $path, string $characterId): ?array {
 }
 
 /**
+ * Fetch the current IP ban list from Lightsail and check whether the given
+ * IP is banned. Returns ['banned' => bool, 'reason' => string|null]. Network
+ * failures fall through to ['banned' => false] — open by default so a
+ * Lightsail outage doesn't lock everyone out of registration.
+ *
+ * Used by api/auth.php register flow (added 2026-05-10) so a banned griefer
+ * can't just create another WMT account from the same IP after his existing
+ * IPs are banned. Honest about scope: he can still rotate VPN. This is a
+ * speed bump, not a wall.
+ */
+function isIpBanned(string $ip): array {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey || empty($ip)) return ['banned' => false, 'reason' => null];
+
+    $url = 'https://ws.wemudtogether.com/ip-bans';
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => "X-Admin-Key: $adminKey\r\n",
+            'timeout' => 3,
+            'ignore_errors' => true
+        ],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) return ['banned' => false, 'reason' => null];
+    $data = json_decode($body, true);
+    if (!is_array($data) || empty($data['success']) || !isset($data['bans'])) {
+        return ['banned' => false, 'reason' => null];
+    }
+
+    foreach ($data['bans'] as $ban) {
+        $type = $ban['type'] ?? '';
+        $value = $ban['value'] ?? '';
+        if ($type === 'ip' && $value === $ip) {
+            return ['banned' => true, 'reason' => $ban['reason'] ?? 'Banned by admin'];
+        }
+        if ($type === 'cidr' && ipInCidr($ip, $value)) {
+            return ['banned' => true, 'reason' => $ban['reason'] ?? 'Banned by admin (CIDR)'];
+        }
+        // ASN bans need an ipinfo lookup — skip in PHP path to avoid the
+        // extra network hop. Lightsail's WS auth still enforces ASN bans
+        // when the user tries to actually connect.
+    }
+    return ['banned' => false, 'reason' => null];
+}
+
+/**
+ * Test if an IPv4 falls inside a CIDR range (e.g., "10.0.0.0/8").
+ * Returns false on parse error rather than throwing.
+ */
+function ipInCidr(string $ip, string $cidr): bool {
+    if (strpos($cidr, '/') === false) return false;
+    list($subnet, $bits) = explode('/', $cidr, 2);
+    $bits = (int)$bits;
+    if ($bits < 0 || $bits > 32) return false;
+    $ipLong = ip2long($ip);
+    $subnetLong = ip2long($subnet);
+    if ($ipLong === false || $subnetLong === false) return false;
+    if ($bits === 0) return true;
+    $mask = (-1 << (32 - $bits)) & 0xFFFFFFFF;
+    return ($ipLong & $mask) === ($subnetLong & $mask);
+}
+
+/**
  * POST a full-list bulk replace to a Lightsail admin endpoint.
  * Used by PHP save handlers so writes reach DB even if the user's WS is
  * disconnected at save time. Returns true on 2xx success, false otherwise.

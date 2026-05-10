@@ -20,6 +20,20 @@ switch ($action) {
             errorResponse('Method not allowed', 405);
         }
 
+        // Block registration from already-banned IPs. Doesn't stop a
+        // determined griefer who rotates VPN exits, but stops the easy
+        // case of "ban my IP at the WS layer, sign up for a new account
+        // from the same IP, repeat" (observed 2026-05-10 with the
+        // Yggdrasil/Dwolin attacker).
+        $clientIp = getClientIp();
+        $banCheck = isIpBanned($clientIp);
+        if ($banCheck['banned']) {
+            // Match the WS-layer message tone — clear that it's deliberate,
+            // doesn't reveal which IP rule matched, points to a contact.
+            authLog("REGISTER_BLOCKED: ip=$clientIp reason={$banCheck['reason']}");
+            errorResponse('This IP has been suspended. Please reach out to Elminster for details.');
+        }
+
         $data = json_decode(file_get_contents('php://input'), true);
         $username = $data['username'] ?? '';
         $password = $data['password'] ?? '';
