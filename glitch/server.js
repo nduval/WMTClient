@@ -899,6 +899,63 @@ async function checkIpBan(ip) {
 
 let ipBans = loadIpBans();
 
+// ─── Honeypot trip strings ───
+// If a session's command exactly matches one of these strings, auto-ban the
+// source IP and close the connection. Used to catch repeat griefers whose
+// signature inputs (specific passwords, throwaway emails, etc.) are unique
+// enough that legit users won't trip them. Currently seeded with the
+// Yggdrasil/Dwolin attacker's char-creation password seen 2026-05-10.
+//
+// To add more without a deploy, write to /opt/wmt/honeypot_trips.json
+// (one trip string per array element); reloaded on each command check.
+let honeypotTrips = [
+  'namida'  // attacker's reused password during repeated char creation
+];
+function loadHoneypotTrips() {
+  try {
+    const path = '/opt/wmt/honeypot_trips.json';
+    if (fs.existsSync(path)) {
+      const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+      if (Array.isArray(data)) honeypotTrips = data;
+    }
+  } catch (e) {
+    console.error('Failed to load honeypot_trips.json:', e.message);
+  }
+}
+loadHoneypotTrips();
+// Re-read every 60s so admin edits to the file take effect without restart.
+setInterval(loadHoneypotTrips, 60000);
+
+function tripHoneypot(session, ws, cmd, reason) {
+  const ip = session?.clientIp || '';
+  if (!ip) return;
+  // Skip if already banned (idempotent)
+  for (const ban of ipBans) {
+    if (ban.type === 'ip' && ban.value === ip) return;
+  }
+  const ban = {
+    type: 'ip',
+    value: ip,
+    reason: `Honeypot trip: ${reason}`,
+    banned_at: new Date().toISOString(),
+    banned_by: 'honeypot'
+  };
+  ipBans.push(ban);
+  saveIpBans(ipBans);
+  logSessionEvent('IP_BAN_AUTO', {
+    type: 'ip',
+    value: ip,
+    reason: ban.reason,
+    matchedCmd: cmd,
+    user: session.userId || null,
+    char: session.characterName || null
+  });
+  // Close everything — MUD socket and WS — so the trip is visible to the user
+  // and they don't think their last command worked.
+  try { session.mudSocket?.destroy(); } catch (e) {}
+  try { ws?.close(1008, 'Banned'); } catch (e) {}
+}
+
 // ==================== Bridge Mode ====================
 // When BRIDGE_URL is set, MUD TCP connections go through bridge.js
 // which holds them across server.js restarts (zero-downtime deploys).
@@ -1335,6 +1392,13 @@ const MUD_EVENT_PATTERNS = [
   // Auth failures
   { re: /^Incorrect password\./,                                          event: 'password_fail',      atNamePrompt: true },
 
+  // Character creation flow markers (3K-specific). The first prompt fires
+  // mid-creation; the welcome line fires when registration completes.
+  // Used to (a) tag the session as "in creation" so the welcome doesn't
+  // get treated as a normal login, (b) emit a `register` audit row.
+  { re: /^Where did you hear about 3Kingdoms\?/,                          event: 'creation_prompt' },
+  { re: /^3Kingdoms welcomes you!\s*$/,                                   event: 'welcome_fresh', realm: '3k' },
+
   // Successful quit — both 3K and 3S send the same humorous goodbye line
   // immediately before saving the character and closing the socket. This
   // is the ground-truth signal for "user voluntarily quit," distinct from
@@ -1443,6 +1507,27 @@ function detectMudEvents(session, rawLine) {
       // place to emit it (avoids ordering issues with the close handler).
       if (p.event === 'quit_complete') {
         session._loginAuditQuit = true;
+      }
+
+      // ─── Character creation tracking (audit-log gap fix) ───
+      // 3K's char creation flow doesn't use the literal "Password:" prompt
+      // (it asks "Pick a password:" / "Confirm password:" instead), so the
+      // existing login-audit state machine never advances and registrations
+      // never appear in the audit CSV. We mark `_inCreationFlow` on a unique
+      // creation-only prompt and emit a `register` row on the welcome line.
+      // Confirmed gap 2026-05-10 (Yggdrasil/Dwolin attacker spam-creating
+      // chars went undetected in the activity log for hours).
+      if (p.event === 'creation_prompt') {
+        session._inCreationFlow = true;
+      }
+      if (p.event === 'welcome_fresh' && session._inCreationFlow) {
+        session._inCreationFlow = false;
+        if (session._loginAuditPending) {
+          session._loginAuditPending = false;
+          session._loginAuditAtPasswordPrompt = false;
+          session._loginAuditPasswordEntered = false;
+          sendAuditLog('register', session, session.clientIp);
+        }
       }
 
       // ─── Multi-device password leak suppression ───
@@ -6839,6 +6924,21 @@ wss.on('connection', (ws, req) => {
       // Handle authenticated messages
       switch (data.type) {
         case 'command':
+          // Honeypot trip: if the command exactly matches a configured trip
+          // string, auto-ban the source IP and tear down the connection.
+          // Trips are seeded with attacker signatures (e.g., the Yggdrasil/
+          // Dwolin attacker's char-creation password "namida"). Exact match
+          // on the whole command (not substring) so legit users typing a
+          // similar word in chat don't trip — chat goes through as
+          // `say <word>`, not `<word>` alone.
+          if (data.command && honeypotTrips.length > 0) {
+            const cmd = String(data.command).trim();
+            if (cmd && honeypotTrips.includes(cmd)) {
+              tripHoneypot(session, ws, cmd, `matched "${cmd}"`);
+              return;
+            }
+          }
+
           // Multi-device password leak suppression: when "Password:" was
           // recently seen in MUD output (eager flag set in the data handler),
           // capture the FIRST command that arrives as the password and arm a
