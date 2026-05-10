@@ -4394,6 +4394,17 @@ const server = http.createServer(async (req, res) => {
             wmtDb.prepare('UPDATE users SET last_login = ?, last_ip = ? WHERE id = ?')
               .run(user.last_login || '', user.last_ip || '', user.id);
             break;
+          case 'delete':
+            // Remove user from DB. The admin-page delete in PHP wipes the
+            // user directory + users_index.json but didn't sync to Lightsail
+            // until 2026-05-10 — so accounts "deleted" before today still
+            // existed in the DB and could authenticate. (Confirmed via the
+            // Yggdrasil/Dwolin attacker's `dwolin2` account persisting.)
+            // Related per-character data (triggers, aliases, preferences,
+            // etc.) is NOT cascaded — a deleted user's character data
+            // becomes orphaned. Cleanup of orphans is a separate task.
+            wmtDb.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+            break;
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });

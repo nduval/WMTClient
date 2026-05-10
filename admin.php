@@ -491,6 +491,13 @@ function deleteUserAccount(string $userId, string $confirmUsername): array {
         return ['success' => false, 'error' => 'Failed to update users index'];
     }
 
+    // Sync the deletion to Lightsail DB. Without this, the user's row in the
+    // `users` table stays alive and the WS auth keeps accepting the account
+    // even after the JSON-side delete. Pre-existed the JSON→DB migration;
+    // fixed 2026-05-10 after the Yggdrasil/Dwolin attacker's `dwolin2`
+    // account survived an admin-panel delete.
+    syncAccountToDb('delete', ['id' => $userId]);
+
     return ['success' => true, 'username' => $username];
 }
 
