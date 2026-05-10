@@ -6948,11 +6948,19 @@ wss.on('connection', (ws, req) => {
           // real player — a direct harassment vector. Confirmed Nathan-
           // reported 2026-05-10.
           //
+          // Detection covers both flavors of "guest":
+          //   1. Anonymous guests — userId starts with `guest_`
+          //   2. Registered accounts that added `guest` as a WMT character
+          //      slot (the attacker's bypass discovered minutes after the
+          //      first version of this gate landed)
+          //
           // Allow: empty input (just enter — re-prompts the banner), "guest"
           // (case-insensitive). Drop everything else with a system message.
           // Once "guest" goes through, _atNamePrompt clears and subsequent
           // commands flow normally.
-          if (session.userId && String(session.userId).startsWith('guest_') && session._atNamePrompt) {
+          const isAnonGuest = session.userId && String(session.userId).startsWith('guest_');
+          const isGuestChar = (session.characterName || '').toLowerCase() === 'guest';
+          if ((isAnonGuest || isGuestChar) && session._atNamePrompt) {
             const cmd = String(data.command || '').trim();
             if (cmd && cmd.toLowerCase() !== 'guest') {
               sendToClient(session, {
