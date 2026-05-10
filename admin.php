@@ -32,31 +32,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $messageType = 'error';
     } else {
         switch ($action) {
-            case 'backup':
-                $result = createBackup();
-                if ($result['success']) {
-                    $message = 'Backup created: ' . $result['filename'];
-                    $messageType = 'success';
-                } else {
-                    $message = 'Backup failed: ' . $result['error'];
-                    $messageType = 'error';
-                }
-                break;
-
-            case 'restore':
-                $backupFile = $_POST['backup_file'] ?? '';
-                if ($backupFile) {
-                    $result = restoreBackup($backupFile);
-                    if ($result['success']) {
-                        $message = 'Restore successful';
-                        $messageType = 'success';
-                    } else {
-                        $message = 'Restore failed: ' . $result['error'];
-                        $messageType = 'error';
-                    }
-                }
-                break;
-
+            // backup/restore handlers removed 2026-05-10. They walked
+            // data/users/{id}/ JSON files, but the migration moved
+            // aliases/triggers/classes/tickers/preferences to the SQLite DB
+            // — so a JSON backup captured stale state and a JSON restore
+            // would write back data the read paths now ignore. Replaced by
+            // a cron-driven sqlite3 .backup of /opt/wmt/wmt.db on Lightsail.
+            // See memory: reference_db_backup.md for the cron + retention.
             case 'adopt_orphan':
                 $orphanId = $_POST['orphan_id'] ?? '';
                 $targetUserId = $_POST['target_user_id'] ?? '';
@@ -185,108 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Helper functions for admin operations
-function createBackup(): array {
-    $timestamp = date('Y-m-d_H-i-s');
-    $backupDir = USERS_PATH . '/backups';
-
-    if (!is_dir($backupDir)) {
-        mkdir($backupDir, 0755, true);
-    }
-
-    $backupFile = $backupDir . '/backup_' . $timestamp . '.json';
-
-    // Gather all data
-    $backup = [
-        'timestamp' => date('c'),
-        'version' => 1,
-        'users_index' => loadJsonFile(getUsersIndexPath()),
-        'user_data' => []
-    ];
-
-    // Get all user directories
-    $userDirs = glob(USERS_PATH . '/*', GLOB_ONLYDIR);
-    foreach ($userDirs as $userDir) {
-        $dirName = basename($userDir);
-        if ($dirName === 'backups') continue;
-
-        $userData = [
-            'id' => $dirName,
-            'profile' => loadJsonFile($userDir . '/profile.json'),
-            'characters' => loadJsonFile($userDir . '/characters.json'),
-            'character_data' => []
-        ];
-
-        // Get character data
-        $charDirs = glob($userDir . '/characters/*', GLOB_ONLYDIR);
-        foreach ($charDirs as $charDir) {
-            $charId = basename($charDir);
-            $userData['character_data'][$charId] = [
-                'triggers' => loadJsonFile($charDir . '/triggers.json'),
-                'aliases' => loadJsonFile($charDir . '/aliases.json'),
-                'classes' => loadJsonFile($charDir . '/classes.json'),
-                'tickers' => loadJsonFile($charDir . '/tickers.json'),
-                'preferences' => loadJsonFile($charDir . '/preferences.json')
-            ];
-        }
-
-        $backup['user_data'][$dirName] = $userData;
-    }
-
-    if (file_put_contents($backupFile, json_encode($backup, JSON_PRETTY_PRINT))) {
-        return ['success' => true, 'filename' => basename($backupFile)];
-    }
-
-    return ['success' => false, 'error' => 'Failed to write backup file'];
-}
-
-function restoreBackup(string $filename): array {
-    $backupFile = USERS_PATH . '/backups/' . basename($filename);
-
-    if (!file_exists($backupFile)) {
-        return ['success' => false, 'error' => 'Backup file not found'];
-    }
-
-    $backup = json_decode(file_get_contents($backupFile), true);
-    if (!$backup || !isset($backup['users_index'])) {
-        return ['success' => false, 'error' => 'Invalid backup file'];
-    }
-
-    // Restore users_index
-    saveJsonFile(getUsersIndexPath(), $backup['users_index']);
-
-    // Restore user data
-    foreach ($backup['user_data'] as $userId => $userData) {
-        $userPath = USERS_PATH . '/' . $userId;
-
-        if (!is_dir($userPath)) {
-            mkdir($userPath, 0755, true);
-        }
-        if (!is_dir($userPath . '/characters')) {
-            mkdir($userPath . '/characters', 0755, true);
-        }
-
-        if (!empty($userData['profile'])) {
-            saveJsonFile($userPath . '/profile.json', $userData['profile']);
-        }
-        if (isset($userData['characters'])) {
-            saveJsonFile($userPath . '/characters.json', $userData['characters']);
-        }
-
-        // Restore character data
-        foreach ($userData['character_data'] as $charId => $charData) {
-            $charPath = $userPath . '/characters/' . $charId;
-            if (!is_dir($charPath)) {
-                mkdir($charPath, 0755, true);
-            }
-
-            saveJsonFile($charPath . '/triggers.json', $charData['triggers'] ?? []);
-            saveJsonFile($charPath . '/aliases.json', $charData['aliases'] ?? []);
-            saveJsonFile($charPath . '/preferences.json', $charData['preferences'] ?? []);
-        }
-    }
-
-    return ['success' => true];
-}
+// (createBackup / restoreBackup removed 2026-05-10 — see DB-backup cron)
 
 function getOrphanedDirectories(): array {
     $orphans = [];
@@ -558,35 +439,13 @@ function adminSendResetEmail(string $userId, string $bccEmail): array {
     return ['success' => false, 'error' => $result['error'] ?? 'Failed to send email'];
 }
 
-function getBackupFiles(): array {
-    $backupDir = USERS_PATH . '/backups';
-    if (!is_dir($backupDir)) {
-        return [];
-    }
-
-    $files = glob($backupDir . '/backup_*.json');
-    $backups = [];
-
-    foreach ($files as $file) {
-        $backups[] = [
-            'filename' => basename($file),
-            'size' => filesize($file),
-            'modified' => filemtime($file)
-        ];
-    }
-
-    // Sort by date descending
-    usort($backups, function($a, $b) {
-        return $b['modified'] - $a['modified'];
-    });
-
-    return $backups;
-}
+// getBackupFiles removed 2026-05-10. JSON backup feature retired after the
+// DB migration; DB snapshots are handled by cron on Lightsail.
 
 // Get data for display
 $usersIndex = loadJsonFile(getUsersIndexPath());
 $orphans = getOrphanedDirectories();
-$backups = getBackupFiles();
+// JSON backup feature removed 2026-05-10; DB backups handled by Lightsail cron.
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1004,10 +863,6 @@ $backups = getBackupFiles();
                 <div class="stat-value"><?= count($orphans) ?></div>
                 <div class="stat-label">Orphaned</div>
             </div>
-            <div class="stat">
-                <div class="stat-value"><?= count($backups) ?></div>
-                <div class="stat-label">Backups</div>
-            </div>
         </div>
 
         <!-- Broadcast Section -->
@@ -1034,12 +889,6 @@ $backups = getBackupFiles();
         <div class="section">
             <h2>Maintenance</h2>
             <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                <form method="post" style="margin: 0;">
-                    <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                    <input type="hidden" name="action" value="backup">
-                    <button type="submit" class="btn btn-primary">Create Backup Now</button>
-                </form>
-
                 <form method="post" style="margin: 0;" onsubmit="return confirm('Attempt to repair the users index from profile.json files?');">
                     <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
                     <input type="hidden" name="action" value="repair_index">
@@ -1047,38 +896,9 @@ $backups = getBackupFiles();
                 </form>
             </div>
             <p style="color: #666; font-size: 12px; margin-top: 10px;">
-                Repair Index: Recovers orphaned users from profile.json if they have a stored password hash.
+                Repair Index: Recovers orphaned users from profile.json if they have a stored password hash.<br>
+                DB backups: handled automatically by cron on Lightsail (daily, retained 14 days at /opt/wmt/backups/).
             </p>
-        </div>
-
-        <!-- Backup Section -->
-        <div class="section">
-            <h2>Backups</h2>
-
-            <?php if (empty($backups)): ?>
-                <p style="color: #888;">No backups yet.</p>
-            <?php else: ?>
-                <h3>Available Backups</h3>
-                <div class="backup-list">
-                    <?php foreach ($backups as $backup): ?>
-                        <div class="backup-item">
-                            <div class="backup-info">
-                                <div><?= htmlspecialchars($backup['filename']) ?></div>
-                                <div class="backup-date">
-                                    <?= date('M j, Y g:i A', $backup['modified']) ?>
-                                    (<?= number_format($backup['size'] / 1024, 1) ?> KB)
-                                </div>
-                            </div>
-                            <form method="post" style="margin: 0;" onsubmit="return confirm('Restore this backup? Current data will be overwritten.');">
-                                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                                <input type="hidden" name="action" value="restore">
-                                <input type="hidden" name="backup_file" value="<?= htmlspecialchars($backup['filename']) ?>">
-                                <button type="submit" class="btn btn-warning">Restore</button>
-                            </form>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
         </div>
 
         <!-- Users Section -->
