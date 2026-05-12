@@ -7107,6 +7107,28 @@ wss.on('connection', (ws, req) => {
                     sendAuditLog('identified', session, session.clientIp);
                   }
                 }
+                // Guest-login audit carve-out. Guests don't get a
+                // `Password:` prompt, so the deferred-login state machine
+                // (password_prompt → password entered → first command →
+                // fire `login`) never advances and `_loginAuditPending`
+                // stays true through closeSession — which also suppresses
+                // the trailing `disconnect`/`logout` row via the
+                // `neverAuthenticated` check. Result before this fix:
+                // guests produced zero audit rows. Fire here when the
+                // resolved MUD char is "guest", same shape as the
+                // creation-flow carve-out above for `register`. Gated on:
+                //   - _loginAuditPending: skips relinks (relink_complete
+                //     clears this flag and fires `reconnect` itself).
+                //   - !_inCreationFlow: char creation owns its own row
+                //     and fires `register` on welcome_fresh.
+                if (candidate === 'guest'
+                    && session._loginAuditPending
+                    && !session._inCreationFlow) {
+                  session._loginAuditPending = false;
+                  session._loginAuditAtPasswordPrompt = false;
+                  session._loginAuditPasswordEntered = false;
+                  sendAuditLog('login', session, session.clientIp);
+                }
               }
             }
 
