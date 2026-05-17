@@ -2174,6 +2174,8 @@ class WMTClient {
             }
         };
 
+        const hoverTimestamp = new Date().toLocaleString();
+
         // Append to chat window
         const chatOutput = document.getElementById('chat-output');
         if (chatOutput) {
@@ -2185,6 +2187,7 @@ class WMTClient {
             const line = document.createElement('div');
             line.className = `chat-line ${chatType}`;
             line.dataset.channel = channelKey;
+            line.title = hoverTimestamp;
             line.innerHTML = message;
             applyChannelColors(line);
             // Apply active channel filter so new messages obey it
@@ -2211,6 +2214,7 @@ class WMTClient {
                 const line = this.chatPopoutWindow.document.createElement('div');
                 line.className = `chat-line ${chatType}`;
                 line.dataset.channel = channelKey;
+                line.title = hoverTimestamp;
                 line.innerHTML = message;
                 applyChannelColors(line);
                 if (this.chatFilterChannel && channelKey !== this.chatFilterChannel) {
