@@ -52,6 +52,9 @@ __pycache__/
 # TinTin++ reference materials (local research, not deployed)
 /tintin-reference/
 
+# MUD notes and scratch (local research, not deployed)
+/mud_notes/
+
 # Server-side tools (deployed to sandbox, not IONOS)
 /tools/
 

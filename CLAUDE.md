@@ -1,5 +1,54 @@
 # WMT Client - Project Notes
 
+## IMPORTANT: Pre-work Context Loading
+
+Before starting ANY non-trivial change in this project, read the relevant
+context files first. The MEMORY.md index is auto-loaded, but the actual
+content of individual memory files is NOT — I will only have that context
+if I deliberately read the files BEFORE making claims or writing code.
+
+**Mandatory reads by work area:**
+
+| If you're going to touch... | Read these first |
+|---|---|
+| `glitch/server.js` | `memory/regression-checklist.md`, `memory/admin_alias_endpoint.md`, `memory/feedback_db_is_source_of_truth.md` |
+| `assets/js/app.js` (preferences) | The "Adding a Preference Touches THREE Files" section below |
+| Any DB schema or migration claim | `memory/admin_alias_endpoint.md`, `memory/feedback_db_is_source_of_truth.md`, `memory/feedback_use_admin_endpoints_for_user_data.md`, `memory/bug_characters_not_synced_to_lightsail_db.md` |
+| A `.tin` file (TinTin++ scripts) | `tintin-reference/parsing.md`, `tintin-reference/README.md`, `memory/feedback_lint_tin_files_via_ttrun.md` |
+| New TinTin++ verb handler | `memory/feedback_porting_commands.md`, `memory/feedback_check_callers_first.md` |
+| Anything someone reported as a bug | Grep `memory/` for related bug_*.md and feedback_*.md files |
+
+**When in doubt**: read the relevant `feedback_*.md` files in `memory/`.
+They are scars from prior sessions and represent the highest-value context.
+
+**To force a comprehensive context load at session start**: the user can
+type "read all relevant memory before starting" and I will do a full
+context-loading pass on the listed files before any work.
+
+**Action discipline — don't ask permission for routine reads:**
+- Read operations (SFTP enumeration, log greps, DB SELECTs, file inspection,
+  fetching public data) should be done directly, not proposed first. Ask
+  permission only for writes, deploys, destructive operations, or anything
+  that affects other users.
+- When using credentials from local files (sftp.txt, ssh keys, .pem files),
+  NEVER echo the file contents to verify existence — use `wc -l <file>` or
+  `test -f <file> && echo present`. Pass credentials inline to python/ssh
+  without printing them.
+
+**Scope discipline when claiming things done:**
+- Never say "the migration is done" — say "the migration is done for
+  aliases/triggers/classes/tickers/preferences. characters and bots
+  remain JSON-only" (or whatever the actual verified scope is).
+- Before claiming a system is "fixed", grep for ALL callers / write
+  paths / edge cases. The 2026-05-25 character-sync gap was a half-finished
+  migration where the existing-data backfill worked but the new-data
+  create path was never wired. That pattern is what scope-qualifier
+  discipline prevents.
+- When updating memory after work, document what was NOT covered as
+  explicitly as what was. The reader (future me) needs both.
+
+---
+
 ## IMPORTANT: Always Deploy
 
 **After making ANY code changes, run `python deploy.py all` immediately.** Do not wait for the user to ask. This deploys to both IONOS (PHP/JS/CSS) and Lightsail (WebSocket proxy). It's safe to run even if only one side changed.

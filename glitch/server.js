@@ -459,6 +459,37 @@ function dbLoadTickers(characterId) {
 const ADMIN_KEY = process.env.ADMIN_KEY || null; // Admin key for broadcast endpoint
 const BRIDGE_URL = process.env.BRIDGE_URL || null; // ws://localhost:4000 for bridge mode
 
+// Allowed-MUDs allowlist. Loaded from /opt/wmt/config/allowed_servers.json if
+// present, otherwise falls back to the hardcoded production list. The fallback
+// matters because: (a) production may not have the config file and should keep
+// working, (b) if the config is malformed we should not silently allow extra
+// servers. Sandbox boxes drop in a config file that adds localhost:4000 for
+// the mock MUD without touching code or rebuilding for each environment.
+//
+// Format: [ { "host": "3k.org", "port": 3000 }, ... ]
+const ALLOWED_SERVERS_CONFIG_PATH = process.env.ALLOWED_SERVERS_CONFIG
+  || '/opt/wmt/config/allowed_servers.json';
+const ALLOWED_SERVERS_DEFAULT = [
+  { host: '3k.org',      port: 3000 },
+  { host: '3scapes.org', port: 3200 }
+];
+function loadAllowedServers() {
+  try {
+    if (!fs.existsSync(ALLOWED_SERVERS_CONFIG_PATH)) return ALLOWED_SERVERS_DEFAULT;
+    const raw = fs.readFileSync(ALLOWED_SERVERS_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return ALLOWED_SERVERS_DEFAULT;
+    const valid = parsed.filter(s => s && typeof s.host === 'string' && Number.isInteger(s.port));
+    if (valid.length === 0) return ALLOWED_SERVERS_DEFAULT;
+    console.log(`Loaded ${valid.length} allowed servers from ${ALLOWED_SERVERS_CONFIG_PATH}`);
+    return valid;
+  } catch (e) {
+    console.error(`Failed to load ${ALLOWED_SERVERS_CONFIG_PATH}: ${e.message} — using defaults`);
+    return ALLOWED_SERVERS_DEFAULT;
+  }
+}
+const ALLOWED_SERVERS = loadAllowedServers();
+
 // Session persistence configuration
 const SESSION_BUFFER_MAX_LINES = 150;  // Max lines to buffer while browser disconnected (keep recent, drop old)
 const SESSION_TIMEOUT_MS = 15 * 60 * 1000;  // 15 minutes without browser = close MUD connection
@@ -4143,6 +4174,67 @@ const server = http.createServer(async (req, res) => {
     });
     return;
 
+  } else if (parsedUrl.pathname === '/admin/character' && req.method === 'POST') {
+    // Create-or-update a character record in the DB. Called by PHP
+    // createCharacter() so every new char in IONOS also lands in the
+    // Lightsail DB (closes the long-standing sync gap documented in
+    // memory/bug_characters_not_synced_to_lightsail_db.md, 2026-05-25).
+    // Body: { id, user_id, name, label?, server?, password?, sort_order?, created_at? }
+    // INSERT OR REPLACE so the same call works for create and update.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 50000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { id, user_id, name } = data;
+        if (!id || !user_id || !name) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'id, user_id, name required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM characters WHERE id=?').get(id);
+        const next = {
+          id,
+          user_id,
+          name,
+          label: data.label !== undefined ? data.label : (before ? before.label : ''),
+          server: data.server !== undefined ? data.server : (before ? before.server : '3k'),
+          password: data.password !== undefined ? data.password : (before ? before.password : ''),
+          sort_order: data.sort_order !== undefined ? data.sort_order : (before ? before.sort_order : 0),
+          created_at: data.created_at !== undefined ? data.created_at : (before ? before.created_at : new Date().toISOString()),
+        };
+        wmtDb.transaction(() => {
+          wmtDb.prepare(
+            'INSERT OR REPLACE INTO characters (id, user_id, name, label, server, password, sort_order, created_at) VALUES (?,?,?,?,?,?,?,?)'
+          ).run(next.id, next.user_id, next.name, next.label, next.server, next.password, next.sort_order, next.created_at);
+          try {
+            wmtDb.prepare(
+              `INSERT INTO change_log (character_id, table_name, item_id, action, old_data, new_data, source, created_at) VALUES (?,?,?,?,?,?,?, datetime('now'))`
+            ).run(id, 'characters', id, before ? 'update' : 'create',
+                  before ? JSON.stringify(before) : null,
+                  JSON.stringify(next), 'admin_api');
+          } catch {}
+        })();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, id, created: !before }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
   } else if (parsedUrl.pathname === '/admin/aliases-bulk' && req.method === 'POST') {
     // Full-list bulk replace for aliases. Mirrors WS set_aliases / dbSaveAliases.
     // Used by PHP aliases.php save handlers so JSON-side writes also reach DB.
@@ -7501,11 +7593,7 @@ wss.on('connection', (ws, req) => {
 
         case 'set_server':
           if (data.host && data.port) {
-            const allowedServers = [
-              { host: '3k.org', port: 3000 },
-              { host: '3scapes.org', port: 3200 }
-            ];
-            const isAllowed = allowedServers.some(s => s.host === data.host && s.port === data.port);
+            const isAllowed = ALLOWED_SERVERS.some(s => s.host === data.host && s.port === data.port);
             if (isAllowed) {
               session.targetHost = data.host;
               session.targetPort = data.port;

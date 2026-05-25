@@ -35,6 +35,41 @@ function fetchFromLightsail(string $path, string $characterId): ?array {
 }
 
 /**
+ * POST data to a Lightsail wmt-server admin endpoint. Mirror of
+ * fetchFromLightsail() for write paths. Returns the decoded JSON body on
+ * success, null on any error.
+ *
+ * Used to keep the Lightsail DB in sync with IONOS JSON writes (e.g.
+ * createCharacter writes the JSON file on IONOS AND posts to
+ * /admin/character so the DB row is created at the same time).
+ *
+ * Non-fatal on network failure — caller decides whether to retry, log, or
+ * just shrug. The IONOS-side write is always the authoritative one for the
+ * user's UI; this is the sync best-effort.
+ */
+function pushToLightsail(string $path, array $payload): ?array {
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if (!$adminKey) return null;
+    $url = 'https://ws.wemudtogether.com' . $path;
+    $body = json_encode($payload);
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => "X-Admin-Key: $adminKey\r\nContent-Type: application/json\r\n",
+            'content' => $body,
+            'timeout' => 5,
+            'ignore_errors' => true
+        ],
+        'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+    ]);
+    $resp = @file_get_contents($url, false, $ctx);
+    if ($resp === false) return null;
+    $data = json_decode($resp, true);
+    if (!is_array($data) || empty($data['success'])) return null;
+    return $data;
+}
+
+/**
  * Fetch the current IP ban list from Lightsail and check whether the given
  * IP is banned. Returns ['banned' => bool, 'reason' => string|null]. Network
  * failures fall through to ['banned' => false] — open by default so a
@@ -907,6 +942,21 @@ function createCharacter(string $userId, string $characterName, string $server =
 
     // Update global character index
     updateCharacterIndex($userId, $characterId, $characterName, $server);
+
+    // Push to Lightsail DB so the characters table is kept in sync with the
+    // IONOS JSON write. Non-fatal on failure — IONOS is the user-facing
+    // source of truth, this is the sync to the runtime DB.
+    // See memory/bug_characters_not_synced_to_lightsail_db.md (2026-05-25).
+    pushToLightsail('/admin/character', [
+        'id' => $characterId,
+        'user_id' => $userId,
+        'name' => $characterName,
+        'label' => '',
+        'server' => $server,
+        'password' => '',
+        'sort_order' => 0,
+        'created_at' => $character['created_at']
+    ]);
 
     return $character;
 }
