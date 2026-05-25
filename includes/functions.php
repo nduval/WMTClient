@@ -1012,7 +1012,25 @@ function reorderCharacters(string $userId, array $orderedIds): bool {
         $newOrder[] = $char;
     }
 
-    return saveJsonFile(getCharactersListPath($userId), $newOrder);
+    $result = saveJsonFile(getCharactersListPath($userId), $newOrder);
+
+    // Sync sort_order to Lightsail DB for each character.  N HTTP calls for
+    // N characters — acceptable for typical N (1-20).  Each call is INSERT
+    // OR REPLACE so it's idempotent and safe.
+    if ($result) {
+        foreach ($newOrder as $idx => $char) {
+            pushToLightsail('/admin/character', [
+                'id' => $char['id'],
+                'user_id' => $userId,
+                'name' => $char['name'],
+                'label' => $char['label'] ?? '',
+                'server' => $char['server'] ?? '3k',
+                'sort_order' => $idx
+            ]);
+        }
+    }
+
+    return $result;
 }
 
 /**
@@ -1043,6 +1061,13 @@ function deleteCharacter(string $userId, string $characterId): bool {
     // Remove from global character index
     removeFromCharacterIndex($characterId);
 
+    // Cascade-delete the character + all related rows from the Lightsail DB.
+    // Without this, the character row plus its aliases/triggers/classes/
+    // tickers/preferences orphan in the DB forever.
+    pushToLightsail('/admin/character/delete', [
+        'characterId' => $characterId
+    ]);
+
     return true;
 }
 
@@ -1072,6 +1097,14 @@ function renameCharacter(string $userId, string $characterId, string $newName): 
     // Update global character index with new name
     if ($result) {
         updateCharacterIndex($userId, $characterId, $newName, $server);
+        // Sync to Lightsail DB so the characters table reflects the new name.
+        // /admin/character is INSERT OR REPLACE so it handles update fine.
+        pushToLightsail('/admin/character', [
+            'id' => $characterId,
+            'user_id' => $userId,
+            'name' => $newName,
+            'server' => $server
+        ]);
     }
 
     return $result;
@@ -1137,11 +1170,13 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
 function updateCharacterLabel(string $userId, string $characterId, string $label): bool {
     $characters = getCharacters($userId);
     $found = false;
+    $charData = null;
 
     foreach ($characters as &$char) {
         if ($char['id'] === $characterId) {
             $char['label'] = $label;
             $found = true;
+            $charData = $char;
             break;
         }
     }
@@ -1150,7 +1185,17 @@ function updateCharacterLabel(string $userId, string $characterId, string $label
         return false;
     }
 
-    return saveJsonFile(getCharactersListPath($userId), $characters);
+    $result = saveJsonFile(getCharactersListPath($userId), $characters);
+    if ($result && $charData) {
+        pushToLightsail('/admin/character', [
+            'id' => $characterId,
+            'user_id' => $userId,
+            'name' => $charData['name'],
+            'label' => $label,
+            'server' => $charData['server'] ?? '3k'
+        ]);
+    }
+    return $result;
 }
 
 /**
@@ -1159,11 +1204,13 @@ function updateCharacterLabel(string $userId, string $characterId, string $label
 function updateCharacterPassword(string $userId, string $characterId, string $password): bool {
     $characters = getCharacters($userId);
     $found = false;
+    $charData = null;
 
     foreach ($characters as &$char) {
         if ($char['id'] === $characterId) {
             $char['password'] = $password;
             $found = true;
+            $charData = $char;
             break;
         }
     }
@@ -1172,7 +1219,17 @@ function updateCharacterPassword(string $userId, string $characterId, string $pa
         return false;
     }
 
-    return saveJsonFile(getCharactersListPath($userId), $characters);
+    $result = saveJsonFile(getCharactersListPath($userId), $characters);
+    if ($result && $charData) {
+        pushToLightsail('/admin/character', [
+            'id' => $characterId,
+            'user_id' => $userId,
+            'name' => $charData['name'],
+            'password' => $password,
+            'server' => $charData['server'] ?? '3k'
+        ]);
+    }
+    return $result;
 }
 
 /**
@@ -1225,11 +1282,13 @@ function updateCharacterServer(string $userId, string $characterId, string $serv
 
     $characters = getCharacters($userId);
     $found = false;
+    $charData = null;
 
     foreach ($characters as &$char) {
         if ($char['id'] === $characterId) {
             $char['server'] = $server;
             $found = true;
+            $charData = $char;
             break;
         }
     }
@@ -1238,7 +1297,16 @@ function updateCharacterServer(string $userId, string $characterId, string $serv
         return false;
     }
 
-    return saveJsonFile(getCharactersListPath($userId), $characters);
+    $result = saveJsonFile(getCharactersListPath($userId), $characters);
+    if ($result && $charData) {
+        pushToLightsail('/admin/character', [
+            'id' => $characterId,
+            'user_id' => $userId,
+            'name' => $charData['name'],
+            'server' => $server
+        ]);
+    }
+    return $result;
 }
 
 /**

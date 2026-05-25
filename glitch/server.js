@@ -4235,6 +4235,69 @@ const server = http.createServer(async (req, res) => {
     });
     return;
 
+  } else if (parsedUrl.pathname === '/admin/character/delete' && req.method === 'POST') {
+    // Cascade-delete a character and all related rows.  Without this, deleting
+    // a character via the IONOS PHP path would orphan aliases/triggers/classes/
+    // tickers/preferences/guard rows in the DB indefinitely.
+    // Body: { characterId }
+    // Returns: { success, deleted: { characters, aliases, triggers, classes, tickers, preferences, alias_guard, entity_guard } }
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > 10000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { characterId } = data;
+        if (!characterId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'characterId required' }));
+          return;
+        }
+        if (!wmtDb) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+          return;
+        }
+        const before = wmtDb.prepare('SELECT * FROM characters WHERE id=?').get(characterId);
+        const counts = {};
+        wmtDb.transaction(() => {
+          counts.aliases    = wmtDb.prepare('DELETE FROM aliases    WHERE character_id=?').run(characterId).changes;
+          counts.triggers   = wmtDb.prepare('DELETE FROM triggers   WHERE character_id=?').run(characterId).changes;
+          counts.classes    = wmtDb.prepare('DELETE FROM classes    WHERE character_id=?').run(characterId).changes;
+          counts.tickers    = wmtDb.prepare('DELETE FROM tickers    WHERE character_id=?').run(characterId).changes;
+          counts.preferences = wmtDb.prepare('DELETE FROM preferences WHERE character_id=?').run(characterId).changes;
+          // guard tables — safe to delete; they only ever contain stale-write protection state
+          try { counts.alias_guard  = wmtDb.prepare('DELETE FROM alias_guard  WHERE character_id=?').run(characterId).changes; } catch { counts.alias_guard = 0; }
+          try { counts.entity_guard = wmtDb.prepare('DELETE FROM entity_guard WHERE character_id=?').run(characterId).changes; } catch { counts.entity_guard = 0; }
+          counts.characters = wmtDb.prepare('DELETE FROM characters WHERE id=?').run(characterId).changes;
+          try {
+            wmtDb.prepare(
+              `INSERT INTO change_log (character_id, table_name, item_id, action, old_data, new_data, source, created_at) VALUES (?,?,?,?,?,?,?, datetime('now'))`
+            ).run(characterId, 'characters', characterId, 'delete_cascade',
+                  before ? JSON.stringify({ before, deleted: counts }) : JSON.stringify({ deleted: counts }),
+                  null, 'admin_api');
+          } catch {}
+        })();
+
+        // Also evict any in-memory serverModifiedAliases entries for this character
+        if (serverModifiedAliases.has(characterId)) {
+          serverModifiedAliases.delete(characterId);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, characterId, deleted: counts }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+    return;
+
   } else if (parsedUrl.pathname === '/admin/aliases-bulk' && req.method === 'POST') {
     // Full-list bulk replace for aliases. Mirrors WS set_aliases / dbSaveAliases.
     // Used by PHP aliases.php save handlers so JSON-side writes also reach DB.

@@ -241,6 +241,15 @@ switch ($action) {
             saveJsonFile($tickersPath, $tickers);
         }
 
+        // Cascade the updated triggers/aliases/tickers lists to the Lightsail
+        // DB. Without these, deleting a class would leave the DB with either
+        // orphan rows (delete_items=true) or items referencing a class_id
+        // that no longer exists (delete_items=false). See class-delete audit
+        // gap, 2026-05-25.
+        pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $triggers);
+        pushBulkToLightsail('/admin/aliases-bulk',  'aliases',  $characterId, $aliases);
+        pushBulkToLightsail('/admin/tickers-bulk',  'tickers',  $characterId, $tickers);
+
         successResponse(['message' => 'Class deleted']);
         break;
 
