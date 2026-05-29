@@ -318,8 +318,11 @@ def run_test_suites():
     return total_passed, unexpected_failures, details
 
 
-def deploy_ionos():
-    """Deploy changed PHP client files to IONOS via SFTP (skips unchanged files)"""
+def deploy_ionos(only_files=None):
+    """Deploy PHP/JS/CSS client files to IONOS via SFTP (skips unchanged files).
+    If only_files is given (list of repo-relative paths), upload exactly those
+    instead of the whole IONOS_DEPLOY_FILES set — used by the smart `auto` target
+    so a deploy pushes only what changed and never sweeps in untracked WIP."""
     print("\n=== Deploying to IONOS (SFTP) ===")
 
     try:
@@ -426,8 +429,9 @@ def deploy_ionos():
                     rel_path = item.relative_to(BASE_DIR)
                     upload_path(str(rel_path), str(rel_path))
 
-        # Upload each deploy file/folder
-        for item in IONOS_DEPLOY_FILES:
+        # Upload the requested files, or the full deploy set (unchanged files skipped).
+        items = only_files if only_files is not None else IONOS_DEPLOY_FILES
+        for item in items:
             upload_path(item, item)
 
         sftp.close()
@@ -525,14 +529,64 @@ def log_deploy(target, commit_hash, success):
     print(f"  Deploy logged: {entry}")
 
 
+DEPLOY_STATE_FILE = BASE_DIR / '.deploy_state.json'
+
+def read_deploy_state():
+    """Last commit successfully deployed by `auto`. None if unknown."""
+    try:
+        import json
+        return json.loads(DEPLOY_STATE_FILE.read_text()).get('last_commit')
+    except Exception:
+        return None
+
+def write_deploy_state(commit):
+    try:
+        import json
+        DEPLOY_STATE_FILE.write_text(json.dumps({'last_commit': commit}, indent=2))
+    except Exception as e:
+        print(f"  WARNING: could not write {DEPLOY_STATE_FILE.name}: {e}")
+
+def git_changed_files(baseline):
+    """Tracked files changed since `baseline` — committed (baseline..HEAD) PLUS any
+    uncommitted tracked changes (so --dry-run previews correctly before auto-commit).
+    Returns a sorted list of forward-slash repo-relative paths, or None if baseline
+    is unknown / git fails."""
+    if not baseline:
+        return None
+    files = set()
+    r = subprocess.run(f'git diff --name-only {baseline} HEAD',
+                       shell=True, capture_output=True, text=True, cwd=str(BASE_DIR))
+    if r.returncode != 0:
+        return None
+    files.update(l.strip() for l in r.stdout.splitlines() if l.strip())
+    # Uncommitted tracked changes (staged + unstaged) vs HEAD
+    r2 = subprocess.run('git diff --name-only HEAD',
+                        shell=True, capture_output=True, text=True, cwd=str(BASE_DIR))
+    if r2.returncode == 0:
+        files.update(l.strip() for l in r2.stdout.splitlines() if l.strip())
+    return sorted(files)
+
+def is_ionos_path(f):
+    """True if a repo-relative path belongs to the IONOS deploy set."""
+    for entry in IONOS_DEPLOY_FILES:
+        e = entry.replace('\\', '/')
+        if e.endswith('/'):
+            if f.startswith(e):
+                return True
+        elif f == e:
+            return True
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='Deploy WMT Client')
-    parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'test', 'all'],
-                       default='all', help='Deployment target (default: all)')
+    parser.add_argument('target', nargs='?', choices=['ionos', 'lightsail', 'bridge', 'test', 'all', 'auto'],
+                       default='auto', help='Deployment target (default: auto — deploy only what changed)')
     parser.add_argument('--list', action='store_true', help='List files that would be deployed')
     parser.add_argument('--no-commit', action='store_true', help='Skip auto-commit before deploy')
     parser.add_argument('--yes', action='store_true', help='Confirm bridge deploy (required — bridge restart kills ALL MUD connections)')
     parser.add_argument('--force', action='store_true', help='Deploy to production even if sandbox tests fail')
+    parser.add_argument('--dry-run', action='store_true', help='(auto) Show what would deploy without changing anything')
 
     args = parser.parse_args()
 
@@ -558,8 +612,8 @@ def main():
             print(f"\n=== All {passed} tests passed ===")
         return
 
-    # Auto-commit tracked changes before deploying
-    if not args.no_commit:
+    # Auto-commit tracked changes before deploying (never during a dry-run)
+    if not args.no_commit and not args.dry_run:
         git_commit_before_deploy()
 
     # Get current commit hash for deploy log
@@ -628,6 +682,63 @@ def main():
     elif args.target == 'ionos':
         if not deploy_ionos():
             success = False
+
+    elif args.target == 'auto':
+        baseline = read_deploy_state()
+        changed = git_changed_files(baseline)
+        print("\n=== Smart deploy (auto) ===")
+        if changed is None:
+            print("  No deploy baseline in .deploy_state.json — can't compute what's necessary.")
+            print("  Bootstrap once: write the last-deployed commit hash to .deploy_state.json")
+            print('  (e.g. {"last_commit": "<hash>"}), or run an explicit target this time.')
+            sys.exit(1)
+
+        server_changed = 'glitch/server.js' in changed
+        bridge_changed = 'glitch/bridge.js' in changed
+        ionos_files = [f for f in changed if is_ionos_path(f)]
+        other = [f for f in changed
+                 if not is_ionos_path(f) and f not in ('glitch/server.js', 'glitch/bridge.js')]
+
+        print(f"  Baseline {baseline} -> HEAD {commit_hash}")
+        if not changed:
+            print("  No tracked changes since last deploy — nothing to do.")
+            return
+        print(f"  Changed ({len(changed)}): {', '.join(changed)}")
+        print(f"  -> Lightsail (server.js / wmt-server restart): {'YES' if server_changed else 'no'}")
+        print(f"  -> IONOS: {', '.join(ionos_files) if ionos_files else '(none)'}")
+        if other:
+            print(f"  -> Not deployed (tooling/tests/docs): {', '.join(other)}")
+        if bridge_changed:
+            print("  *** bridge.js changed — NOT auto-deployed (restart kills ALL MUD connections).")
+            print("      Run `python deploy.py bridge --yes` manually if you really intend that. ***")
+
+        if args.dry_run:
+            print("  [dry-run] No changes made.")
+            return
+
+        if not server_changed and not ionos_files:
+            print("  Nothing deployable changed (only tooling/tests/docs).")
+            return
+
+        # Server first (gated by the sandbox suite), then IONOS. Only restart
+        # wmt-server when server.js actually changed — client-only deploys never
+        # restart the proxy, so connected players are never disrupted.
+        if server_changed:
+            if deploy_test_server():
+                passed, failed, details = run_test_suites()
+                if failed > 0 and not args.force:
+                    print(f"\nWARNING: {failed} sandbox test(s) failed. Aborting. Use --force to override.")
+                    sys.exit(1)
+            elif not args.force:
+                print("\nWARNING: sandbox deploy failed. Aborting. Use --force to override.")
+                sys.exit(1)
+            if not deploy_lightsail('server'):
+                success = False
+        if ionos_files:
+            if not deploy_ionos(only_files=ionos_files):
+                success = False
+        if success:
+            write_deploy_state(commit_hash)
 
     # Log every deploy to Lightsail for audit trail
     log_deploy(args.target, commit_hash, success)

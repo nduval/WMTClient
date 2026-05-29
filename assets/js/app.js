@@ -873,6 +873,10 @@ class WMTClient {
     }
 
     onSessionResumed(mudConnected, serverVariables) {
+        // Precise MUD-liveness signal: a resumed session reflects whether the MUD link
+        // is actually up, correcting the WS-level 'connected' status. Keeps a resumed-
+        // but-MUD-down session from being treated as live for auto-reconnect.
+        if (this.connection) this.connection.mudLinkDead = !mudConnected;
         // Called when reconnecting to an existing session (e.g., after app switch)
         // Restore server-side variables (bot state like $secstepnumber survives refresh)
         if (serverVariables && Object.keys(serverVariables).length > 0) {
@@ -3083,6 +3087,15 @@ class WMTClient {
     }
 
     updateConnectionStatus(status) {
+        // Track MUD link liveness for the connection's auto-reconnect gate. A character
+        // the user let go linkdead (#end / disconnect / MUD close) must NOT be auto-
+        // resurrected by a wmt-server restart — only a manual reconnect brings it back.
+        // 'reconnecting'/transient states intentionally leave the last known value.
+        if (this.connection) {
+            if (status === 'mud_disconnected') this.connection.mudLinkDead = true;
+            else if (status === 'connected') this.connection.mudLinkDead = false;
+        }
+
         // Suppress status bar flicker during brief reconnects (WiFi blips)
         if (status === 'reconnecting') {
             if (!this.reconnectingSince) {

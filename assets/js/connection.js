@@ -23,6 +23,11 @@ class MudConnection {
         this.reconnectDelay = 2000;
         this.keepAliveInterval = null;
         this.intentionalDisconnect = false;  // Track if disconnect was intentional
+        // True once the MUD link has closed (linkdead / #end / menu disconnect / idle).
+        // Gates auto-reconnect: a character the user let go linkdead must NOT be
+        // auto-resurrected by a wmt-server restart — only a manual reconnect brings it
+        // back. Cleared when the MUD link is (re)established or on user-initiated reconnect.
+        this.mudLinkDead = false;
 
         // Callbacks
         this.onConnect = options.onConnect || (() => {});
@@ -79,7 +84,12 @@ class MudConnection {
             this.authenticated = false;
             this.stopKeepAlive();
 
+            // Do NOT auto-reconnect a character whose MUD link was already dead when the
+            // WS dropped — that would resurrect a char the user intentionally parked
+            // (#end / disconnect / let go linkdead). Genuinely-active sessions (mudLinkDead
+            // false) still auto-resume seamlessly across a server restart / WiFi blip.
             const willAutoReconnect = !this.intentionalDisconnect &&
+                !this.mudLinkDead &&
                 this.reconnectAttempts < this.maxReconnectAttempts;
 
             // Use 'reconnecting' status for auto-reconnects to suppress status bar flicker
@@ -215,7 +225,9 @@ class MudConnection {
     }
 
     reconnect() {
-        // Reset all connection state
+        // Reset all connection state. A user-initiated reconnect is explicit intent to
+        // bring the character back, so clear the linkdead suppression flag.
+        this.mudLinkDead = false;
         this.reconnectAttempts = 0;
         this.connected = false;
         this.authenticated = false;

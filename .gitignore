@@ -73,6 +73,9 @@ db_ids.json
 # Local scratch/working dir (never deployed, may hold transient data)
 .tmp/
 
+# Smart-deploy state (per-machine last-deployed commit for `deploy.py auto`)
+.deploy_state.json
+
 # DB setup/seed scripts (utility, not deployed via deploy.py)
 glitch/setup_db.js
 glitch/seed_db.js
