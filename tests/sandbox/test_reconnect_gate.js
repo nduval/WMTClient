@@ -14,7 +14,9 @@
 const fs = require('fs');
 const vm = require('vm');
 
-const CONNECTION_JS = process.argv[2] || '/tmp/connection.js';
+// Accept an explicit path; ignore the gate's ws:// arg and use the synced sandbox copy.
+const _arg = process.argv[2];
+const CONNECTION_JS = (_arg && !_arg.startsWith('ws')) ? _arg : '/opt/wmt/assets/js/connection.js';
 
 function newContext() {
   const scheduled = [];

@@ -20,7 +20,9 @@
  */
 const fs = require('fs');
 const vm = require('vm');
-const APP_JS = process.argv[2] || '/tmp/app.js';
+// Accept an explicit path; ignore the gate's ws:// arg and use the synced sandbox copy.
+const _arg = process.argv[2];
+const APP_JS = (_arg && !_arg.startsWith('ws')) ? _arg : '/opt/wmt/assets/js/app.js';
 
 function loadWMTClient() {
   const noop = () => {};

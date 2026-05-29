@@ -198,6 +198,22 @@ def deploy_test_server():
                     shell=True, capture_output=True, text=True
                 )
 
+    # Push client JS so the client-side vm tests (var_class_scope, reconnect_gate,
+    # var_sync_flush) run against the version we're deploying. They read
+    # /opt/wmt/assets/js/<file> when invoked with the gate's ws:// arg.
+    for cf in ('app.js', 'connection.js'):
+        local_cf = BASE_DIR / 'assets' / 'js' / cf
+        if local_cf.exists():
+            r = subprocess.run(
+                f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local_cf}" ubuntu@{host}:/tmp/{cf}',
+                shell=True, capture_output=True, text=True
+            )
+            if r.returncode == 0:
+                subprocess.run(
+                    f'{ssh_cmd} "sudo mkdir -p /opt/wmt/assets/js && sudo cp /tmp/{cf} /opt/wmt/assets/js/{cf}"',
+                    shell=True, capture_output=True, text=True
+                )
+
     # Copy + restart. As of 2026-05-25 the allowedServers allowlist lives in
     # /opt/wmt/config/allowed_servers.json (created once per box) rather than
     # being patched into server.js literally. See memory: config-driven-allowed-servers.
@@ -259,6 +275,11 @@ def run_test_suites():
         ('VarSubst',     'test_var_substitution.js'),
         ('CharSync',     'test_character_sync.js'),
         ('SessionPersist', 'test_session_persist.js'),
+        ('AutoLoginGate', 'test_autologin_gate.js'),
+        # Client-side (vm-load app.js/connection.js from /opt/wmt/assets/js, synced above)
+        ('VarSyncFlush',  'test_var_sync_flush.js'),
+        ('VarClassScope', 'test_var_class_scope.js'),
+        ('ReconnectGate', 'test_reconnect_gate.js'),
     ]
 
     total_passed = 0

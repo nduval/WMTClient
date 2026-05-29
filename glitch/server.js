@@ -6541,6 +6541,28 @@ function connectToMud(session) {
     });
 
     if (!wasResumed) {
+      // SC4 server-side defense-in-depth: never auto-login a character on an
+      // AUTOMATIC reconnect when the MUD is at a name prompt (not already logged
+      // in). That would resurrect a character the user intentionally let go
+      // linkdead (#end / menu disconnect / idle). Only a USER-initiated connect
+      // (initial load / reconnect button) may auto-send credentials. The client
+      // also suppresses this (mudLinkDead), so this layer catches old clients and
+      // races. Destroy the just-opened socket so the parked char isn't persisted/
+      // restored (which would re-resurrect it on a later restart); the existing
+      // close handler notifies the browser ("Connection to MUD closed.").
+      if (session._autoReconnect && !mudLoggedIn) {
+        logSessionEvent('AUTOLOGIN_SUPPRESSED', {
+          token: session.token ? session.token.substring(0, 8) : null,
+          user: session.userId,
+          char: session.characterName,
+          reason: 'auto-reconnect; MUD at name prompt'
+        });
+        session._autoReconnect = false;
+        if (session.mudSocket && !session.mudSocket.destroyed) {
+          session.mudSocket.destroy();
+        }
+        return;
+      }
       // New connection — notify client
       sendToClient(session, {
         type: 'system',
@@ -6802,6 +6824,7 @@ wss.on('connection', (ws, req) => {
               oldSession.wsClients.add(ws);
               oldSession.disconnectedAt = null;
               oldSession.explicitDisconnect = false;
+              oldSession._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
               oldSession.isWizard = isWizard;
               oldSession.clientIp = clientIp;
               if (authPacketPatchMs !== null) oldSession.packetPatchMs = authPacketPatchMs;
@@ -6921,6 +6944,7 @@ wss.on('connection', (ws, req) => {
             session.wsClients.add(ws);
             session.disconnectedAt = null;
             session.explicitDisconnect = false;
+            session._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
             session.isWizard = isWizard;  // Update wizard status on reconnect
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
@@ -7022,6 +7046,7 @@ wss.on('connection', (ws, req) => {
             session.isWizard = isWizard;
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
+            session._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
             sessions.set(token, session);
             // Defer the login audit until set_server fires. At this moment
             // session.targetHost is still the default MUD_HOST (3k.org), so
