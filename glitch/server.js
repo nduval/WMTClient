@@ -29,7 +29,7 @@ const VERSION = '3.0.0'; // Bridge architecture for zero-downtime deploys
 //
 // DB_ENABLED_USERS = null means all users. Set to a Set of user IDs
 // to gate during rollout. Gate was removed 2026-04-12 after validation.
-const DB_PATH = path.join(__dirname, 'wmt.db');
+const DB_PATH = process.env.WMT_DB_PATH || path.join(__dirname, 'wmt.db');
 // DB is now active for ALL users. The gated rollout phase (nathan-only)
 // completed successfully on 2026-04-12. All users seeded from IONOS JSON.
 const DB_ENABLED_USERS = null; // null = all users
@@ -1799,7 +1799,15 @@ function sendToIfttt(key, eventName, value1, value2, value3) {
 
 // PHP API URLs (survive server restart)
 const PHP_API_URL = 'https://client.wemudtogether.com/api/preferences.php';
-const PHP_SESSIONS_URL = 'https://client.wemudtogether.com/api/persistent_sessions.php';
+const PHP_SESSIONS_URL = process.env.PHP_SESSIONS_URL || 'https://client.wemudtogether.com/api/persistent_sessions.php';
+// Transport selector for the session store. Production leaves PHP_SESSIONS_URL
+// unset → https on port 443, byte-identical to the previous hardcoded behavior.
+// The sandbox can set PHP_SESSIONS_URL to http://localhost:PORT/... to exercise
+// persist/restore against a local mock endpoint in isolation.
+function sessionStoreTransport(urlObj) {
+  const isHttps = urlObj.protocol === 'https:';
+  return { mod: isHttps ? https : http, port: urlObj.port ? Number(urlObj.port) : (isHttps ? 443 : 80) };
+}
 const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
 const PHP_DISCORD_PROXY_URL = 'https://client.wemudtogether.com/api/discord_proxy.php';
 const PHP_AUDIT_LOG_URL = 'https://client.wemudtogether.com/api/audit_log.php';
@@ -1989,6 +1997,7 @@ async function persistAllSessions() {
 
   const payload = JSON.stringify({ sessions: activeSessions });
   const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
+  const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
   // Retry once on failure. Session persistence is the most critical
   // operation during shutdown — a transient HTTP error or PHP hiccup
@@ -1996,9 +2005,9 @@ async function persistAllSessions() {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       await new Promise((resolve, reject) => {
-        const req = https.request({
+        const req = reqMod.request({
           hostname: url.hostname,
-          port: 443,
+          port: reqPort,
           path: url.pathname + url.search,
           method: 'POST',
           headers: {
@@ -2090,11 +2099,12 @@ async function persistSnapshot() {
   try {
     const payload = JSON.stringify({ sessions: activeSessions });
     const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
+    const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
     await new Promise((resolve, reject) => {
-      const req = https.request({
+      const req = reqMod.request({
         hostname: url.hostname,
-        port: 443,
+        port: reqPort,
         path: url.pathname + url.search,
         method: 'POST',
         headers: {
@@ -2168,10 +2178,11 @@ async function fetchPersistentSessions() {
   if (!ADMIN_KEY) return [];
 
   const url = `${PHP_SESSIONS_URL}?action=list`;
+  const { mod: reqMod } = sessionStoreTransport(new URL(url));
 
   try {
     const response = await new Promise((resolve, reject) => {
-      const req = https.get(url, {
+      const req = reqMod.get(url, {
         headers: { 'X-Admin-Key': ADMIN_KEY },
         timeout: 5000
       }, (res) => {
@@ -2209,11 +2220,12 @@ async function removePersistentSession(token) {
   try {
     const payload = JSON.stringify({ token });
     const url = new URL(`${PHP_SESSIONS_URL}?action=remove`);
+    const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
     await new Promise((resolve, reject) => {
-      const req = https.request({
+      const req = reqMod.request({
         hostname: url.hostname,
-        port: 443,
+        port: reqPort,
         path: url.pathname + url.search,
         method: 'POST',
         headers: {
@@ -2247,11 +2259,12 @@ async function clearAllPersistentSessions() {
 
   try {
     const url = new URL(`${PHP_SESSIONS_URL}?action=clear`);
+    const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
     await new Promise((resolve, reject) => {
-      const req = https.request({
+      const req = reqMod.request({
         hostname: url.hostname,
-        port: 443,
+        port: reqPort,
         path: url.pathname + url.search,
         method: 'POST',
         headers: {

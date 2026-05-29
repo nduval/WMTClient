@@ -66,6 +66,13 @@ __pycache__/
 # Seed data exports (contain password hashes)
 seed_*.json
 
+# DB account/ID dumps (real usernames, user-ID hashes, character GUIDs — PII)
+db_users.json
+db_ids.json
+
+# Local scratch/working dir (never deployed, may hold transient data)
+.tmp/
+
 # DB setup/seed scripts (utility, not deployed via deploy.py)
 glitch/setup_db.js
 glitch/seed_db.js

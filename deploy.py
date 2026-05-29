@@ -198,11 +198,11 @@ def deploy_test_server():
                     shell=True, capture_output=True, text=True
                 )
 
-    # Copy, patch allowedServers to include localhost:4000 (mock MUD), restart
-    # Write a patch script remotely to avoid Windows/SSH quoting issues
+    # Copy + restart. As of 2026-05-25 the allowedServers allowlist lives in
+    # /opt/wmt/config/allowed_servers.json (created once per box) rather than
+    # being patched into server.js literally. See memory: config-driven-allowed-servers.
     patch_lines = [
         'sudo cp /tmp/server.js /opt/wmt/server.js',
-        "sudo sed -i \"s|{ host: '3k.org', port: 3000 }|{ host: '3k.org', port: 3000 }, { host: 'localhost', port: 4000 }|\" /opt/wmt/server.js",
         'sudo chown wmt:wmt /opt/wmt/server.js',
         'sudo systemctl restart wmt-server',
     ]
@@ -257,6 +257,8 @@ def run_test_suites():
         ('BlockTrigger', 'test_block_trigger.js'),
         ('SelfAlerts',   'test_self_alerts.js'),
         ('VarSubst',     'test_var_substitution.js'),
+        ('CharSync',     'test_character_sync.js'),
+        ('SessionPersist', 'test_session_persist.js'),
     ]
 
     total_passed = 0
