@@ -206,11 +206,6 @@ class WMTClient {
 
         // Variables for #var/#unvar (TinTin++ style)
         this.variables = {};
-        // Class membership for variables created during a #class {read}. TinTin++
-        // semantics: a var defined while a class is open belongs to that class and is
-        // removed by #class {name} kill. name -> classId. Set in cmdVar when
-        // currentScriptClass is active; runtime updates preserve the existing tag.
-        this.variableClasses = {};
 
         // Functions for #function (TinTin++ style) - called with @name{args}
         this.functions = {};  // {name: {body: string}}
@@ -795,6 +790,14 @@ class WMTClient {
         const _origSendCommand = this.connection.sendCommand.bind(this.connection);
         this.connection.sendCommand = (command, raw) => {
             this._ansiCarry = '';
+            // Flush any pending (debounced) variable sync BEFORE the command goes out,
+            // so the server has the latest vars before it expands/substitutes this
+            // command. Fixes the recurring bot-start race where a client-set var
+            // (e.g. secon's `#var secstepnumber 1`) arrived on the 100ms debounce
+            // AFTER the dependent command (secwalk), so the server substituted
+            // `secstep$secstepnumber` against a missing var. See memory:
+            // project_var_sync_flush_before_command.
+            this._flushPendingVarSync();
             return _origSendCommand(command, raw);
         };
 
@@ -1152,7 +1155,6 @@ class WMTClient {
                 if (data.deleted) {
                     for (const key of data.deleted) {
                         delete this.variables[key];
-                        delete this.variableClasses[key];
                     }
                 }
                 break;
@@ -8278,12 +8280,10 @@ class WMTClient {
                 this.triggers = this.triggers.filter(t => t.class !== classId);
                 this.aliases = this.aliases.filter(a => a.class !== classId);
                 this.tickers = this.tickers.filter(t => t.class !== classId);
-                const removedVars = this.removeVariablesForClass(classId);
                 const total = removedTriggers + removedAliases + removedTickers;
                 await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
                 this.sendFilteredTriggersAndAliases();
-                if (removedVars > 0) this.syncVariablesToServer();
-                this.appendOutput(`#CLASS {${className}} CLEARED: ${total} ITEM(S) REMOVED${removedVars ? ' + ' + removedVars + ' VAR(S)' : ''}.`, 'system');
+                this.appendOutput(`#CLASS {${className}} CLEARED: ${total} ITEM(S) REMOVED.`, 'system');
                 if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
                     this.renderScriptsSidebar();
                 }
@@ -8335,14 +8335,10 @@ class WMTClient {
                 this.triggers = this.triggers.filter(t => t.class !== classId);
                 this.aliases = this.aliases.filter(a => a.class !== classId);
                 this.tickers = this.tickers.filter(t => t.class !== classId);
-                // TinTin++: kill removes the class's variables too (e.g. a bot's step
-                // counter). Sync the deletion so it doesn't persist server-side.
-                const removedVars = this.removeVariablesForClass(classId);
                 const total = removedTriggers + removedAliases + removedTickers;
                 await Promise.all([this.saveTriggers(), this.saveAliases(), this.saveTickers()]);
                 this.sendFilteredTriggersAndAliases();
-                if (removedVars > 0) this.syncVariablesToServer();
-                this.appendOutput(`#CLASS {${className}} KILLED: ${total} ITEM(S) REMOVED${removedVars ? ' + ' + removedVars + ' VAR(S)' : ''}.`, 'system');
+                this.appendOutput(`#CLASS {${className}} KILLED: ${total} ITEM(S) REMOVED.`, 'system');
                 if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
                     this.renderScriptsSidebar();
                 }
@@ -10194,14 +10190,6 @@ class WMTClient {
 
         const { name, keys } = this.parseVariableName(args[0]);
 
-        // TinTin++ class scoping: a variable defined while a #class {read} is active
-        // belongs to that class, so #class {name} kill removes it. Tag only the
-        // top-level name; runtime updates (currentScriptClass null) keep the tag so a
-        // counter born under "bots" stays owned by it even as the bot increments it.
-        if (this.currentScriptClass) {
-            this.variableClasses[name] = this.currentScriptClass;
-        }
-
         // Join all remaining args as the value
         let value = args.slice(1).join(' ');
 
@@ -10233,21 +10221,6 @@ class WMTClient {
         if (!this._silent) {
             if (!this._silent) this.appendOutput(`#OK: #VARIABLE {${args[0]}} HAS BEEN SET TO {${value}}.`, 'system');
         }
-    }
-
-    // Remove all variables scoped to a class (tagged during a #class {read}).
-    // Returns the count removed. Used by #class {name} kill/clear so a killed bot's
-    // variables (e.g. step counters) don't linger. Caller syncs to the server.
-    removeVariablesForClass(classId) {
-        let removed = 0;
-        for (const name of Object.keys(this.variableClasses)) {
-            if (this.variableClasses[name] === classId) {
-                delete this.variables[name];
-                delete this.variableClasses[name];
-                removed++;
-            }
-        }
-        return removed;
     }
 
     // Format a variable value for TinTin++ display
@@ -10297,7 +10270,7 @@ class WMTClient {
             // Wildcard deletion using matchWild
             const matches = Object.keys(this.variables).filter(v => this.matchWild(v, pattern));
             if (matches.length > 0) {
-                matches.forEach(v => { delete this.variables[v]; delete this.variableClasses[v]; });
+                matches.forEach(v => delete this.variables[v]);
                 this.syncVariablesToServer();
                 if (!this._silent) this.appendOutput(`#OK: ${matches.length} VARIABLE(S) REMOVED.`, 'system');
             }
@@ -11562,14 +11535,30 @@ class WMTClient {
         return val;
     }
 
-    // Debounced sync of variables to server (prevents flooding during loops)
+    // Debounced sync of variables to server (prevents flooding during loops).
+    // _varSyncTimer is non-null ONLY while a sync is pending, so _flushPendingVarSync
+    // can tell whether there's unsynced variable state to push before a command.
     syncVariablesToServer() {
         if (this._varSyncTimer) clearTimeout(this._varSyncTimer);
         this._varSyncTimer = setTimeout(() => {
+            this._varSyncTimer = null;
             if (this.connection) {
                 this.connection.setVariables(this.variables);
             }
         }, 100);
+    }
+
+    // Immediately push any pending (debounced) variable sync. Called before sending
+    // a command so variable state reaches the server BEFORE a command that may
+    // substitute it — preventing the server from expanding e.g. `secstep$secstepnumber`
+    // against a variable that hasn't synced yet. Root fix for the recurring bot-start
+    // variable race. See memory: project_var_sync_flush_before_command.
+    _flushPendingVarSync() {
+        if (this._varSyncTimer) {
+            clearTimeout(this._varSyncTimer);
+            this._varSyncTimer = null;
+            if (this.connection) this.connection.setVariables(this.variables);
+        }
     }
 
     // Sync functions to server for @func{} resolution in triggers/aliases/tickers
