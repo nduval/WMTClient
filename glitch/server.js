@@ -7741,7 +7741,7 @@ wss.on('connection', (ws, req) => {
           // Speaker label "wmtclient", message in value3, on the user's 3K event. Uses the
           // per-user key already synced from ChatMon prefs (session.iftttKey).
           if (session && typeof data.text === 'string' && data.text.trim() && session.iftttKey) {
-            sendToIfttt(session.iftttKey, '3K', 'wmtclient', '', data.text);
+            sendToIfttt(session.iftttKey, '3K', 'wmtclient:', '', data.text);
           }
           break;
 
@@ -9645,7 +9645,7 @@ function serverProcessInlineCommand(cmd, session) {
     if (body.startsWith('{') && body.endsWith('}')) body = body.slice(1, -1);
     body = substituteUserVariables(body, session.variables || {}, session.functions || {});
     if (body && session.iftttKey) {
-      sendToIfttt(session.iftttKey, '3K', 'wmtclient', '', body);
+      sendToIfttt(session.iftttKey, '3K', 'wmtclient:', '', body);
     }
     return true;
   }
