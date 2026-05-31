@@ -91,6 +91,8 @@ const COMMAND_REGISTRY = [
     // --- Send ---
     { name: 'send',         abbrevs: [],                   handler: 'cmdSend',         async: false, getAllAfter: 0,
       category: 'Send', syntax: '#send {text}', description: 'Send raw text to MUD' },
+    { name: 'ifttt',        abbrevs: [],                   handler: 'cmdIfttt',        async: false, getAllAfter: 0,
+      category: 'Send', syntax: '#ifttt {message}', description: 'Send a notification to IFTTT (wakes phone)' },
     // --- Prompt ---
     { name: 'prompt',       abbrevs: [],                   handler: 'cmdPrompt',       async: false,
       category: 'Prompt', syntax: '#prompt {pattern} {text} [row]', description: 'Capture to status bar' },
@@ -12077,6 +12079,25 @@ class WMTClient {
         text = this.processTinTinEscapes(text);
         // Use raw=true to bypass semicolon splitting (ANSI codes contain semicolons)
         this.connection.sendCommand(text, true);
+    }
+
+    // #ifttt {message} - Fire a notification to IFTTT (server-side Maker webhook).
+    // The send happens server-side (the client never holds the key); we just forward
+    // the variable-substituted message. Speaker label is "wmtclient"; the message rides
+    // in value3 of the user's 3K event (handled in server.js).
+    cmdIfttt(args, rest) {
+        let message = args.join(' ') || rest;
+        if (!message) {
+            this.appendOutput('Usage: #ifttt {message}', 'error');
+            return;
+        }
+        message = this.substituteVariables(message);
+        message = this.processTinTinEscapes(message);
+        if (this.connection && this.connection.isConnected()) {
+            this.connection.send('ifttt', { text: message });
+        } else {
+            this.appendOutput('#ifttt: not connected to server', 'error');
+        }
     }
 
     // #loop {start} {end} {variable} {commands}

@@ -28,6 +28,11 @@ class MudConnection {
         // auto-resurrected by a wmt-server restart — only a manual reconnect brings it
         // back. Cleared when the MUD link is (re)established or on user-initiated reconnect.
         this.mudLinkDead = false;
+        // True only for the NEXT connect when it's an AUTOMATIC reconnect (onclose
+        // path) rather than a user-initiated connect/reconnect. Sent in the auth
+        // message so the server can refuse to auto-login a parked character on a
+        // passive reconnect (SC4 server-side defense-in-depth). Reset after each auth.
+        this._nextConnectIsAuto = false;
 
         // Callbacks
         this.onConnect = options.onConnect || (() => {});
@@ -70,8 +75,10 @@ class MudConnection {
                     characterId: this.characterId,
                     characterName: this.characterName,
                     isWizard: this.isWizard,
-                    packetPatch: this.packetPatch
+                    packetPatch: this.packetPatch,
+                    autoReconnect: this._nextConnectIsAuto
                 }));
+                this._nextConnectIsAuto = false;  // consumed; subsequent connects are user-initiated unless re-flagged
             } else {
                 console.error('No WebSocket token available');
                 this.onError('Authentication failed: no token');
@@ -98,6 +105,7 @@ class MudConnection {
 
             if (willAutoReconnect) {
                 this.reconnectAttempts++;
+                this._nextConnectIsAuto = true;  // the upcoming connect is automatic, not user-initiated
                 setTimeout(() => this.connect(), this.reconnectDelay);
             }
         };
@@ -226,8 +234,10 @@ class MudConnection {
 
     reconnect() {
         // Reset all connection state. A user-initiated reconnect is explicit intent to
-        // bring the character back, so clear the linkdead suppression flag.
+        // bring the character back, so clear the linkdead suppression flag and mark
+        // the upcoming connect as user-initiated (not an automatic reconnect).
         this.mudLinkDead = false;
+        this._nextConnectIsAuto = false;
         this.reconnectAttempts = 0;
         this.connected = false;
         this.authenticated = false;

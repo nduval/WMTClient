@@ -7736,6 +7736,15 @@ wss.on('connection', (ws, req) => {
           connectToMud(session);
           break;
 
+        case 'ifttt':
+          // #ifttt {message} typed/aliased on the client → fire-and-forget IFTTT Maker webhook.
+          // Speaker label "wmtclient", message in value3, on the user's 3K event. Uses the
+          // per-user key already synced from ChatMon prefs (session.iftttKey).
+          if (session && typeof data.text === 'string' && data.text.trim() && session.iftttKey) {
+            sendToIfttt(session.iftttKey, '3K', 'wmtclient', '', data.text);
+          }
+          break;
+
         case 'test_line':
           // Process text through triggers as if it came from MUD
           // Used by #showme to test trigger patterns.
@@ -9624,6 +9633,20 @@ function serverProcessInlineCommand(cmd, session) {
     session._varServerModified[varName] = Date.now();
     // Push deletion to client
     sendToClient(session, { type: 'var_update', deleted: [varName] });
+    return true;
+  }
+
+  // #ifttt {message}  — fire-and-forget IFTTT Maker webhook (trigger / alias / #read path).
+  // Speaker label "wmtclient", message in value3, on the user's 3K event. Consumed even with
+  // no key so the command never leaks to the MUD. Typed #ifttt comes via the 'ifttt' WS case.
+  const iftttMatch = trimmed.match(/^#ifttt\b\s*([\s\S]*)$/i);
+  if (iftttMatch) {
+    let body = iftttMatch[1].trim();
+    if (body.startsWith('{') && body.endsWith('}')) body = body.slice(1, -1);
+    body = substituteUserVariables(body, session.variables || {}, session.functions || {});
+    if (body && session.iftttKey) {
+      sendToIfttt(session.iftttKey, '3K', 'wmtclient', '', body);
+    }
     return true;
   }
 
