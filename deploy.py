@@ -214,6 +214,21 @@ def deploy_test_server():
                     shell=True, capture_output=True, text=True
                 )
 
+    # Push current bridge.js so the bridge-mode harness (test_bridge_rekey_resume)
+    # runs against the version we ship. Safe: the sandbox wmt-server runs DIRECT
+    # mode, so /opt/wmt/bridge.js is not used by the running sandbox service.
+    _bridge_local = BASE_DIR / 'glitch' / 'bridge.js'
+    if _bridge_local.exists():
+        r = subprocess.run(
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_bridge_local}" ubuntu@{host}:/tmp/bridge.js',
+            shell=True, capture_output=True, text=True
+        )
+        if r.returncode == 0:
+            subprocess.run(
+                f'{ssh_cmd} "sudo cp /tmp/bridge.js /opt/wmt/bridge.js && sudo chown wmt:wmt /opt/wmt/bridge.js"',
+                shell=True, capture_output=True, text=True
+            )
+
     # Copy + restart. As of 2026-05-25 the allowedServers allowlist lives in
     # /opt/wmt/config/allowed_servers.json (created once per box) rather than
     # being patched into server.js literally. See memory: config-driven-allowed-servers.
@@ -280,6 +295,10 @@ def run_test_suites():
         ('VarSyncFlush',  'test_var_sync_flush.js'),
         ('VarClassScope', 'test_var_class_scope.js'),
         ('ReconnectGate', 'test_reconnect_gate.js'),
+        # Bridge-mode harness — spawns its own bridge.js + wmt-server(BRIDGE_URL)
+        # + mock session store; proves the stable-bridgeToken resume/rekey fix
+        # (the 2026-06-02 deploy-lockout). The only suite that runs BRIDGE mode.
+        ('BridgeRekeyResume', 'test_bridge_rekey_resume.js'),
     ]
 
     total_passed = 0

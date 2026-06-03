@@ -1973,7 +1973,7 @@ async function persistAllSessions() {
         characterName: session.characterName,
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
         token: token,
-        bridgeToken: (session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined,
+        bridgeToken: session.bridgeToken || ((session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined),
         isWizard: session.isWizard || false,
         persistedAt: Date.now(),
         chatBuffer: session.chatBuffer || [],
@@ -2082,7 +2082,7 @@ async function persistSnapshot() {
         characterName: session.characterName,
         server: session.targetHost === '3scapes.org' ? '3s' : '3k',
         token: token,
-        bridgeToken: (session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined,
+        bridgeToken: session.bridgeToken || ((session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined),
         isWizard: session.isWizard || false,
         persistedAt: Date.now(),
         // Lightweight: no chatBuffer (too large for 30s snapshots)
@@ -2305,7 +2305,10 @@ function autoLoginToMud(session, password) {
       host: session.targetHost
     });
 
-    session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.token) : new net.Socket();
+    // Key the bridge socket by the STABLE bridgeToken, never the mutable
+    // session token (see docs/connection-issues/005).
+    if (!session.bridgeToken) session.bridgeToken = session.token;
+    session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.bridgeToken) : new net.Socket();
     let loginState = 'CONNECTING';
     let dataBuffer = '';
     let loginTimeout = null;
@@ -2685,6 +2688,10 @@ async function restorePersistentSessions() {
       // Use bridgeToken if available — session token may have been rekeyed
       // but bridge still knows the connection by the original token
       const bridgeResumeToken = ps.bridgeToken || ps.token;
+      // Pin the stable bridge identity on the restored session so any later
+      // connectToMud()/autoLogin reuses the SAME bridge key (not the session
+      // token, which may rekey when the browser reconnects).
+      session.bridgeToken = bridgeResumeToken;
       session.mudSocket = new BridgeSocket(bridgeResumeToken);
 
       // Set up normal data handler
@@ -4678,6 +4685,13 @@ if (BRIDGE_URL) console.log(`Bridge: ${BRIDGE_URL}`);
 function createSession(token) {
   return {
     token: token,
+    // STABLE bridge identity — the token bridge keys this MUD socket by.
+    // Set ONCE at creation. A rekey changes `token` (mutable, browser-facing)
+    // but must NEVER change `bridgeToken`. If the bridge socket is ever keyed
+    // by the mutable token, a rekey+reconnect makes resume miss → fresh login
+    // → duplicate connection → 3K eviction/orphan lockout. Every BridgeSocket()
+    // and both persist payloads use bridgeToken. See docs/connection-issues/005.
+    bridgeToken: token,
     ws: null,  // Legacy — use wsClients Set for multi-device support
     wsClients: new Set(),  // All connected browser WebSockets
     mudSocket: null,
@@ -6523,7 +6537,13 @@ function connectToMud(session) {
   session.mipId = null;
   session.currentAnsiState = '';
 
-  session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.token) : new net.Socket();
+  // Key the bridge socket by the STABLE bridgeToken, never the mutable session
+  // token. After a rekey, session.token has drifted but bridgeToken still points
+  // at the original bridge-side connection, so a reconnect reattaches/replaces
+  // the SAME socket instead of orphaning it + fresh-logging-in (the lockout bug,
+  // see docs/connection-issues/005).
+  if (!session.bridgeToken) session.bridgeToken = session.token;
+  session.mudSocket = BRIDGE_URL ? new BridgeSocket(session.bridgeToken) : new net.Socket();
 
   if (!BRIDGE_URL) {
     sendToClient(session, {

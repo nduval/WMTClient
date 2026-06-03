@@ -12,6 +12,7 @@ if I deliberately read the files BEFORE making claims or writing code.
 | If you're going to touch... | Read these first |
 |---|---|
 | `glitch/server.js` | `memory/regression-checklist.md`, `memory/admin_alias_endpoint.md`, `memory/feedback_db_is_source_of_truth.md` |
+| Reconnect / bridge / session / token / resume / persist (in `glitch/server.js` or `glitch/bridge.js`) | `docs/connection-issues/005-resilience-identity-model-and-lockout.md` (READ FIRST — the whole-system model), `memory/bug_bridge_resume_miss_orphan_lockout.md`, plus `docs/connection-issues/001`–`004` |
 | `assets/js/app.js` (preferences) | The "Adding a Preference Touches THREE Files" section below |
 | Any DB schema or migration claim | `memory/admin_alias_endpoint.md`, `memory/feedback_db_is_source_of_truth.md`, `memory/feedback_use_admin_endpoints_for_user_data.md`, `memory/bug_characters_not_synced_to_lightsail_db.md` |
 | A `.tin` file (TinTin++ scripts) | `tintin-reference/parsing.md`, `tintin-reference/README.md`, `memory/feedback_lint_tin_files_via_ttrun.md` |
@@ -24,6 +25,45 @@ They are scars from prior sessions and represent the highest-value context.
 **To force a comprehensive context load at session start**: the user can
 type "read all relevant memory before starting" and I will do a full
 context-loading pass on the listed files before any work.
+
+---
+
+## IMPORTANT: Session Resilience — the big picture (read before ANY reconnect/bridge work)
+
+**What the feature is for:** a player must NEVER lose their MUD session or
+in-game state from a browser close, network blip, mobile app-switch, or a
+**server deploy**. `bridge.js` holds the raw MUD TCP and is never restarted;
+`wmt-server` is disposable and re-attaches ("resume") after a restart; state is
+persisted (DB for triggers/aliases/tickers; PHP store + 30s snapshots for
+token/bridgeToken/vars/delays/chat); the browser auto-reconnects.
+
+**The ONE invariant everything depends on:** *at most one live MUD connection per
+(userId, characterId), and every resume must find it by a STABLE bridge identity —
+never by the mutable session token.* Three identities must stay coherent: the
+**session token** (mutable — rekeys on new device/tab, cookie loss, PHP GC), the
+**bridgeToken** (stable key bridge uses for the TCP socket), and **(user,
+character)** (the MUD allows only ONE live connection per character — a duplicate
+is rejected "already logged in and active" or evicts the first).
+
+**How it bites when violated (the 2026-06-02 lockout):** if the bridge connection
+ever gets keyed by the *mutable* session token, a rekey + reconnect makes resume
+look up the wrong token → miss → the server *fresh-logs-in* → 3K rejects/evicts the
+duplicate → the original socket orphans (no reaper) → the character is stuck
+"logged in and active" and the user is locked out of their own char. Full analysis:
+`docs/connection-issues/005-resilience-identity-model-and-lockout.md`.
+
+**Rules:**
+- Do NOT restart `wmt-server` during a user's active session without their OK; a
+  restart is only seamless if the resume-by-stable-identity path is intact.
+- Prefer client-only deploys (`deploy.py auto` skips the wmt-server restart when
+  server.js is unchanged). NEVER restart `wmt-bridge` (linkdeath for everyone).
+- Recovery for a stuck char: `GET /sessions` (admin key from the service env) is
+  ground truth; any MUD socket not owned by a `/sessions` entry is a provable
+  orphan you can `ss -K`. Do NOT guess orphans from TCP byte counters.
+- If you change ANY part of this subsystem, update ALL the notes that describe it
+  (this section, `docs/connection-issues/*`, `docs/claude-reference/architecture.md`,
+  `memory/bug_bridge_resume_miss_orphan_lockout.md`, the MEMORY.md index) so the
+  map never contradicts the code.
 
 **Action discipline — don't ask permission for routine reads:**
 - Read operations (SFTP enumeration, log greps, DB SELECTs, file inspection,
