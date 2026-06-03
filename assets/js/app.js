@@ -1227,7 +1227,7 @@ class WMTClient {
             case 'trigger_chatmon':
                 // Trigger sent a message to ChatMon
                 if (data.message) {
-                    this.appendChatMessage(data.message, 'trigger', data.channel || 'trigger');
+                    this.appendChatMessage(data.message, 'trigger', data.channel || 'trigger', '', { timestamp: data.ts });
                 }
                 break;
 
@@ -1270,7 +1270,7 @@ class WMTClient {
                 if (data.message) {
                     // suppressAlert: server already evaluated the "no alerts from self"
                     // preference + sender match. Outbound tells fall back to noSound too.
-                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound || data.suppressAlert });
+                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound || data.suppressAlert, timestamp: data.ts });
                 }
                 break;
 
@@ -2194,7 +2194,10 @@ class WMTClient {
             }
         };
 
-        const hoverTimestamp = new Date().toLocaleString();
+        // Hover shows when the message was actually received. options.timestamp
+        // (epoch ms) is set for live messages and survives DB replay on resume;
+        // fall back to now only when the server didn't supply one.
+        const hoverTimestamp = (options.timestamp ? new Date(options.timestamp) : new Date()).toLocaleString();
 
         // Append to chat window
         const chatOutput = document.getElementById('chat-output');

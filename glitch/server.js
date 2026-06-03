@@ -181,7 +181,7 @@ if (wmtDb) {
     VALUES (?, ?, ?, ?, ?, datetime('now'))
   `);
   dbStmts.getRecentChat = wmtDb.prepare(`
-    SELECT raw_data FROM chat_messages
+    SELECT raw_data, created_at FROM chat_messages
     WHERE character_id = ? ORDER BY id DESC LIMIT ?
   `);
   dbStmts.pruneOldChat = wmtDb.prepare(`
@@ -2605,9 +2605,7 @@ async function restorePersistentSessions() {
       try {
         const chatRows = dbStmts.getRecentChat.all(ps.characterId, CHAT_BUFFER_MAX);
         if (chatRows.length > 0) {
-          session.chatBuffer = chatRows.reverse().map(r => {
-            try { return JSON.parse(r.raw_data); } catch (e) { return null; }
-          }).filter(Boolean);
+          session.chatBuffer = chatRows.reverse().map(parseStoredChatMessage).filter(Boolean);
         }
       } catch (e) {}
     }
@@ -5252,6 +5250,22 @@ function botUpdateConfig(session, config) {
  * Using sendToClient() for replay would push each message back into chatBuffer and
  * write it to the DB again, causing the history to multiply on every reconnect.
  */
+// Parse a stored chat_messages row back into the original message object.
+// Backfills `ts` (epoch ms of original receipt) for older rows that were
+// persisted before we started stamping messages — derived from the row's
+// UTC created_at so ChatMon's hover timestamp shows when the message was
+// actually received, not when the session resumed.
+function parseStoredChatMessage(r) {
+  let msg;
+  try { msg = JSON.parse(r.raw_data); } catch (e) { return null; }
+  if (msg && msg.ts == null && r.created_at) {
+    // SQLite datetime('now') is UTC 'YYYY-MM-DD HH:MM:SS' — make it ISO-UTC.
+    const t = Date.parse(r.created_at.replace(' ', 'T') + 'Z');
+    if (!isNaN(t)) msg.ts = t;
+  }
+  return msg;
+}
+
 function broadcastChatReplay(session, message) {
   const jsonMsg = JSON.stringify(message);
   for (const clientWs of session.wsClients) {
@@ -5297,6 +5311,9 @@ function sendToClient(session, message, targetWs) {
 
   // Buffer ChatMon messages for replay on session resume
   if (message.type === 'mip_chat' || message.type === 'trigger_chatmon') {
+    // Stamp receipt time so ChatMon's hover timestamp reflects when the
+    // message actually arrived — survives buffering + DB persistence + replay.
+    if (message.ts == null) message.ts = Date.now();
     session.chatBuffer.push(message);
     if (session.chatBuffer.length > CHAT_BUFFER_MAX) {
       session.chatBuffer.shift();
@@ -7072,9 +7089,7 @@ wss.on('connection', (ws, req) => {
               try {
                 const chatRows = dbStmts.getRecentChat.all(characterId, CHAT_BUFFER_MAX);
                 if (chatRows.length > 0) {
-                  session.chatBuffer = chatRows.reverse().map(r => {
-                    try { return JSON.parse(r.raw_data); } catch (e) { return null; }
-                  }).filter(Boolean);
+                  session.chatBuffer = chatRows.reverse().map(parseStoredChatMessage).filter(Boolean);
                 }
               } catch (e) {}
             }
