@@ -5,8 +5,12 @@
 > resumed all 6 live sessions seamlessly (6×`RESTORE_BRIDGE_RESUME`, 0 fresh logins,
 > 0 orphans). Proven by `tests/sandbox/test_bridge_rekey_resume.js` (the project's
 > first bridge-mode test; negative-controlled against the pre-fix server; now in the
-> `deploy.py` gate). STILL OPEN: bridge orphan-reaper + char-dedup (needs a
-> `wmt-bridge` restart) and client takeover/linkdead handling.
+> `deploy.py` gate). ALSO SHIPPED: client takeover/linkdead handling (commit
+> 2cc1c19, client-only, no restart) and the bridge orphan-reaper (bridge.js v1.1.0,
+> commit 8d857ee, deployed 2026-06-03 in a coordinated low-traffic window — all 4
+> sessions reconnected, 0 orphans). char-dedup was dropped as unnecessary: the stable
+> bridgeToken already prevents a duplicate-per-character. Optional/never-started:
+> server-side G2/G3/G7 below.
 
 This is a big-picture analysis of the session-persistence / zero-downtime-deploy
 feature: what it is for, the invariant it depends on, and why a deploy locked a
@@ -129,18 +133,19 @@ churned. The deploy was the trigger; the fragility is the cause.
   connection for that char; never fresh-login a char the MUD may still hold.
 - G7: restore the `.writable` check on the connected/resume report.
 
-**Tier C — client-only (deploys via IONOS SFTP, NO server/bridge restart). [OPEN]**
-- G6: detect "currently logged in and active" / "...and linkdead" and STOP the
-  auto-login loop; show an explicit "reconnect / take over" action instead of
-  re-sending credentials.
-- Tighten reconnect so visibilitychange/health-check/online events can't open
-  overlapping connections.
+**Tier C — client-only (deploys via IONOS SFTP, NO server/bridge restart). [SHIPPED 2026-06-03, commit 2cc1c19]**
+- G6: detect "currently logged in and active" → STOP the auto-login loop (no more
+  re-sending name/password), gate auto-reconnect, surface a Reconnect action.
+- Reconnect dedup: connect() bails while a socket is OPEN or CONNECTING.
+- Gated by `tests/sandbox/test_login_conflict.js`.
 
-**Tier D — bridge.js (restart = linkdeath for ALL users; needs a real maintenance window). [OPEN]**
-- G4: orphan reaper — close any socket whose serverWs has been null > ~60s.
-- G5: track (userId, characterId) per connection; make `init`/resume reconcile by
-  char so a duplicate can never exist; keep the existing `rekey` path as the
-  explicit remap.
+**Tier D — bridge.js (restart = linkdeath for ALL; needs a maintenance window). [reaper SHIPPED 2026-06-03, commit 8d857ee, bridge.js v1.1.0]**
+- G4 [DONE]: orphan reaper — closes any socket no server re-claims within
+  REAP_GRACE_MS (90s), with guards so it NEVER reaps while no server is connected
+  or within a grace of a server (re)connect (so a server outage/restart can't trip
+  it). Gated by `tests/sandbox/test_bridge_orphan_reaper.js`.
+- G5 [DROPPED]: char-dedup unnecessary — the stable bridgeToken already prevents a
+  duplicate connection per character.
 
 ## Operational rule reaffirmed
 
