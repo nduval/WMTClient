@@ -299,6 +299,9 @@ def run_test_suites():
         # + mock session store; proves the stable-bridgeToken resume/rekey fix
         # (the 2026-06-02 deploy-lockout). The only suite that runs BRIDGE mode.
         ('BridgeRekeyResume', 'test_bridge_rekey_resume.js'),
+        # Client-side: "already logged in and active" stops the auto-login loop +
+        # connect() dedup (vm-loads app.js + connection.js). Guards #4 hardening.
+        ('LoginConflict',  'test_login_conflict.js'),
     ]
 
     total_passed = 0

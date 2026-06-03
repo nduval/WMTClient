@@ -44,7 +44,12 @@ class MudConnection {
     }
 
     connect() {
-        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        // Don't stack sockets: bail if already open OR a connect is already in
+        // flight (CONNECTING). visibilitychange / health-check / online events can
+        // each call connect()/reconnect() near-simultaneously; overlapping sockets
+        // produce duplicate auth/login attempts.
+        if (this.socket && (this.socket.readyState === WebSocket.OPEN ||
+                            this.socket.readyState === WebSocket.CONNECTING)) {
             return;
         }
 

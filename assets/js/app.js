@@ -200,6 +200,12 @@ class WMTClient {
         this.editingItem = null;
         this.characterPassword = '';
         this.passwordSent = false;
+        // Set true when the MUD refuses login because the character is already
+        // connected and ACTIVE elsewhere. Stops the auto-login loop — re-sending
+        // name/password just spawns more duplicate-login attempts (the 2026-06-02
+        // lockout symptom). Cleared on a user-initiated reconnect.
+        // See docs/connection-issues/005-resilience-identity-model-and-lockout.md.
+        this.loginBlocked = false;
 
         // Tickers (server-side, persistent) and delays (client-side only)
         this.tickers = [];  // Array of ticker objects: {id, name, command, interval, enabled, class}
@@ -858,7 +864,7 @@ class WMTClient {
         // Send character name to MUD after connection (skip in bridgeMode —
         // if bridge resume succeeds, MUD is already logged in;
         // if it fails, server will send a non-bridgeMode session_new for login)
-        if (!bridgeMode) {
+        if (!bridgeMode && !this.loginBlocked) {
             const charName = window.WMT_CONFIG.newMudChar || window.WMT_CONFIG.characterName;
             const serverName = mudHost.includes('3scapes') ? '3Scapes' : '3K';
             if (charName) {
@@ -998,7 +1004,7 @@ class WMTClient {
                 // substitute trigger like Sub: sword can wrap the "sword" inside
                 // "Password:" with color codes, breaking the literal includes()
                 // check and stalling auto-login (observed 2026-05-01).
-                if (!this.passwordSent && this.characterPassword && data.line) {
+                if (!this.passwordSent && !this.loginBlocked && this.characterPassword && data.line) {
                     const stripped = data.line.replace(/\x1b\[[0-9;]*m/g, '');
                     if (stripped.includes('Password:') || stripped.match(/password\s*:/i)) {
                         this.passwordSent = true;
@@ -1017,6 +1023,18 @@ class WMTClient {
                         // confirmed via session log analysis.)
                         this.appendOutput('Sending password...', 'system');
                         this.connection.sendCommand(this.characterPassword);
+                    }
+                }
+
+                // The MUD refuses a login when the character is already connected
+                // and ACTIVE (not linkdead). Re-sending name/password just loops and
+                // spawns more duplicate-login attempts (the 2026-06-02 lockout
+                // symptom). Detect it, stop auto-login, tell the user how to recover.
+                // (Linkdead is the reconnectable case — 3K relinks you — leave it.)
+                if (!this.loginBlocked && data.line) {
+                    const lc = data.line.replace(/\x1b\[[0-9;]*m/g, '');
+                    if (/currently logged in and active/i.test(lc)) {
+                        this.handleActiveLoginConflict();
                     }
                 }
 
@@ -1099,6 +1117,9 @@ class WMTClient {
                 break;
 
             case 'mud_reconnect':
+                // A known active-login conflict is in effect — do NOT auto-retry the
+                // login (it would just re-loop). The user must click Reconnect.
+                if (this.loginBlocked) break;
                 // Bridge came back after restart — re-establish MUD connection
                 this.appendOutput('Reconnecting to MUD...', 'system');
                 this.passwordSent = false;
@@ -4089,9 +4110,25 @@ class WMTClient {
         return commands;
     }
 
+    handleActiveLoginConflict() {
+        this.loginBlocked = true;
+        this.passwordSent = true;       // don't auto-send the password into the conflict
+        this.pendingReconnect = false;  // don't re-send the character name
+        // Stop the auto-reconnect loop: mudLinkDead gates connection auto-reconnect,
+        // and a user-initiated Reconnect clears it (see connection.reconnect()).
+        if (this.connection) this.connection.mudLinkDead = true;
+        this.appendOutput(
+            'Your character is already connected and active elsewhere — auto-login ' +
+            'stopped to avoid logging in twice. When that session ends or goes ' +
+            'linkdead, click Reconnect to take over.',
+            'system');
+        this.updateConnectionStatus('mud_disconnected');
+    }
+
     reconnect() {
         this.appendOutput('Reconnecting...', 'system');
         // Reset flags so credentials will be sent again
+        this.loginBlocked = false;  // user explicitly wants back in — clear the conflict block
         this.passwordSent = false;
         this.mipStarted = false;
         this.mipEnabled = false;
