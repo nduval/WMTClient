@@ -36,6 +36,26 @@ MUD connections survive browser disconnects (app switching, network blips). User
 - `assets/js/connection.js` - Auth handshake, `onSessionResumed` callback
 - `assets/js/app.js` - `onSessionResumed()` handler
 
+### Bridge Mode & the stable-identity contract (production)
+In production the raw MUD TCP lives in `bridge.js` (never restarted) so `wmt-server`
+can restart with zero downtime — the new server `resume`s the existing socket via the
+bridge. This relies on a strict identity contract (full model + failure history:
+`docs/connection-issues/005-resilience-identity-model-and-lockout.md`):
+
+- The **session token** is mutable — it rekeys on new device/tab, cookie loss, or PHP
+  session GC.
+- The bridge socket must be keyed by a **stable `session.bridgeToken`**, set ONCE at
+  `createSession` and never changed by a rekey. ALL `new BridgeSocket(...)` sites and
+  both persist payloads use `bridgeToken`. (Fixed 2026-06-03, commit e1e16a9 — before
+  that, `connectToMud`/`autoLoginToMud` keyed by the mutable token, which after a rekey
+  caused resume-miss → fresh login → 3K eviction/orphan lockout.)
+- The MUD enforces ONE live connection per character, so any duplicate connection is
+  rejected ("already logged in and active") or evicts the live one.
+
+Invariant: **at most one live MUD connection per (userId, characterId), and every
+resume finds it by the stable bridgeToken.** Regression-guarded by
+`tests/sandbox/test_bridge_rekey_resume.js` (the only bridge-mode suite).
+
 ### Security
 - Tokens are 256-bit random (cryptographically secure)
 - Transmitted only over WSS (encrypted)

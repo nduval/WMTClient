@@ -30,6 +30,13 @@ context-loading pass on the listed files before any work.
 
 ## IMPORTANT: Session Resilience — the big picture (read before ANY reconnect/bridge work)
 
+**STATUS (2026-06-03):** The core defect is FIXED in prod (commit e1e16a9): the bridge
+socket is now keyed by a stable `session.bridgeToken`, never the mutable session token.
+Bridge-mode is covered by `tests/sandbox/test_bridge_rekey_resume.js` in the deploy
+gate. Still-open defense-in-depth (does NOT reopen the lockout): bridge orphan-reaper +
+char-dedup (needs a wmt-bridge restart) and client takeover/linkdead handling. Details +
+the full identity model: `docs/connection-issues/005-resilience-identity-model-and-lockout.md`.
+
 **What the feature is for:** a player must NEVER lose their MUD session or
 in-game state from a browser close, network blip, mobile app-switch, or a
 **server deploy**. `bridge.js` holds the raw MUD TCP and is never restarted;

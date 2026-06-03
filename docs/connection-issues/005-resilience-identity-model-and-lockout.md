@@ -1,5 +1,13 @@
 # 005 — Session-resilience identity model & the deploy lockout (2026-06-02)
 
+> **STATUS (2026-06-03):** The core fix (Tier A below — stable `session.bridgeToken`)
+> is SHIPPED to production (commit e1e16a9) and VERIFIED: the deploy that ships it
+> resumed all 6 live sessions seamlessly (6×`RESTORE_BRIDGE_RESUME`, 0 fresh logins,
+> 0 orphans). Proven by `tests/sandbox/test_bridge_rekey_resume.js` (the project's
+> first bridge-mode test; negative-controlled against the pre-fix server; now in the
+> `deploy.py` gate). STILL OPEN: bridge orphan-reaper + char-dedup (needs a
+> `wmt-bridge` restart) and client takeover/linkdead handling.
+
 This is a big-picture analysis of the session-persistence / zero-downtime-deploy
 feature: what it is for, the invariant it depends on, and why a deploy locked a
 user (elminster) out of his own character mid-combat. It ties together the prior
@@ -61,11 +69,14 @@ violation of this invariant.
 
 ## The systemic gaps that make this possible (not one bug — a cluster)
 
-- **G1 — resume keyed by the wrong identity.** At least one resume path looks up
-  the socket by the mutable session token instead of the stable bridgeToken. NEEDS
-  VERIFICATION: confirm whether restart-restore resumes by `ps.bridgeToken` or
-  `ps.token`, and whether bridgeToken is reliably persisted in BOTH the SIGTERM
-  persist and the 30s snapshot. This is the linchpin.
+- **G1 — bridge socket keyed by the mutable session token. [FIXED 2026-06-03]**
+  CONFIRMED root cause: restore already preferred `ps.bridgeToken` (line ~2687), but
+  `connectToMud()` and `autoLoginToMud()` constructed `new BridgeSocket(session.token)`
+  (lines ~2308, ~6526). So after a rekey, any fresh connect re-keyed the bridge socket
+  to the drifted token, orphaning the original and poisoning the persisted bridgeToken.
+  FIX: a stable `session.bridgeToken` set once in `createSession` (and pinned on
+  restore), used by ALL three `BridgeSocket(...)` sites and both persist payloads. A
+  rekey changes `session.token` but never `session.bridgeToken`.
 - **G2 — identity map not persisted.** `userCharacterSessions` (user:char -> token)
   is rebuilt empty on restart, so the RESTORE_SKIP_ACTIVE / RESTORE_SKIP_BROWSER
   dedup guards can't see an existing identity during the restore window → duplicate
@@ -105,21 +116,27 @@ churned. The deploy was the trigger; the fragility is the cause.
 
 ## Remediation plan (staged by blast radius)
 
-**Tier A — client-only (deploys via IONOS SFTP, NO server/bridge restart, safe anytime):**
+**Tier A — server.js core fix (stable bridgeToken). [SHIPPED 2026-06-03, commit e1e16a9]**
+- G1: all `BridgeSocket(...)` and both persist payloads key by the stable
+  `session.bridgeToken`, never the mutable session token. This alone closes the
+  lockout path AND prevents orphans-from-key-drift (a reconnect now reuses the same
+  bridge key, so bridge's `init` replaces the old socket instead of orphaning it).
+  Verified seamless in prod + by `test_bridge_rekey_resume.js`.
+
+**Tier B — server.js hardening (restarts wmt-server; sandbox-tested first). [OPEN]**
+- G2: persist/rebuild userCharacterSessions before the restore window opens.
+- G3: before any new `init` for a (user,char), reconcile/destroy any existing
+  connection for that char; never fresh-login a char the MUD may still hold.
+- G7: restore the `.writable` check on the connected/resume report.
+
+**Tier C — client-only (deploys via IONOS SFTP, NO server/bridge restart). [OPEN]**
 - G6: detect "currently logged in and active" / "...and linkdead" and STOP the
   auto-login loop; show an explicit "reconnect / take over" action instead of
   re-sending credentials.
 - Tighten reconnect so visibilitychange/health-check/online events can't open
   overlapping connections.
 
-**Tier B — server.js (restarts wmt-server; disruptive; do in a quiet window, sandbox-tested first):**
-- G1: resume by bridgeToken everywhere; persist bridgeToken in snapshot + SIGTERM.
-- G2: persist/rebuild userCharacterSessions before the restore window opens.
-- G3: before any new `init` for a (user,char), reconcile/destroy any existing
-  connection for that char; never fresh-login a char the MUD may still hold.
-- G7: restore the `.writable` check on the connected/resume report.
-
-**Tier C — bridge.js (restart = linkdeath for ALL users; needs a real maintenance window):**
+**Tier D — bridge.js (restart = linkdeath for ALL users; needs a real maintenance window). [OPEN]**
 - G4: orphan reaper — close any socket whose serverWs has been null > ~60s.
 - G5: track (userId, characterId) per connection; make `init`/resume reconcile by
   char so a duplicate can never exist; keep the existing `rekey` path as the
