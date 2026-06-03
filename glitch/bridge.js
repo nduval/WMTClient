@@ -25,16 +25,30 @@ const WebSocket = require('ws');
 
 const PORT = parseInt(process.env.BRIDGE_PORT) || 4000;
 const MAX_BUFFER_LINES = 500;
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
+// Orphan reaper (G4, see docs/connection-issues/005): close a MUD socket whose
+// server.js owner has stayed detached longer than REAP_GRACE_MS — but ONLY while a
+// server IS connected. A full server restart/outage must NEVER trip it (the whole
+// point of the bridge is to preserve sockets across that), so the reaper no-ops
+// when no server is connected. Env-tunable so tests can use a short grace.
+const REAP_GRACE_MS = parseInt(process.env.BRIDGE_REAP_MS) || 90000;
+const REAP_CHECK_MS = parseInt(process.env.BRIDGE_REAP_CHECK_MS) || 30000;
 
 // Active MUD connections keyed by session token
 const mudConnections = new Map();
+
+// When the most recent server.js connected. The reaper waits a full grace after a
+// (re)connect before reaping anything, so a server that just reconnected (after a
+// restart/outage) has time to resume its sessions before any orphan is closed —
+// otherwise the reaper could kill a valid session in the gap before its resume.
+let lastServerConnectAt = 0;
 
 const wss = new WebSocket.Server({ port: PORT });
 
 console.log(`[bridge] v${VERSION} listening on port ${PORT}`);
 
 wss.on('connection', (ws) => {
+  lastServerConnectAt = Date.now();
   console.log('[bridge] server.js connected');
 
   ws.on('message', (raw) => {
@@ -70,7 +84,8 @@ wss.on('connection', (ws) => {
           socket: null,
           serverWs: ws,
           buffer: [],       // Buffered raw data while server.js is disconnected
-          connected: false
+          connected: false,
+          detachedAt: null  // set when serverWs goes null; drives the orphan reaper
         };
 
         const socket = new net.Socket();
@@ -142,6 +157,7 @@ wss.on('connection', (ws) => {
 
         console.log(`[bridge] Resume (${token.substring(0, 8)}), buffered: ${entry.buffer.length}`);
         entry.serverWs = ws;
+        entry.detachedAt = null;   // re-claimed by a server → not an orphan
 
         // Replay buffered data
         if (entry.buffer.length > 0) {
@@ -203,6 +219,7 @@ wss.on('connection', (ws) => {
     for (const [, entry] of mudConnections) {
       if (entry.serverWs === ws) {
         entry.serverWs = null;
+        entry.detachedAt = Date.now();   // start the orphan-reap clock
       }
     }
   });
@@ -259,3 +276,25 @@ setInterval(() => {
     console.log(`[bridge] Sessions: ${active} active, ${buffering} buffering`);
   }
 }, 60000);
+
+// Orphan reaper (G4). Closes a MUD socket that no server has re-claimed within
+// REAP_GRACE_MS — the stranded-socket case that kept a character "logged in and
+// active" and locked the user out (2026-06-02). CRITICAL GUARD: only runs while a
+// server is connected (wss.clients.size > 0). During a server restart/outage every
+// entry is briefly detached but NO server is connected, so nothing is reaped — the
+// bridge still preserves all sockets across the gap, and the server re-claims them
+// (clearing detachedAt) the instant it reconnects.
+setInterval(() => {
+  if (wss.clients.size === 0) return;            // server down → preserve everything
+  const now = Date.now();
+  if (now - lastServerConnectAt < REAP_GRACE_MS) return;  // let a just-(re)connected server resume first
+  for (const [token, entry] of mudConnections) {
+    const detached = !entry.serverWs || entry.serverWs.readyState !== WebSocket.OPEN;
+    if (detached && entry.detachedAt && (now - entry.detachedAt) > REAP_GRACE_MS) {
+      const ageS = Math.round((now - entry.detachedAt) / 1000);
+      console.log(`[bridge] Reaping orphan (${token.substring(0, 8)}): no server re-claimed it for ${ageS}s`);
+      try { if (entry.socket && !entry.socket.destroyed) entry.socket.destroy(); } catch (e) {}
+      mudConnections.delete(token);
+    }
+  }
+}, REAP_CHECK_MS);

@@ -302,6 +302,9 @@ def run_test_suites():
         # Client-side: "already logged in and active" stops the auto-login loop +
         # connect() dedup (vm-loads app.js + connection.js). Guards #4 hardening.
         ('LoginConflict',  'test_login_conflict.js'),
+        # Bridge orphan-reaper (#3, G4): reaps stranded sockets, spares claimed
+        # ones, and never reaps during a server outage. Spawns its own bridge.js.
+        ('BridgeOrphanReaper', 'test_bridge_orphan_reaper.js'),
     ]
 
     total_passed = 0
