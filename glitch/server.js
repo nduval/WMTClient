@@ -7889,14 +7889,39 @@ wss.on('connection', (ws, req) => {
           break;
 
         case 'disconnect':
-          // Explicit disconnect - close MUD connection
-          logSessionEvent('SESSION_EXPLICIT_DISCONNECT', {
-            token: session.token.substring(0, 8),
-            user: session.userId,
-            char: effectiveCharName(session)
-          });
-          session.explicitDisconnect = true;
-          closeSession(session, 'explicit disconnect');
+          // A disconnect tears down the WHOLE shared session/MUD/bot ONLY when it's
+          // a genuine, player-requested close (intentional:true — Disconnect button,
+          // #end, #zap, idle deadman). A BARE disconnect (no flag) is treated as
+          // DETACH-ONLY: it came from a stray path / a race / an OLD CACHED client
+          // that predates the flag (the kind that silently killed a mobile-launched
+          // bot 2026-06-04). Detach-only just drops this one browser; the MUD
+          // connection, bot, and session stay alive for other devices / background.
+          // Source IP is logged either way so a recurrence names the device.
+          // See memory: project_disconnect_detach_redesign.
+          if (data.intentional) {
+            logSessionEvent('SESSION_EXPLICIT_DISCONNECT', {
+              token: session.token.substring(0, 8),
+              user: session.userId,
+              char: effectiveCharName(session),
+              ip: clientIp,
+              intentional: true
+            });
+            session.explicitDisconnect = true;
+            closeSession(session, 'explicit disconnect');
+          } else {
+            logSessionEvent('SESSION_DETACH_ONLY', {
+              token: session.token.substring(0, 8),
+              user: session.userId,
+              char: effectiveCharName(session),
+              ip: clientIp,
+              mudConnected: !!(session.mudSocket && !session.mudSocket.destroyed),
+              remaining: Math.max(0, session.wsClients.size - 1),
+              note: 'bare disconnect — detached this browser only, kept session/MUD/bot alive'
+            });
+            // Let the normal ws.on('close') do the passive detach (remove from
+            // wsClients, wizard-exempt timeout). explicitDisconnect stays false.
+            try { ws.close(); } catch (e) {}
+          }
           break;
       }
     } catch (e) {
@@ -9610,6 +9635,29 @@ function parseIfChain(str) {
 function serverProcessInlineCommand(cmd, session) {
   if (!cmd || !session) return false;
   const trimmed = cmd.trim();
+
+  // #end / #zap — go linkdead. Handle SERVER-SIDE so a timer-driven auto-#end
+  // (e.g. an idle #if {$idle>N} {#end} from a trigger/ticker) actually disconnects
+  // even when the client is SUSPENDED (mobile background). Previously #end was
+  // client-only (cmdEnd) so it silently did nothing on a frozen mobile browser,
+  // leaving the char online overnight. This is an INTENTIONAL, player/config-
+  // requested close. Defer the actual teardown to the next tick so the current
+  // command pipeline (trigger/ticker dispatch) finishes before the session dies.
+  // See memory: project_disconnect_detach_redesign.
+  if (/^#(?:end|zap)(?:\s|$)/i.test(trimmed)) {
+    logSessionEvent('SESSION_SERVERSIDE_END', {
+      token: session.token ? session.token.substring(0, 8) : null,
+      user: session.userId,
+      char: effectiveCharName(session),
+      cmd: trimmed.split(/\s+/)[0].toLowerCase()
+    });
+    setTimeout(() => {
+      if (session.closed) return;
+      session.explicitDisconnect = true;
+      closeSession(session, 'serverside #end');
+    }, 0);
+    return true;
+  }
 
   // #math {varname} {expression}  or  #math varname expression
   const mathMatch = trimmed.match(/^#math\s+\{?(\w+)\}?\s+(.*)/i);

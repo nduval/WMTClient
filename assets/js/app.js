@@ -684,7 +684,7 @@ class WMTClient {
                 this.appendOutput(`Disconnecting after ${idleMinutes} minutes of inactivity.`, 'system');
                 this.stopIdleChecker();
                 if (this.connection) {
-                    this.connection.disconnect();
+                    this.connection.disconnect(true);  // idle deadman → real close
                 }
             }
         }, 30000);
@@ -4142,7 +4142,7 @@ class WMTClient {
 
     disconnect() {
         this.appendOutput('Disconnecting from MUD...', 'system');
-        this.connection.disconnect();
+        this.connection.disconnect(true);  // user tapped Disconnect → real close
         this.mipEnabled = false;
         this.mipStarted = false;
         this.updateMipBarVisibility();
@@ -4164,7 +4164,7 @@ class WMTClient {
         }
 
         // Disconnect from MUD (goes linkdead - no "quit" sent, matching TinTin++)
-        this.connection.disconnect();
+        this.connection.disconnect(true);  // #end → real close
         this.mipEnabled = false;
         this.mipStarted = false;
         this.updateMipBarVisibility();
@@ -4183,7 +4183,7 @@ class WMTClient {
         this.appendOutput('Connection zapped.', 'system');
 
         // Disconnect from MUD (goes linkdead)
-        this.connection.disconnect();
+        this.connection.disconnect(true);  // #zap → real close
         this.mipEnabled = false;
         this.mipStarted = false;
         this.updateMipBarVisibility();

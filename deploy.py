@@ -305,6 +305,9 @@ def run_test_suites():
         # Bridge orphan-reaper (#3, G4): reaps stranded sockets, spares claimed
         # ones, and never reaps during a server outage. Spawns its own bridge.js.
         ('BridgeOrphanReaper', 'test_bridge_orphan_reaper.js'),
+        # Disconnect detach-only + server-side #end (mobile-suspend fixes): a bare
+        # disconnect detaches one device & keeps MUD/bot alive; intentional + #end close.
+        ('DisconnectDetach', 'test_disconnect_detach.js'),
     ]
 
     total_passed = 0

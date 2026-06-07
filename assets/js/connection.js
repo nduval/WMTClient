@@ -170,15 +170,20 @@ class MudConnection {
         };
     }
 
-    disconnect() {
+    // intentional=true means the PLAYER genuinely asked to disconnect (Disconnect
+    // button / #end / #zap / idle deadman) → the server tears down the MUD session.
+    // A bare disconnect() (no flag) is treated server-side as detach-only (drop just
+    // this browser, keep the MUD/bot/session alive). See server.js 'disconnect'
+    // handler + memory project_disconnect_detach_redesign.
+    disconnect(intentional = false) {
         this.intentionalDisconnect = true;
         this.reconnectAttempts = this.maxReconnectAttempts; // Prevent reconnection
         this.stopKeepAlive();
 
-        // Send explicit disconnect message to close MUD connection on server
+        // Send disconnect message to the server, flagged with intent.
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
             try {
-                this.socket.send(JSON.stringify({ type: 'disconnect' }));
+                this.socket.send(JSON.stringify({ type: 'disconnect', intentional: !!intentional }));
             } catch (e) {
                 console.error('Failed to send disconnect:', e);
             }
