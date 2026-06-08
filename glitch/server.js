@@ -7178,6 +7178,15 @@ wss.on('connection', (ws, req) => {
             }
           }
 
+          // Stamp the time of genuine user input. This is the AUTHORITATIVE idle
+          // signal used to gate auto (trigger/ticker) server-side #end. The idle
+          // ticker increments $idle server-side, but its RECEIVED-INPUT reset only
+          // runs in the browser and loses to the 2s server-var staleness guard, so
+          // the server's $idle never resets while the player types. lastInputAt is
+          // the accurate "last input" measure; a suspended mobile client simply
+          // stops stamping it. See bug_serverside_end_idle_active_kick.
+          session.lastInputAt = Date.now();
+
           // Guest-mode name-prompt restriction: when a guest session is at
           // the MUD's name prompt, the only allowed name is "guest". Any
           // other typed name gets dropped before reaching the MUD. Without
@@ -9645,6 +9654,32 @@ function serverProcessInlineCommand(cmd, session) {
   // command pipeline (trigger/ticker dispatch) finishes before the session dies.
   // See memory: project_disconnect_detach_redesign.
   if (/^#(?:end|zap)(?:\s|$)/i.test(trimmed)) {
+    // Auto idle-#end guard. A TYPED #end is intercepted in the browser
+    // (cmdEnd -> intentional disconnect) and never reaches here, so every #end at
+    // this point is SERVER-generated (e.g. an idle `#if {$idle>N} {#end}` from a
+    // ticker/trigger). The idle counter is incremented server-side by a ticker,
+    // but its reset (`#EVENT {RECEIVED INPUT} {#var idle 0}`) only runs in the
+    // browser AND loses to the 2s server-var staleness guard — so the server's
+    // $idle never resets while the player types, and an ACTIVE player was being
+    // auto-disconnected (Nathan, 2026-06-07). Gate on real input time: if the
+    // player typed within the grace window, suppress the auto #end. A mobile-
+    // suspended client stops stamping lastInputAt, so a genuinely idle session
+    // still fires after the grace — preserving the mobile idle-#end fix.
+    // See memory: bug_serverside_end_idle_active_kick.
+    const AUTO_END_IDLE_GRACE_MS = parseInt(process.env.AUTO_END_IDLE_GRACE_MS, 10) >= 0
+      ? parseInt(process.env.AUTO_END_IDLE_GRACE_MS, 10)
+      : 25 * 60 * 1000; // default 25 min; only ever SUPPRESSES a close, never adds one
+    const sinceInput = session.lastInputAt ? (Date.now() - session.lastInputAt) : Infinity;
+    if (sinceInput < AUTO_END_IDLE_GRACE_MS) {
+      logSessionEvent('SESSION_SERVERSIDE_END_SUPPRESSED', {
+        token: session.token ? session.token.substring(0, 8) : null,
+        user: session.userId,
+        char: effectiveCharName(session),
+        cmd: trimmed.split(/\s+/)[0].toLowerCase(),
+        secsSinceInput: Math.round(sinceInput / 1000)
+      });
+      return true; // consume the #end but keep the session alive — player is active
+    }
     logSessionEvent('SESSION_SERVERSIDE_END', {
       token: session.token ? session.token.substring(0, 8) : null,
       user: session.userId,

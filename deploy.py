@@ -229,6 +229,33 @@ def deploy_test_server():
                 shell=True, capture_output=True, text=True
             )
 
+    # Stage the PHP auth stack so the PHP login suite (test_php_login.js) can boot
+    # the REAL includes/+config/+api under `php -S` against a throwaway data dir.
+    # Pushed to /opt/wmt/phpsrc. The admin key is stripped on the sandbox so the
+    # suite uses the JSON user fallback (no prod DB / no secret left on the box).
+    subprocess.run(f'{ssh_cmd} "rm -rf /tmp/phpsrc && mkdir -p /tmp/phpsrc"',
+                   shell=True, capture_output=True, text=True)
+    php_ok = True
+    for d in ('includes', 'config', 'api'):
+        ld = BASE_DIR / d
+        if not ld.exists():
+            continue
+        r = subprocess.run(
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -r "{ld}" ubuntu@{host}:/tmp/phpsrc/',
+            shell=True, capture_output=True, text=True
+        )
+        if r.returncode != 0:
+            php_ok = False
+            print(f"  WARNING: PHP src push failed for {d}: {r.stderr.strip()}")
+    if php_ok:
+        subprocess.run(
+            f'{ssh_cmd} "sudo rm -rf /opt/wmt/phpsrc && sudo mkdir -p /opt/wmt/phpsrc '
+            f'&& sudo cp -r /tmp/phpsrc/* /opt/wmt/phpsrc/ '
+            f'&& sudo rm -f /opt/wmt/phpsrc/config/render_admin_key.php '
+            f'&& sudo chmod -R a+rX /opt/wmt/phpsrc"',
+            shell=True, capture_output=True, text=True
+        )
+
     # Copy + restart. As of 2026-05-25 the allowedServers allowlist lives in
     # /opt/wmt/config/allowed_servers.json (created once per box) rather than
     # being patched into server.js literally. See memory: config-driven-allowed-servers.
@@ -308,9 +335,18 @@ def run_test_suites():
         # Disconnect detach-only + server-side #end (mobile-suspend fixes): a bare
         # disconnect detaches one device & keeps MUD/bot alive; intentional + #end close.
         ('DisconnectDetach', 'test_disconnect_detach.js'),
+        # Idle auto-#end guard: a ticker/trigger-driven #end is SUPPRESSED while the
+        # player is actively typing (lastInputAt < grace) but FIRES once genuinely
+        # idle — fixes the 2026-06-07 active-player auto-disconnect.
+        ('IdleEndGuard', 'test_idle_end_guard.js'),
         # Multi-device coexistence: 2 devices share one session — both get output,
         # both can send, neither kicked, one MUD connection, detach-safe.
         ('MultiDevice', 'test_multidevice.js'),
+        # PHP login flow: boots the real includes/+config/+api under `php -S`
+        # (staged at /opt/wmt/phpsrc) — guards the double-login fix (single
+        # session lifecycle) + login-stack smoke test. NOTE: PHP 8.3 masks the
+        # prod-only multi-cookie race; this guards total breakage + clean cookie.
+        ('PhpLogin', 'test_php_login.js'),
     ]
 
     total_passed = 0
