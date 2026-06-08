@@ -308,6 +308,9 @@ def run_test_suites():
         # Disconnect detach-only + server-side #end (mobile-suspend fixes): a bare
         # disconnect detaches one device & keeps MUD/bot alive; intentional + #end close.
         ('DisconnectDetach', 'test_disconnect_detach.js'),
+        # Multi-device coexistence: 2 devices share one session — both get output,
+        # both can send, neither kicked, one MUD connection, detach-safe.
+        ('MultiDevice', 'test_multidevice.js'),
     ]
 
     total_passed = 0
