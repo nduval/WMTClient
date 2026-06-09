@@ -53,7 +53,10 @@ function spawnBridge(log) {
   return c;
 }
 function spawnServer(mockPort, log) {
-  const env = { ...process.env, PORT: String(PORT), ADMIN_KEY, PHP_SESSIONS_URL: `http://127.0.0.1:${mockPort}/persistent_sessions.php`, WMT_DB_PATH: DB_PATH, MUD_HOST, MUD_PORT, BRIDGE_URL: `ws://localhost:${BRIDGE_PORT}`, NODE_ENV: 'production' };
+  // AUTO_END_IDLE_GRACE_MS=0 disables the idle-#end suppression so T3's
+  // command-driven #end still closes here (the suppression itself is covered by
+  // test_idle_end_guard.js, which drives #end via a ticker with a real grace).
+  const env = { ...process.env, PORT: String(PORT), ADMIN_KEY, PHP_SESSIONS_URL: `http://127.0.0.1:${mockPort}/persistent_sessions.php`, WMT_DB_PATH: DB_PATH, MUD_HOST, MUD_PORT, BRIDGE_URL: `ws://localhost:${BRIDGE_PORT}`, AUTO_END_IDLE_GRACE_MS: '0', NODE_ENV: 'production' };
   const c = spawn('node', [SERVER_JS], { env, cwd: '/opt/wmt' });
   c.stdout.on('data', d => { log.push(d.toString()); if (process.env.VERBOSE) process.stdout.write('[srv] ' + d); });
   c.stderr.on('data', d => { if (process.env.VERBOSE) process.stderr.write('[srv ERR] ' + d); });
