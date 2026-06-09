@@ -666,15 +666,23 @@ function startUserSession(string $userId, string $username): void {
     }
     saveUsersIndex($users);
 
-    // Force session to be written immediately
+    // Capture the verification value while the session is still open.
+    $verifyUserId = $_SESSION['user_id'] ?? 'NOT SET';
+
+    // Force session to be written immediately, then DO NOT re-open it.
+    //
+    // A second initSession()/session_start() here was the root of the
+    // intermittent double-login ("logged in, then immediately need to
+    // authenticate"): after write_close the SAPI re-reads the *request*
+    // cookie ($_COOKIE still holds the pre-regeneration id) and, on some
+    // SAPIs, resumes/re-emits the OLD session id whose file regenerate_id
+    // already deleted — so the browser stores a dead session and the next
+    // request is DENIED. The post-login steps below (profile fields, DB
+    // sync) and both callers' success responses are all $_SESSION-free, so
+    // there is nothing left in this request that needs the session open.
     session_write_close();
 
-    // Restart session for any further operations in this request
-    initSession();
-
-    // Verify session was saved correctly
-    $verifyUserId = $_SESSION['user_id'] ?? 'NOT SET';
-    authLog("LOGIN COMPLETE: user=$username, verified_user_id=$verifyUserId, final_session_id=" . session_id() . ", ip=$ip");
+    authLog("LOGIN COMPLETE: user=$username, verified_user_id=$verifyUserId, final_session_id=$newSessionId, ip=$ip");
 
     // Store last IP in user profile
     updateUserProfileField($userId, 'last_ip', $ip);
