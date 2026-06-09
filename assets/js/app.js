@@ -168,6 +168,9 @@ const COMMAND_REGISTRY = [
       category: 'Session', syntax: '#end', description: 'End session' },
     { name: 'zap',          abbrevs: [],                   handler: 'cmdZap',          async: false,
       category: 'Session', syntax: '#zap', description: 'Disconnect from MUD' },
+    // --- Files (wizard) ---
+    { name: 'editfile',     abbrevs: ['ef'],               handler: 'cmdEditfile',     async: false,
+      category: 'Files', syntax: '#editfile {name}', description: 'Edit a guild file (wizard)' },
 ];
 
 // Build dispatch and GET_ALL_AFTER maps from registry
@@ -1308,6 +1311,16 @@ class WMTClient {
                 if (this.mipDebug) {
                     this.appendOutput(`[MIP ${data.msgType}] ${data.msgData}`, 'system');
                 }
+                break;
+
+            case 'mud_file':
+                // Guild-file download assembled by the server (CDF/CCF/CEF).
+                this._onMudFile(data);
+                break;
+
+            case 'mud_file_uploaded':
+                // Server finished streaming our edited file back to the MUD.
+                this._onFileUploaded(data.filename);
                 break;
 
             case 'bot_status': {
@@ -4187,6 +4200,197 @@ class WMTClient {
         this.mipEnabled = false;
         this.mipStarted = false;
         this.updateMipBarVisibility();
+    }
+
+    // ─── Guild-file editor (Portal-style wizard file editing over MIP) ───────
+    // #editfile <name> fetches the file (the server assembles CDF/CCF/CEF into a
+    // `mud_file` message); you edit it in-browser with point-and-click @color@
+    // tooling; Save streams it back RAW via `mud_send_file` (3ksendfile…EOF).
+    // See memory reference_mip_file_transfer.md. Wizard-gated.
+    cmdEditfile(args) {
+        if (!(window.WMT_CONFIG && window.WMT_CONFIG.isWizard)) {
+            this.appendOutput('#editfile is available to wizards only.', 'error');
+            return;
+        }
+        const name = (args[0] || '').trim();
+        if (!name) { this.appendOutput('Usage: #editfile {name}   e.g.  #editfile defense', 'error'); return; }
+        if (!this.connection || !this.connection.connected) { this.appendOutput('#editfile: not connected to the MUD.', 'error'); return; }
+        this.appendOutput(`Fetching guild file "${name}"…`, 'system');
+        this.connection.sendCommand(`info -c -r ${name}`);
+    }
+
+    _onMudFile(data) {
+        const content = typeof data.content === 'string' ? data.content : '';
+        // If we're verifying a just-saved file, compare instead of re-opening.
+        if (this._editfileVerify) {
+            const expect = this._editfileVerify; this._editfileVerify = null;
+            if (content === expect.content) {
+                this.appendOutput(`✓ "${data.filename}" verified — the saved copy matches what you sent.`, 'system');
+            } else {
+                this.appendOutput(`⚠ "${data.filename}" saved, but the reloaded copy DIFFERS from what you sent — re-open and check.`, 'error');
+            }
+            return;
+        }
+        this.openFileEditor(data.filename || 'file.txt', content);
+    }
+
+    _onFileUploaded(filename) {
+        this.appendOutput(`Saved "${filename}". Verifying…`, 'system');
+        // Re-download to confirm the save round-tripped (download is length-framed).
+        this.connection.sendCommand(`info -c -r ${String(filename).replace(/\.txt$/i, '')}`);
+    }
+
+    // 3K @color:text@ markup → CSS color (close enough for an editing preview;
+    // adjust hexes if a color reads wrong in-game).
+    _fileColorMap() {
+        return {
+            red: '#cc4444', green: '#44cc44', yellow: '#cccc44', blue: '#4466dd',
+            magenta: '#cc44cc', cyan: '#44cccc', white: '#cccccc', black: '#555555',
+            orange: '#ffaa00', gray: '#888888', grey: '#888888',
+            hired: '#ff5555', higreen: '#55ff55', hiyellow: '#ffff55', hiblue: '#5577ff',
+            himagenta: '#ff55ff', hicyan: '#55ffff', hiwhite: '#ffffff'
+        };
+    }
+
+    _renderColorMarkup(text) {
+        const map = this._fileColorMap();
+        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return esc(text).replace(/@(\w+):([^@]*)@/g, (m, name, body) => {
+            const hex = map[name.toLowerCase()];
+            return hex
+                ? `<span style="color:${hex}">${body}</span>`
+                : `<span style="color:#ff4444;text-decoration:underline" title="unknown color: ${name}">@${name}:${body}@</span>`;
+        });
+    }
+
+    _validateFileMarkup(text) {
+        const stray = (text.replace(/@(\w+):([^@]*)@/g, '').match(/@/g) || []).length;
+        return stray ? `${stray} stray '@' — check your @color:…@ tags` : null;
+    }
+
+    openFileEditor(filename, content) {
+        this._ensureFileEditor();
+        this._editfileState = { filename, original: content };
+        this._efTitle.textContent = `Edit guild file: ${filename}`;
+        this._efTextarea.value = content;
+        this._efRefresh();
+        document.getElementById('editfile-modal').classList.add('open');
+        this._efTextarea.focus();
+    }
+
+    _closeFileEditor() {
+        const m = document.getElementById('editfile-modal');
+        if (m) m.classList.remove('open');
+    }
+
+    _efRefresh() {
+        if (this._efPreview) this._efPreview.innerHTML = this._renderColorMarkup(this._efTextarea.value);
+        const err = this._validateFileMarkup(this._efTextarea.value);
+        if (this._efStatus) {
+            this._efStatus.textContent = err ? '⚠ ' + err : '✓ markup OK';
+            this._efStatus.style.color = err ? '#ffaa00' : '#44cc44';
+        }
+    }
+
+    _efWrapColor(name) {
+        const ta = this._efTextarea;
+        const s = ta.selectionStart, e = ta.selectionEnd, sel = ta.value.slice(s, e);
+        const ins = `@${name}:${sel}@`;
+        ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
+        const caret = sel ? s + ins.length : s + name.length + 2; // inside if no selection
+        ta.focus(); ta.setSelectionRange(caret, caret);
+        this._efRefresh();
+    }
+
+    _efStripColor() {
+        const ta = this._efTextarea;
+        let s = ta.selectionStart, e = ta.selectionEnd;
+        if (s === e) { s = 0; e = ta.value.length; } // whole doc if nothing selected
+        const seg = ta.value.slice(s, e).replace(/@(\w+):([^@]*)@/g, '$2');
+        ta.value = ta.value.slice(0, s) + seg + ta.value.slice(e);
+        ta.focus(); this._efRefresh();
+    }
+
+    _efSave() {
+        const st = this._editfileState; if (!st) return;
+        const content = this._efTextarea.value;   // exact bytes — never trimmed
+        const err = this._validateFileMarkup(content);
+        if (err && !window.confirm(`Markup warning: ${err}\n\nSave anyway?`)) return;
+        const before = st.original.split('\n'), after = content.split('\n');
+        let changed = Math.abs(before.length - after.length);
+        for (let i = 0; i < Math.min(before.length, after.length); i++) if (before[i] !== after[i]) changed++;
+        this._editfileVerify = { filename: st.filename, content };
+        this.connection.send('mud_send_file', { filename: st.filename, content });
+        this.appendOutput(`Uploading "${st.filename}" (${changed} line${changed === 1 ? '' : 's'} changed)…`, 'system');
+        this._closeFileEditor();
+    }
+
+    _ensureFileEditor() {
+        if (document.getElementById('editfile-modal')) return;
+        const style = document.createElement('style');
+        style.textContent = `
+        .editfile-modal .modal { max-width: 940px; width: 94vw; }
+        .ef-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:10px; }
+        .ef-swatch { width:22px; height:22px; border:1px solid rgba(255,255,255,.25); border-radius:4px; cursor:pointer; padding:0; }
+        .ef-swatch:hover { outline:2px solid var(--primary-color); }
+        .ef-btn { background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:4px 8px; cursor:pointer; font-size:.85em; }
+        .ef-btn:hover { border-color:var(--primary-color); }
+        .ef-status { margin-left:auto; font-size:.85em; }
+        .ef-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; height:56vh; }
+        .ef-textarea, .ef-preview { height:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:13px; line-height:1.35; background:#0b0b14; color:var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; white-space:pre; overflow:auto; tab-size:4; }
+        .ef-textarea { resize:none; }
+        .ef-preview { margin:0; }
+        .ef-legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; font-size:.78em; color:var(--text-muted); }
+        .ef-legend span { display:inline-flex; align-items:center; gap:4px; }
+        .ef-legend i { width:12px; height:12px; border-radius:2px; display:inline-block; }`;
+        document.head.appendChild(style);
+
+        const map = this._fileColorMap();
+        const palette = ['yellow', 'hiyellow', 'green', 'higreen', 'cyan', 'hicyan', 'blue', 'red', 'hired', 'magenta', 'white', 'orange'];
+        const swatches = palette.map(n => `<button class="ef-swatch" data-color="${n}" title="@${n}:…@" style="background:${map[n]}"></button>`).join('');
+        const legend = Object.keys(map).map(n => `<span><i style="background:${map[n]}"></i>${n}</span>`).join('');
+
+        const overlay = document.createElement('div');
+        overlay.id = 'editfile-modal';
+        overlay.className = 'modal-overlay editfile-modal';
+        overlay.innerHTML = `
+          <div class="modal">
+            <div class="modal-header">
+              <h3 id="ef-title">Edit guild file</h3>
+              <button class="panel-close" id="ef-close">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="ef-toolbar">
+                <span style="font-size:.8em;color:var(--text-muted)">Select text, click a color:</span>
+                ${swatches}
+                <button class="ef-btn" id="ef-strip">Strip color</button>
+                <span class="ef-status" id="ef-status">✓ markup OK</span>
+              </div>
+              <div class="ef-grid">
+                <textarea class="ef-textarea" id="ef-textarea" spellcheck="false" wrap="off"></textarea>
+                <pre class="ef-preview" id="ef-preview"></pre>
+              </div>
+              <div class="ef-legend">${legend}</div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn" id="ef-cancel">Cancel</button>
+              <button class="btn btn-primary" id="ef-save">Save to MUD</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+
+        this._efTitle = overlay.querySelector('#ef-title');
+        this._efTextarea = overlay.querySelector('#ef-textarea');
+        this._efPreview = overlay.querySelector('#ef-preview');
+        this._efStatus = overlay.querySelector('#ef-status');
+
+        this._efTextarea.addEventListener('input', () => this._efRefresh());
+        this._efTextarea.addEventListener('scroll', () => { this._efPreview.scrollTop = this._efTextarea.scrollTop; this._efPreview.scrollLeft = this._efTextarea.scrollLeft; });
+        overlay.querySelectorAll('.ef-swatch').forEach(b => b.addEventListener('click', () => this._efWrapColor(b.dataset.color)));
+        overlay.querySelector('#ef-strip').addEventListener('click', () => this._efStripColor());
+        overlay.querySelector('#ef-close').addEventListener('click', () => this._closeFileEditor());
+        overlay.querySelector('#ef-cancel').addEventListener('click', () => this._closeFileEditor());
+        overlay.querySelector('#ef-save').addEventListener('click', () => this._efSave());
     }
 
     // MIP (MUD Interface Protocol) functions

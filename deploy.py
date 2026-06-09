@@ -347,6 +347,15 @@ def run_test_suites():
         # session lifecycle) + login-stack smoke test. NOTE: PHP 8.3 masks the
         # prod-only multi-cookie race; this guards total breakage + clean cookie.
         ('PhpLogin', 'test_php_login.js'),
+        # Guild-file editor: MIP download (CDF/CCF/CEF) → browser, and raw paced
+        # 3ksendfile upload; round-trips a file with ;/#/$ to prove raw passthrough.
+        # Needs the extended mock-mud.js (CDF/CCF/CEF + 3ksendfile + __setmip).
+        ('FileTransfer', 'test_file_transfer.js'),
+        # Tier B: a bridge-resumed auto-reconnect that lands at a name prompt RELINKS
+        # (deploy/blip dropped a live char) instead of destroying the socket — the
+        # mimic deploy-boot. Suppression still holds when no socket was held
+        # (AutoLoginGate). See bug_resume_name_prompt_autologin_suppressed.
+        ('TierBRelink', 'test_tierb_relink.js'),
     ]
 
     total_passed = 0

@@ -80,6 +80,24 @@ const ROOMS = {
     },
 };
 
+// ── Guild-file store for the Portal-style file editor (download/upload).
+// Keyed by full filename (e.g. "defense.txt"); each value is an array of lines.
+// Seeded with a file whose lines deliberately include leading spaces, an empty
+// line, @color@ markup, and a line containing `;`, `#` and `$` — so the upload
+// test proves the server sends file content RAW (no ;-split / #-intercept / $var).
+const FILES = {
+  'defense.txt': [
+    '',
+    ':::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::',
+    '  @yellow:THE MAGE GUILD@ : @higreen:Defense@',
+    ':::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::',
+    '',
+    ' Tricky line: cast spell;quaff potion #note $var stays literal',
+    '',
+    ' Updated by Test on 01/01/2026',
+  ],
+};
+
 // MIP protocol helpers
 function mipData(type, data) {
     // MIP format: \x03type\x04data\x03\x04
@@ -105,6 +123,9 @@ class MockMudSession {
         this.lagMs = 0;
         this.inCombat = false;
         this.lineBuffer = '';
+        this.mipId = null;            // set by the 3klient handshake / __setmip
+        this.receivingFile = null;    // filename while in 3ksendfile receive mode
+        this.receiveBuf = null;       // raw lines collected during receive mode
 
         this.sendLogin();
 
@@ -113,11 +134,42 @@ class MockMudSession {
             this.lineBuffer += data.toString();
             let lines = this.lineBuffer.split('\n');
             this.lineBuffer = lines.pop(); // keep incomplete last line
-            for (const line of lines) {
-                const cmd = line.replace(/\r/g, '').trim();
+            for (const raw of lines) {
+                const line = raw.replace(/\r/g, '');   // strip CR, KEEP spaces
+                // In 3ksendfile receive mode, lines are RAW file content (preserve
+                // leading/trailing spaces) until a literal "EOF" terminates.
+                if (this.receivingFile !== null) {
+                    if (line === 'EOF') {
+                        FILES[this.receivingFile] = this.receiveBuf;
+                        this.sendLine(`File ${this.receivingFile} saved (${this.receiveBuf.length} lines).`);
+                        this.receivingFile = null;
+                        this.receiveBuf = null;
+                    } else {
+                        this.receiveBuf.push(line);
+                    }
+                    continue;
+                }
+                const cmd = line.trim();
                 if (cmd) this.handleCommand(cmd);
             }
         });
+    }
+
+    sendMipFrame(code, payload) {
+        // Real-3K MIP framing: #K%<mipId><NNN><CODE><payload>  (NNN = 3 + len(payload))
+        const nnn = String(3 + payload.length).padStart(3, '0');
+        this.send(`#K%${this.mipId}${nnn}${code}${payload}\r\n`);
+    }
+
+    emitGuildFile(name) {
+        const fname = /\.txt$/.test(name) ? name : name + '.txt';
+        const lines = FILES[fname];
+        if (!this.mipId) { this.sendLine('(MIP not enabled — no mipId)'); return; }
+        if (!lines) { this.sendLine(`No such file: ${name}`); return; }
+        this.sendMipFrame('CDF', `${lines.length}~${fname}`);
+        for (const l of lines) this.sendMipFrame('CCF', l);
+        this.sendMipFrame('CEF', '');   // real MUD sends CEF twice
+        this.sendMipFrame('CEF', '');
     }
 
     send(text) {
@@ -159,6 +211,7 @@ class MockMudSession {
                 const idAndClient = parts[1] || '';
                 const [mipId, clientName] = idAndClient.split('~~');
                 if (clientName && clientName.startsWith('Portal')) {
+                    this.mipId = mipId;   // remember for #K% file-transfer frames
                     this.send(mipData('E', mipId));
                     this.sendLine(`${ANSI.green}MIP enabled (ID: ${mipId})${ANSI.reset}`);
                 }
@@ -236,9 +289,40 @@ class MockMudSession {
                 this.socket.end();
                 break;
 
+            case '__emit_in': {
+                // Schedule a raw line after <ms>, even if the wmt-server proxy
+                // disconnects in the meantime (the bridge holds the TCP and
+                // buffers it). Used to simulate the MUD dropping a live char to
+                // the relink name prompt DURING a wmt-server restart gap — the
+                // condition that booted mimic (see test_deploy_resume_live).
+                const ms = parseInt(parts[1]) || 0;
+                const text = parts.slice(2).join(' ');
+                setTimeout(() => { try { this.sendLine(text); } catch (e) {} }, ms);
+                break;
+            }
+
+            case '__nameprompt': {
+                // Emit the REAL 3K relink name-prompt banner the server's event
+                // sniffer matches (MUD_EVENT_PATTERNS name_prompt_banner), so the
+                // sandbox can finally exercise the at-name-prompt resume path. The
+                // mock's own "Enter your name:" never matched it. Optional <ms> delay.
+                const ms = parseInt(parts[1]) || 0;
+                const banner = '<Entering 3Kingdoms.  Enter your character name (or type new): ';
+                this.loggedIn = false; this.name = null;   // back to login state
+                setTimeout(() => { try { this.sendLine(banner); } catch (e) {} }, ms);
+                break;
+            }
+
             case '__lag':
                 this.lagMs = parseInt(parts[1]) || 1000;
                 this.sendLine(`${ANSI.yellow}[Test] Next command will be delayed ${this.lagMs}ms${ANSI.reset}`);
+                break;
+
+            case '__setmip':
+                // Test hook: set the MIP id used for #K% file-transfer frames
+                // (the reliable analog of the 3klient handshake for tests).
+                this.mipId = parts[1] || null;
+                this.sendLine(`[Test] mipId set to ${this.mipId}`);
                 break;
 
             case '__combat': {
@@ -360,6 +444,22 @@ class MockMudSession {
 
             case 'afk':
                 this.sendLine(`${ANSI.yellow}You go AFK: ${parts.slice(1).join(' ') || 'away'}${ANSI.reset}`);
+                break;
+
+            case 'info':
+                // Guild-file DOWNLOAD: `info -c -r <name>` → emit CDF/CCF/CEF frames.
+                if (parts.includes('-c') && parts.includes('-r')) {
+                    this.emitGuildFile(parts[parts.length - 1]);
+                } else {
+                    this.sendLine(`What? "${input}"`);
+                }
+                break;
+
+            case '3ksendfile':
+                // Guild-file UPLOAD: enter receive-until-EOF mode. Subsequent raw
+                // lines are file content (handled in the socket data handler).
+                this.receivingFile = parts[1] || 'unnamed.txt';
+                this.receiveBuf = [];
                 break;
 
             default:

@@ -5631,6 +5631,47 @@ function parseMipMessage(session, msgType, msgData) {
   }
 
   switch (msgType) {
+    // ── Guild-file transfer (Portal wizard file editor). See memory
+    //    reference_mip_file_transfer.md. Download is MIP-framed:
+    //      CDF = header, payload "<lineCount>~<filename>"
+    //      CCF = one content line (payload IS the line; preserve verbatim)
+    //      CEF = end-of-file (may arrive twice; second is a no-op)
+    //    msgData is the exact line payload (clamped to EOL), so whitespace is
+    //    preserved; strip only a stray trailing \r. Assemble and hand the whole
+    //    file to the browser as a `mud_file` message (new type; old clients ignore).
+    case 'CDF': {
+      const t = msgData.indexOf('~');
+      const count = parseInt(t >= 0 ? msgData.slice(0, t) : msgData, 10) || 0;
+      const filename = (t >= 0 ? msgData.slice(t + 1) : '').replace(/\r$/, '').trim();
+      session._fileXfer = { filename, lineCount: count, lines: [] };
+      logSessionEvent('MUD_FILE_DOWNLOAD_START', {
+        token: session.token ? session.token.substring(0, 8) : null,
+        user: session.userId, char: effectiveCharName(session),
+        filename, lineCount: count
+      });
+      break;
+    }
+    case 'CCF':
+      if (session._fileXfer) session._fileXfer.lines.push(msgData.replace(/\r$/, ''));
+      break;
+    case 'CEF':
+      if (session._fileXfer) {
+        const fx = session._fileXfer;
+        session._fileXfer = null;
+        sendToClient(session, {
+          type: 'mud_file',
+          filename: fx.filename,
+          lineCount: fx.lineCount,
+          content: fx.lines.join('\n')
+        });
+        logSessionEvent('MUD_FILE_RECEIVED', {
+          token: session.token ? session.token.substring(0, 8) : null,
+          user: session.userId, char: effectiveCharName(session),
+          filename: fx.filename, lines: fx.lines.length, expected: fx.lineCount
+        });
+      }
+      break;
+
     case 'FFF':
       parseFFFStats(session, msgData);
       updated = true;
@@ -6587,18 +6628,40 @@ function connectToMud(session) {
       // races. Destroy the just-opened socket so the parked char isn't persisted/
       // restored (which would re-resurrect it on a later restart); the existing
       // close handler notifies the browser ("Connection to MUD closed.").
-      if (session._autoReconnect && !mudLoggedIn) {
+      // Tier B (2026-06-08). SC4 suppresses auto-login on an automatic reconnect
+      // at a name prompt to avoid RESURRECTING a char the user let go. But the
+      // discriminator is whether the bridge was actually HOLDING a live socket:
+      //   bridgeResumed=false → no socket held (fresh connect, or an intentional
+      //     #end/#zap tore the socket down) → genuinely let-go/parked → SUPPRESS.
+      //   bridgeResumed=true  → the bridge held the socket and it merely dropped to
+      //     the name prompt during a deploy/blip → the player is mid-session →
+      //     RELINK (fall through to the session_new dispatch below), don't boot.
+      // This fixes the 2026-06-08 mimic deploy-boot while keeping SC4's no-resurrect
+      // guard intact (AutoLoginGate is direct-mode, bridgeResumed=false → suppressed).
+      // See memory: bug_resume_name_prompt_autologin_suppressed.
+      if (session._autoReconnect && !mudLoggedIn && !bridgeResumed) {
         logSessionEvent('AUTOLOGIN_SUPPRESSED', {
           token: session.token ? session.token.substring(0, 8) : null,
           user: session.userId,
           char: session.characterName,
-          reason: 'auto-reconnect; MUD at name prompt'
+          reason: 'auto-reconnect; no held socket (fresh/parked) — not resurrecting'
         });
         session._autoReconnect = false;
         if (session.mudSocket && !session.mudSocket.destroyed) {
           session.mudSocket.destroy();
         }
         return;
+      }
+      if (session._autoReconnect && !mudLoggedIn) {
+        // bridgeResumed && !mudLoggedIn: a held socket dropped to the name prompt
+        // (deploy/blip). Relink the player — the session_new dispatch below sends
+        // the char name/password instead of abandoning the connection.
+        logSessionEvent('AUTOLOGIN_RELINK', {
+          token: session.token ? session.token.substring(0, 8) : null,
+          user: session.userId,
+          char: session.characterName,
+          reason: 'auto-reconnect; bridge held the socket — relinking after deploy/blip'
+        });
       }
       // New connection — notify client
       sendToClient(session, {
@@ -7162,6 +7225,60 @@ wss.on('connection', (ws, req) => {
 
       // Handle authenticated messages
       switch (data.type) {
+        case 'mud_send_file': {
+          // Guild-file UPLOAD (Portal wizard file editor; see memory
+          // reference_mip_file_transfer.md). Stream the file RAW to the MUD,
+          // bypassing the ENTIRE command pipeline (NO alias expansion, NO
+          // `;`-splitting, NO `#`-command interception, NO `$var` substitution,
+          // NO speedwalk) — a file line with `;`/`#`/`$` must reach the MUD
+          // verbatim or it corrupts the file. `3ksendfile <name>` flips the MUD
+          // into receive-until-EOF mode; then raw lines; then a literal `EOF`.
+          // Paced to avoid 3K input-flood. Wizard-gated (MUD also enforces perms).
+          if (!session.isWizard) {
+            logSessionEvent('MUD_FILE_UPLOAD_DENIED', {
+              token: session.token ? session.token.substring(0, 8) : null,
+              user: session.userId, char: effectiveCharName(session)
+            });
+            break;
+          }
+          const filename = String(data.filename || '').trim();
+          // Strict filename — also prevents command injection via the filename.
+          if (!filename || !/^[\w.\-]+$/.test(filename)) {
+            sendToClient(session, { type: 'system', message: 'File upload: invalid filename.' });
+            break;
+          }
+          if (!session.mudSocket || session.mudSocket.destroyed) {
+            sendToClient(session, { type: 'system', message: 'File upload: not connected to MUD.' });
+            break;
+          }
+          const content = typeof data.content === 'string' ? data.content : '';
+          const fileLines = content.split('\n').map(l => l.replace(/\r$/, ''));
+          logSessionEvent('MUD_FILE_UPLOAD_START', {
+            token: session.token ? session.token.substring(0, 8) : null,
+            user: session.userId, char: effectiveCharName(session),
+            filename, lines: fileLines.length
+          });
+          const sock = session.mudSocket;
+          const queue = [`3ksendfile ${filename}`, ...fileLines, 'EOF'];
+          const PACE_MS = 40;
+          let qi = 0;
+          const pump = () => {
+            if (!sock || sock.destroyed) return;
+            if (qi >= queue.length) {
+              logSessionEvent('MUD_FILE_UPLOAD_DONE', {
+                token: session.token ? session.token.substring(0, 8) : null,
+                user: session.userId, char: effectiveCharName(session), filename
+              });
+              sendToClient(session, { type: 'mud_file_uploaded', filename });
+              return;
+            }
+            sock.write(queue[qi++] + '\r\n');   // RAW — no processEscapes, no expansion
+            setTimeout(pump, PACE_MS);
+          };
+          pump();
+          break;
+        }
+
         case 'command':
           // Honeypot trip: if the command exactly matches a configured trip
           // string, auto-ban the source IP and tear down the connection.
