@@ -4363,9 +4363,14 @@ class WMTClient {
         const style = document.createElement('style');
         style.textContent = `
         .editfile-modal .modal { max-width: 940px; width: 94vw; }
-        .ef-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:10px; }
-        .ef-swatch { width:22px; height:22px; border:1px solid rgba(255,255,255,.25); border-radius:4px; cursor:pointer; padding:0; }
-        .ef-swatch:hover { outline:2px solid var(--primary-color); }
+        .ef-tip { font-size:.76em; color:var(--text-muted); display:block; margin-bottom:5px; }
+        /* Labeled colour grid: 8 paired columns, top row normal / bottom row bright. */
+        .ef-colors { display:grid; grid-template-columns: repeat(8, minmax(0,1fr)); gap:4px; margin-bottom:8px; }
+        .ef-chip { display:flex; align-items:center; gap:5px; min-width:0; padding:3px 6px; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; font-size:.72em; cursor:pointer; }
+        .ef-chip:hover { border-color:var(--primary-color); }
+        .ef-chip i { width:12px; height:12px; border-radius:2px; flex:0 0 auto; }
+        .ef-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .ef-tools { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:10px; }
         .ef-btn { background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:4px 8px; cursor:pointer; font-size:.85em; }
         .ef-btn:hover { border-color:var(--primary-color); }
         .ef-status { margin-left:auto; font-size:.85em; }
@@ -4373,16 +4378,23 @@ class WMTClient {
         .ef-textarea, .ef-preview { height:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:13px; line-height:1.35; background:#0b0b14; color:var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; white-space:pre; overflow:auto; tab-size:4; }
         .ef-textarea { resize:none; }
         .ef-preview { margin:0; }
-        .ef-legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; font-size:.78em; color:var(--text-muted); }
-        .ef-legend span { display:inline-flex; align-items:center; gap:4px; }
-        .ef-legend i { width:12px; height:12px; border-radius:2px; display:inline-block; }`;
+        @media (max-width:760px) {
+          .editfile-modal .modal { width:98vw; max-height:94vh; }
+          .ef-colors { grid-template-columns: repeat(4, minmax(0,1fr)); }
+          .ef-grid { grid-template-columns:1fr; height:auto; }
+          .ef-textarea, .ef-preview { height:36vh; }
+          .ef-status { margin-left:0; }
+        }`;
         document.head.appendChild(style);
 
         const cm = this._fileColors();
-        const palette = ['black', 'grey', 'white', 'hiblack', 'red', 'hired', 'green', 'higreen', 'brown', 'yellow', 'blue', 'hiblue', 'cyan', 'hicyan', 'magenta', 'himagenta'];
-        const swatches = palette.map(n => `<button class="ef-swatch" data-color="${n}" title="@${n}:…@" style="background:${cm.fg[n]}"></button>`).join('');
+        // Paired layout: each base colour over its bright (hi) partner.
+        //   row 1 (normal): black red green brown blue magenta cyan grey
+        //   row 2 (bright): hiblack hired higreen yellow hiblue himagenta hicyan white
+        const order = ['black', 'red', 'green', 'brown', 'blue', 'magenta', 'cyan', 'grey',
+            'hiblack', 'hired', 'higreen', 'yellow', 'hiblue', 'himagenta', 'hicyan', 'white'];
+        const chips = order.map(n => `<button class="ef-chip" data-color="${n}" title="@${n}:…@"><i style="background:${cm.fg[n]}"></i><span>${n}</span></button>`).join('');
         const styleBtns = ['hilite', 'italics', 'underline'].map(n => `<button class="ef-btn" data-color="${n}" title="@${n}:…@">${n}</button>`).join('');
-        const legend = Object.keys(cm.fg).map(n => `<span><i style="background:${cm.fg[n]}"></i>${n}</span>`).join('');
 
         const overlay = document.createElement('div');
         overlay.id = 'editfile-modal';
@@ -4394,18 +4406,17 @@ class WMTClient {
               <button class="panel-close" id="ef-close">&times;</button>
             </div>
             <div class="modal-body">
-              <div class="ef-toolbar">
-                <span style="font-size:.8em;color:var(--text-muted)">Select text, click a color:</span>
-                ${swatches}
+              <span class="ef-tip">Select text, then click a colour — top row normal, bottom row bright (hi):</span>
+              <div class="ef-colors">${chips}</div>
+              <div class="ef-tools">
                 ${styleBtns}
-                <button class="ef-btn" id="ef-strip">Strip color</button>
+                <button class="ef-btn" id="ef-strip">Strip colour</button>
                 <span class="ef-status" id="ef-status">✓ markup OK</span>
               </div>
               <div class="ef-grid">
                 <textarea class="ef-textarea" id="ef-textarea" spellcheck="false" wrap="off"></textarea>
                 <pre class="ef-preview" id="ef-preview"></pre>
               </div>
-              <div class="ef-legend">${legend}</div>
             </div>
             <div class="modal-footer">
               <span class="ef-hint" id="ef-install-hint" style="margin-right:auto;font-size:.78em;color:var(--text-muted)"></span>
