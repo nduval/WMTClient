@@ -4235,31 +4235,51 @@ class WMTClient {
     }
 
     _onFileUploaded(filename) {
-        this.appendOutput(`Saved "${filename}". Verifying…`, 'system');
+        const shortName = String(filename).replace(/\.txt$/i, '');
+        // Install/commit the uploaded file on the MUD. Help files install with
+        // `insthelp <name>` — do it automatically so the user never has to recall it.
+        this.connection.sendCommand(`insthelp ${shortName}`);
+        this.appendOutput(`Saved "${filename}" and installed it (insthelp ${shortName}). Verifying…`, 'system');
         // Re-download to confirm the save round-tripped (download is length-framed).
-        this.connection.sendCommand(`info -c -r ${String(filename).replace(/\.txt$/i, '')}`);
+        this.connection.sendCommand(`info -c -r ${shortName}`);
     }
 
     // 3K @color:text@ markup → CSS color (close enough for an editing preview;
     // adjust hexes if a color reads wrong in-game).
-    _fileColorMap() {
+    // 3K's actual @color@ palette (from the MUD's `colours` table). Hexes mirror
+    // the client's own ANSI rendering so the preview matches in-game.
+    //   foreground (@name:text@), background (@bk*:text@), and style names.
+    // NOTE: `yellow` is BRIGHT ([33;1m); `brown` is the dim one ([33m). `white` is
+    // BRIGHT ([37;1m); `grey` is the dim one ([37m).
+    _fileColors() {
         return {
-            red: '#cc4444', green: '#44cc44', yellow: '#cccc44', blue: '#4466dd',
-            magenta: '#cc44cc', cyan: '#44cccc', white: '#cccccc', black: '#555555',
-            orange: '#ffaa00', gray: '#888888', grey: '#888888',
-            hired: '#ff5555', higreen: '#55ff55', hiyellow: '#ffff55', hiblue: '#5577ff',
-            himagenta: '#ff55ff', hicyan: '#55ffff', hiwhite: '#ffffff'
+            fg: {
+                black: '#555555', red: '#cc4444', green: '#44cc44', brown: '#cccc44',
+                blue: '#4466dd', magenta: '#cc44cc', cyan: '#44cccc', grey: '#cccccc',
+                hiblack: '#888888', hired: '#ff5555', higreen: '#55ff55', yellow: '#ffff55',
+                hiblue: '#5577ff', himagenta: '#ff55ff', hicyan: '#55ffff', white: '#ffffff'
+            },
+            bg: {
+                bkblack: '#000000', bkred: '#cc4444', bkgreen: '#44cc44', bkbrown: '#cccc44',
+                bkblue: '#4466dd', bkmagenta: '#cc44cc', bkcyan: '#44cccc', bkgrey: '#cccccc'
+            },
+            style: {
+                hilite: 'font-weight:bold', italics: 'font-style:italic',
+                underline: 'text-decoration:underline', flash: 'animation:blink 1s step-end infinite',
+                inverse: 'filter:invert(1)', reset: ''
+            }
         };
     }
 
     _renderColorMarkup(text) {
-        const map = this._fileColorMap();
+        const cm = this._fileColors();
         const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         return esc(text).replace(/@(\w+):([^@]*)@/g, (m, name, body) => {
-            const hex = map[name.toLowerCase()];
-            return hex
-                ? `<span style="color:${hex}">${body}</span>`
-                : `<span style="color:#ff4444;text-decoration:underline" title="unknown color: ${name}">@${name}:${body}@</span>`;
+            const n = name.toLowerCase();
+            if (cm.fg[n]) return `<span style="color:${cm.fg[n]}">${body}</span>`;
+            if (cm.bg[n]) return `<span style="background-color:${cm.bg[n]}">${body}</span>`;
+            if (n in cm.style) return `<span style="${cm.style[n]}">${body}</span>`;
+            return `<span style="color:#ff4444;text-decoration:underline" title="unknown color: ${name}">@${name}:${body}@</span>`;
         });
     }
 
@@ -4272,6 +4292,7 @@ class WMTClient {
         this._ensureFileEditor();
         this._editfileState = { filename, original: content };
         this._efTitle.textContent = `Edit guild file: ${filename}`;
+        if (this._efInstallHint) this._efInstallHint.textContent = `Save uploads + installs:  insthelp ${String(filename).replace(/\.txt$/i, '')}`;
         this._efTextarea.value = content;
         this._efRefresh();
         document.getElementById('editfile-modal').classList.add('open');
@@ -4345,10 +4366,11 @@ class WMTClient {
         .ef-legend i { width:12px; height:12px; border-radius:2px; display:inline-block; }`;
         document.head.appendChild(style);
 
-        const map = this._fileColorMap();
-        const palette = ['yellow', 'hiyellow', 'green', 'higreen', 'cyan', 'hicyan', 'blue', 'red', 'hired', 'magenta', 'white', 'orange'];
-        const swatches = palette.map(n => `<button class="ef-swatch" data-color="${n}" title="@${n}:…@" style="background:${map[n]}"></button>`).join('');
-        const legend = Object.keys(map).map(n => `<span><i style="background:${map[n]}"></i>${n}</span>`).join('');
+        const cm = this._fileColors();
+        const palette = ['black', 'grey', 'white', 'hiblack', 'red', 'hired', 'green', 'higreen', 'brown', 'yellow', 'blue', 'hiblue', 'cyan', 'hicyan', 'magenta', 'himagenta'];
+        const swatches = palette.map(n => `<button class="ef-swatch" data-color="${n}" title="@${n}:…@" style="background:${cm.fg[n]}"></button>`).join('');
+        const styleBtns = ['hilite', 'italics', 'underline'].map(n => `<button class="ef-btn" data-color="${n}" title="@${n}:…@">${n}</button>`).join('');
+        const legend = Object.keys(cm.fg).map(n => `<span><i style="background:${cm.fg[n]}"></i>${n}</span>`).join('');
 
         const overlay = document.createElement('div');
         overlay.id = 'editfile-modal';
@@ -4363,6 +4385,7 @@ class WMTClient {
               <div class="ef-toolbar">
                 <span style="font-size:.8em;color:var(--text-muted)">Select text, click a color:</span>
                 ${swatches}
+                ${styleBtns}
                 <button class="ef-btn" id="ef-strip">Strip color</button>
                 <span class="ef-status" id="ef-status">✓ markup OK</span>
               </div>
@@ -4373,8 +4396,9 @@ class WMTClient {
               <div class="ef-legend">${legend}</div>
             </div>
             <div class="modal-footer">
+              <span class="ef-hint" id="ef-install-hint" style="margin-right:auto;font-size:.78em;color:var(--text-muted)"></span>
               <button class="btn" id="ef-cancel">Cancel</button>
-              <button class="btn btn-primary" id="ef-save">Save to MUD</button>
+              <button class="btn btn-primary" id="ef-save">Save &amp; install</button>
             </div>
           </div>`;
         document.body.appendChild(overlay);
@@ -4383,10 +4407,11 @@ class WMTClient {
         this._efTextarea = overlay.querySelector('#ef-textarea');
         this._efPreview = overlay.querySelector('#ef-preview');
         this._efStatus = overlay.querySelector('#ef-status');
+        this._efInstallHint = overlay.querySelector('#ef-install-hint');
 
         this._efTextarea.addEventListener('input', () => this._efRefresh());
         this._efTextarea.addEventListener('scroll', () => { this._efPreview.scrollTop = this._efTextarea.scrollTop; this._efPreview.scrollLeft = this._efTextarea.scrollLeft; });
-        overlay.querySelectorAll('.ef-swatch').forEach(b => b.addEventListener('click', () => this._efWrapColor(b.dataset.color)));
+        overlay.querySelectorAll('[data-color]').forEach(b => b.addEventListener('click', () => this._efWrapColor(b.dataset.color)));
         overlay.querySelector('#ef-strip').addEventListener('click', () => this._efStripColor());
         overlay.querySelector('#ef-close').addEventListener('click', () => this._closeFileEditor());
         overlay.querySelector('#ef-cancel').addEventListener('click', () => this._closeFileEditor());
