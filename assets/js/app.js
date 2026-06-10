@@ -4227,13 +4227,17 @@ class WMTClient {
         const name = (args[0] || '').trim();
         if (!name) { this.appendOutput('Usage: #editfile {name}   e.g.  #editfile defense', 'error'); return; }
         if (!this.connection || !this.connection.connected) { this.appendOutput('#editfile: not connected to the MUD.', 'error'); return; }
+        // Mark that the NEXT file download is a user-requested open (so incidental
+        // downloads — e.g. insthelp echoing the installed file — don't pop the editor).
+        this._editfileExpectOpen = name;
+        this._editfileVerify = null;
         this.appendOutput(`Fetching guild file "${name}"…`, 'system');
         this.connection.sendCommand(`info -c -r ${name}`);
     }
 
     _onMudFile(data) {
         const content = typeof data.content === 'string' ? data.content : '';
-        // If we're verifying a just-saved file, compare instead of re-opening.
+        // Verifying a just-saved file: compare, never reopen.
         if (this._editfileVerify) {
             const expect = this._editfileVerify; this._editfileVerify = null;
             if (content === expect.content) {
@@ -4243,17 +4247,30 @@ class WMTClient {
             }
             return;
         }
-        this.openFileEditor(data.filename || 'file.txt', content);
+        // Open the editor ONLY for a user-requested #editfile. Any other file
+        // download (e.g. insthelp echoing the installed file back) is ignored, so
+        // it can't spuriously re-open the editor. (Bug 2026-06-10.)
+        if (this._editfileExpectOpen) {
+            this._editfileExpectOpen = null;
+            this.openFileEditor(data.filename || 'file.txt', content);
+        }
     }
 
     _onFileUploaded(filename) {
         const shortName = String(filename).replace(/\.txt$/i, '');
-        // Install/commit the uploaded file on the MUD. Help files install with
-        // `insthelp <name>` — do it automatically so the user never has to recall it.
-        this.connection.sendCommand(`insthelp ${shortName}`);
-        this.appendOutput(`Saved "${filename}" and installed it (insthelp ${shortName}). Verifying…`, 'system');
-        // Re-download to confirm the save round-tripped (download is length-framed).
-        this.connection.sendCommand(`info -c -r ${shortName}`);
+        this.appendOutput(`Saved "${filename}". Verifying + installing (insthelp ${shortName})…`, 'system');
+        // IMPORTANT: wait before `info`/`insthelp`. The mud_file_uploaded ack fires
+        // when WE finish streaming (after EOF), but the MUD needs a beat to actually
+        // commit the received file. Running insthelp too soon installs the OLD copy —
+        // observed 2026-06-10: `insthelp` ran 11ms BEFORE the MUD's "File received",
+        // so the edit silently didn't take. Verify FIRST (re-download → compared in
+        // _onMudFile against the committed file), THEN install; insthelp's echoed
+        // download is ignored (no reopen).
+        setTimeout(() => {
+            if (!this.connection || !this.connection.connected) return;
+            this.connection.sendCommand(`info -c -r ${shortName}`);
+            this.connection.sendCommand(`insthelp ${shortName}`);
+        }, 1500);
     }
 
     // 3K @color:text@ markup → CSS color (close enough for an editing preview;
