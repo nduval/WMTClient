@@ -1286,6 +1286,13 @@ class WMTClient {
                     // previous session shouldn't carry over into the replay.
                     this.resetChatNewPill('main');
                     this.resetChatNewPill('popout');
+                    // A replay burst (chat history) arrives immediately after this.
+                    // Suppress alert dings for it so a refresh doesn't stack a dozen
+                    // sounds into a loud distorted blast. Cleared ~900ms after the last
+                    // replayed message; live messages after that ding normally.
+                    this._chatReplaying = true;
+                    clearTimeout(this._chatReplayTimer);
+                    this._chatReplayTimer = setTimeout(() => { this._chatReplaying = false; }, 900);
                 }
                 break;
 
@@ -1294,7 +1301,12 @@ class WMTClient {
                 if (data.message) {
                     // suppressAlert: server already evaluated the "no alerts from self"
                     // preference + sender match. Outbound tells fall back to noSound too.
-                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound || data.suppressAlert, timestamp: data.ts });
+                    // _chatReplaying: during the post-reconnect replay burst, don't ding.
+                    this.appendChatMessage(data.message, data.chatType, data.channel, data.rawText, { noSound: data.outbound || data.suppressAlert || this._chatReplaying, timestamp: data.ts });
+                    if (this._chatReplaying) {
+                        clearTimeout(this._chatReplayTimer);
+                        this._chatReplayTimer = setTimeout(() => { this._chatReplaying = false; }, 900);
+                    }
                 }
                 break;
 
