@@ -4240,10 +4240,23 @@ class WMTClient {
         // Verifying a just-saved file: compare, never reopen.
         if (this._editfileVerify) {
             const expect = this._editfileVerify; this._editfileVerify = null;
-            if (content === expect.content) {
-                this.appendOutput(`✓ "${data.filename}" verified — the saved copy matches what you sent.`, 'system');
+            const got = content;
+            if (got === expect.content) {
+                this.appendOutput(`✓ "${data.filename}" verified — saved copy matches exactly.`, 'system');
             } else {
-                this.appendOutput(`⚠ "${data.filename}" saved, but the reloaded copy DIFFERS from what you sent — re-open and check.`, 'error');
+                // The MUD trims trailing whitespace / trailing blank lines on store,
+                // so an exact byte-compare can flag a benign trim. Re-compare with that
+                // normalized away; only warn if the meaningful content actually differs.
+                const norm = (s) => s.split('\n').map(l => l.replace(/\s+$/, '')).join('\n').replace(/\n+$/, '');
+                if (norm(got) === norm(expect.content)) {
+                    this.appendOutput(`✓ "${data.filename}" installed — content matches (the MUD trimmed some trailing spaces).`, 'system');
+                } else {
+                    const a = expect.content.split('\n'), b = got.split('\n');
+                    let i = 0; while (i < Math.min(a.length, b.length) && a[i] === b[i]) i++;
+                    this.appendOutput(`⚠ "${data.filename}" saved but the reloaded copy DIFFERS at line ${i + 1}:`, 'error');
+                    this.appendOutput(`   sent: ${JSON.stringify((a[i] ?? '(missing)').slice(0, 90))}`, 'error');
+                    this.appendOutput(`   got:  ${JSON.stringify((b[i] ?? '(missing)').slice(0, 90))}`, 'error');
+                }
             }
             return;
         }
