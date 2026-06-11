@@ -7291,6 +7291,17 @@ wss.on('connection', (ws, req) => {
           })();
           break;
         }
+        case 'ftp_delete': {
+          if (!ftpEditorAllowed(session)) break;
+          const p = String(data.path || '');
+          if (!p) break;
+          (async () => {
+            // DELE a file. Do NOT ftpClose on failure (non-fatal).
+            try { const client = await ftpEnsureClient(session); await client.remove(p); sendToClient(session, { type: 'ftp_deleted', path: p }); }
+            catch (e) { sendToClient(session, { type: 'ftp_error', op: 'delete', path: p, message: e.message || 'delete failed' }); }
+          })();
+          break;
+        }
         case 'ftp_get': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
