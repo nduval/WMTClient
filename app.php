@@ -149,6 +149,10 @@ setcookie($tokenCookieName, $wsToken, [
                         <button onclick="wmtClient.openSubstituteModal()">+ Substitute</button>
                         <button onclick="wmtClient.openTickerModal()">+ Ticker</button>
                         <div class="menu-divider"></div>
+<?php if ($isWizard && strtolower($characterName) === 'mimic'): ?>
+                        <button onclick="wmtClient.cmdFtpEdit()">📁 Edit Files (FTP)</button>
+                        <div class="menu-divider"></div>
+<?php endif; ?>
                         <button onclick="wmtClient.reconnect()">Reconnect</button>
                         <button onclick="wmtClient.disconnect()">Disconnect</button>
                         <div class="menu-divider"></div>
@@ -162,6 +166,10 @@ setcookie($tokenCookieName, $wsToken, [
                     <div class="character-menu" id="character-menu">
                         <a href="<?= $isGuest ? 'index.php' : 'characters.php' ?>">Character Selection</a>
                         <div class="menu-divider"></div>
+<?php if ($isWizard && strtolower($characterName) === 'mimic'): ?>
+                        <button onclick="wmtClient.cmdFtpEdit()">📁 Edit Files (FTP)</button>
+                        <div class="menu-divider"></div>
+<?php endif; ?>
                         <button onclick="wmtClient.reconnect()">Reconnect</button>
                         <button onclick="wmtClient.disconnect()">Disconnect</button>
                         <div class="menu-divider"></div>
