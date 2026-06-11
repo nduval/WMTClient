@@ -4496,16 +4496,28 @@ class WMTClient {
             return;
         }
         this._ensureFtpModal();
-        this._ftpShowAccount();
+        // Already connected this browser session? Go straight back to the files.
+        if (this._ftp && this._ftp.connected) this._ftpShowWorkspace();
+        else this._ftpShowAccount();
         document.getElementById('ftp-modal').classList.add('open');
     }
 
     _ftpJoin(base, name) { return (base === '.' || base === '') ? name : base.replace(/\/+$/, '') + '/' + name; }
 
+    // Human-readable file size for the quiet right-hand column (B / KB / MB).
+    _ftpFmtSize(n) {
+        n = Number(n) || 0;
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+        return (n / 1048576).toFixed(1) + ' MB';
+    }
+
     _ftpShowAccount() {
+        document.getElementById('ftp-modal').classList.remove('ftp-wide');
         document.getElementById('ftp-account').style.display = '';
         document.getElementById('ftp-workspace').style.display = 'none';
         document.getElementById('ftp-save').style.display = 'none';
+        const dc = document.getElementById('ftp-disconnect'); if (dc) dc.style.display = 'none';
         const remembered = localStorage.getItem('wmt_ftp_user') || '';
         document.getElementById('ftp-user').value = remembered;
         document.getElementById('ftp-remember').checked = !!remembered;
@@ -4515,9 +4527,13 @@ class WMTClient {
     }
 
     _ftpShowWorkspace() {
+        document.getElementById('ftp-modal').classList.add('ftp-wide');
         document.getElementById('ftp-account').style.display = 'none';
         document.getElementById('ftp-workspace').style.display = '';
         document.getElementById('ftp-save').style.display = '';
+        const dc = document.getElementById('ftp-disconnect'); if (dc) dc.style.display = '';
+        // Init/refresh CodeMirror now that the editor pane is laid out (CM needs a visible host).
+        if (this._ftpCMReady) this._ftpCMReady.then(() => { this._ftpInitCM(); if (this._ftpCM) this._ftpCM.refresh(); });
     }
 
     _ftpDoConnect() {
@@ -4543,6 +4559,7 @@ class WMTClient {
         const msg = `FTP ${data.op || ''} error: ${data.message || 'unknown'}`;
         if (data.op === 'connect') { const s = document.getElementById('ftp-acct-status'); if (s) s.textContent = msg; }
         const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = msg; foot.style.color = '#ff6666'; }
+        if (data.op === 'put') this._ftpUpdateSaveBtn(this._ftp && this._ftp.dirty ? 'dirty' : 'clean');  // un-stick the button on a failed save
         this.appendOutput(msg, 'error');
     }
 
@@ -4558,7 +4575,10 @@ class WMTClient {
         for (const e of entries) {
             const li = document.createElement('li');
             li.className = 'ftp-item ' + (e.type === 'dir' ? 'ftp-dir' : 'ftp-file');
-            li.textContent = (e.type === 'dir' ? '📁 ' : '📄 ') + e.name + (e.type === 'file' ? `  (${e.size})` : '');
+            const nm = document.createElement('span'); nm.className = 'ftp-name';
+            nm.textContent = (e.type === 'dir' ? '📁 ' : '📄 ') + e.name;
+            li.appendChild(nm);
+            if (e.type === 'file') { const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(e.size); li.appendChild(sz); }
             const full = this._ftpJoin(data.path, e.name);
             li.addEventListener('click', () => { e.type === 'dir' ? this._ftpOpenDir(full) : this._ftpOpenFile(full); });
             ul.appendChild(li);
@@ -4567,9 +4587,24 @@ class WMTClient {
 
     _ftpRenderBreadcrumb() {
         const bc = document.getElementById('ftp-breadcrumb'); bc.innerHTML = '';
+        const cwd = this._ftp.cwd || '.';
+        if (cwd.charAt(0) === '/') {
+            // Absolute path (navigated from Root): crumbs anchored at /.
+            const root = document.createElement('span'); root.className = 'ftp-crumb'; root.textContent = '/';
+            root.addEventListener('click', () => this._ftpOpenDir('/')); bc.appendChild(root);
+            let acc = '';
+            cwd.split('/').filter(Boolean).forEach((p, i) => {
+                if (i > 0) bc.appendChild(document.createTextNode(' / '));
+                acc += '/' + p; const path = acc;
+                const s = document.createElement('span'); s.className = 'ftp-crumb'; s.textContent = p;
+                s.addEventListener('click', () => this._ftpOpenDir(path)); bc.appendChild(s);
+            });
+            return;
+        }
+        // Home-relative path (default).
         const home = document.createElement('span'); home.className = 'ftp-crumb'; home.textContent = '~';
         home.addEventListener('click', () => this._ftpOpenDir('.')); bc.appendChild(home);
-        const parts = (this._ftp.cwd === '.' || !this._ftp.cwd) ? [] : this._ftp.cwd.split('/');
+        const parts = (cwd === '.' || !cwd) ? [] : cwd.split('/');
         let acc = '';
         parts.forEach((p) => {
             bc.appendChild(document.createTextNode(' / '));
@@ -4587,22 +4622,62 @@ class WMTClient {
         if (!this._ftp) return;
         this._ftp.curFile = data.path;
         document.getElementById('ftp-filename').textContent = data.path;
+        const content = typeof data.content === 'string' ? data.content : '';
         const ta = document.getElementById('ftp-textarea');
-        ta.value = typeof data.content === 'string' ? data.content : '';
-        this._ftp.dirty = false;
-        this._ftpUpdateGutter(); ta.scrollTop = 0;
+        if (this._ftpCM) {
+            this._ftpCM.setValue(content);          // fires 'change' (sets dirty) — cleared below
+            this._ftpCM.scrollTo(0, 0);
+            this._ftpSetDirty(false);
+            this._ftpMarkLongLines();
+            this._ftpCM.refresh();
+        } else {
+            ta.value = content;
+            this._ftpSetDirty(false);
+            this._ftpUpdateGutter(); ta.scrollTop = 0;
+        }
         document.getElementById('ftp-edit-status').textContent = '';
     }
 
     _ftpUpdateGutter() {
         const ta = document.getElementById('ftp-textarea'), g = document.getElementById('ftp-gutter');
         if (!ta || !g) return;
-        const n = ta.value.split('\n').length;
-        let s = ''; for (let i = 1; i <= n; i++) s += i + '\n';
+        const lines = ta.value.split('\n');
+        const n = lines.length;
+        let s = '', longCount = 0;
+        for (let i = 0; i < n; i++) { s += (i + 1) + '\n'; if (lines[i].length > 80) longCount++; }
         g.textContent = s; g.scrollTop = ta.scrollTop;
+        const w = document.getElementById('ftp-longwarn');
+        if (w) w.textContent = longCount ? `⚠ ${longCount} line${longCount > 1 ? 's' : ''} > 80` : '';
+    }
+
+    // Jump the cursor to col 80 of the next line over 80 chars (wraps to top).
+    _ftpJumpLongLine() {
+        if (this._ftpCM) {
+            const cm = this._ftpCM, start = cm.getCursor().line;
+            const find = (after) => { for (let i = 0; i < cm.lineCount(); i++) { if (i > after && cm.getLine(i).length > 80) return i; } return -1; };
+            let ln = find(start); if (ln < 0) ln = find(-1); if (ln < 0) return;
+            cm.setCursor({ line: ln, ch: 80 }); cm.scrollIntoView({ line: ln, ch: 80 }, 80); cm.focus();
+            return;
+        }
+        const ta = document.getElementById('ftp-textarea'); if (!ta) return;
+        const lines = ta.value.split('\n');
+        const curLine = ta.value.slice(0, ta.selectionEnd || 0).split('\n').length; // 1-based
+        const findFrom = (after) => {
+            let pos = 0;
+            for (let i = 0; i < lines.length; i++) {
+                if (i + 1 > after && lines[i].length > 80) return pos + 80;
+                pos += lines[i].length + 1;
+            }
+            return -1;
+        };
+        let at = findFrom(curLine);
+        if (at < 0) at = findFrom(0);   // wrap to top
+        if (at < 0) return;
+        ta.focus(); ta.setSelectionRange(at, at); this._ftpScrollToSel();
     }
 
     _ftpFindNext() {
+        if (this._ftpCM) return this._ftpCMFind();
         const ta = document.getElementById('ftp-textarea'), term = document.getElementById('ftp-find').value;
         if (!term) return;
         let idx = ta.value.indexOf(term, ta.selectionEnd || 0);
@@ -4611,23 +4686,47 @@ class WMTClient {
         else document.getElementById('ftp-edit-status').textContent = 'no matches';
     }
 
+    _ftpCMFind() {
+        const cm = this._ftpCM, term = document.getElementById('ftp-find').value;
+        if (!term) return;
+        let cur = cm.getSearchCursor(term, cm.getCursor('to'));
+        if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { document.getElementById('ftp-edit-status').textContent = 'no matches'; return; } }
+        cm.setSelection(cur.from(), cur.to());
+        cm.scrollIntoView({ from: cur.from(), to: cur.to() }, 60);
+        cm.focus();
+    }
+
     _ftpReplaceOne() {
+        if (this._ftpCM) {
+            const cm = this._ftpCM, term = document.getElementById('ftp-find').value, rep = document.getElementById('ftp-replace').value;
+            if (!term) return;
+            if (cm.getSelection() === term) cm.replaceSelection(rep);
+            return this._ftpCMFind();
+        }
         const ta = document.getElementById('ftp-textarea'), term = document.getElementById('ftp-find').value, rep = document.getElementById('ftp-replace').value;
         if (!term) return;
         if (ta.value.slice(ta.selectionStart, ta.selectionEnd) === term) {
             ta.setRangeText(rep, ta.selectionStart, ta.selectionEnd, 'end');
-            if (this._ftp) this._ftp.dirty = true; this._ftpUpdateGutter();
+            this._ftpSetDirty(true); this._ftpUpdateGutter();
         }
         this._ftpFindNext();
     }
 
     _ftpReplaceAll() {
+        if (this._ftpCM) {
+            const cm = this._ftpCM, term = document.getElementById('ftp-find').value, rep = document.getElementById('ftp-replace').value;
+            if (!term) return;
+            let cur = cm.getSearchCursor(term, { line: 0, ch: 0 }), count = 0;
+            cm.operation(() => { while (cur.findNext()) { cur.replace(rep); count++; } });
+            document.getElementById('ftp-edit-status').textContent = count ? `replaced ${count}` : 'no matches';
+            return;
+        }
         const ta = document.getElementById('ftp-textarea'), term = document.getElementById('ftp-find').value, rep = document.getElementById('ftp-replace').value;
         if (!term) return;
         const count = ta.value.split(term).length - 1;
         if (!count) { document.getElementById('ftp-edit-status').textContent = 'no matches'; return; }
         ta.value = ta.value.split(term).join(rep);
-        if (this._ftp) this._ftp.dirty = true; this._ftpUpdateGutter();
+        this._ftpSetDirty(true); this._ftpUpdateGutter();
         document.getElementById('ftp-edit-status').textContent = `replaced ${count}`;
     }
 
@@ -4638,41 +4737,178 @@ class WMTClient {
         this._ftpUpdateGutter();
     }
 
+    // Save-button state mirrors the settings panel: default "Save to MUD",
+    // amber "● Unsaved" while dirty, "Saving…" in flight, green "✓ Saved" on
+    // success (then back). Replaces the easy-to-miss tiny status text up top.
+    _ftpSetDirty(v) {
+        if (this._ftp) this._ftp.dirty = v;
+        this._ftpUpdateSaveBtn(v ? 'dirty' : 'clean');
+    }
+
+    _ftpUpdateSaveBtn(state) {
+        const btn = document.getElementById('ftp-save'); if (!btn) return;
+        clearTimeout(this._ftpSavedTimer);
+        if (state === 'saving') { btn.textContent = 'Saving…'; btn.disabled = true; btn.classList.remove('ftp-dirty', 'ftp-saved'); return; }
+        btn.disabled = false;
+        if (state === 'saved') {
+            btn.textContent = '✓ Saved'; btn.classList.add('ftp-saved'); btn.classList.remove('ftp-dirty');
+            this._ftpSavedTimer = setTimeout(() => this._ftpUpdateSaveBtn(this._ftp && this._ftp.dirty ? 'dirty' : 'clean'), 2200);
+            return;
+        }
+        if (state === 'dirty') { btn.textContent = '● Unsaved'; btn.classList.add('ftp-dirty'); btn.classList.remove('ftp-saved'); return; }
+        btn.textContent = 'Save to MUD'; btn.classList.remove('ftp-dirty', 'ftp-saved');
+    }
+
     _ftpSave() {
         if (!this._ftp || !this._ftp.curFile) { document.getElementById('ftp-edit-status').textContent = 'no file open'; return; }
-        document.getElementById('ftp-edit-status').textContent = 'Saving…';
-        this.connection.send('ftp_put', { path: this._ftp.curFile, content: document.getElementById('ftp-textarea').value });
+        this._ftpUpdateSaveBtn('saving');
+        this.connection.send('ftp_put', { path: this._ftp.curFile, content: this._ftpEditorValue() });
     }
 
     _onFtpSaved(data) {
         if (this._ftp) this._ftp.dirty = false;
-        document.getElementById('ftp-edit-status').textContent = `✓ saved ${data.path}`;
+        this._ftpUpdateSaveBtn('saved');
         this.appendOutput(`FTP saved ${data.path}.`, 'system');
     }
 
     _ftpCloseModal() {
-        if (!this._ftpConfirmDiscard()) return;
+        // Just hide — keep the FTP connection + creds alive for the browser session,
+        // so reopening goes straight back to the files (no re-login). The editor
+        // content is preserved (modal stays in the DOM). Use Disconnect to drop it.
         const m = document.getElementById('ftp-modal'); if (m) m.classList.remove('open');
+    }
+
+    _ftpDisconnect() {
+        if (!this._ftpConfirmDiscard()) return;
         if (this.connection && this.connection.connected) this.connection.send('ftp_disconnect');
         this._ftp = null;
+        this._ftpShowAccount();
+    }
+
+    // ── CodeMirror (self-hosted) — lazy-loaded only for the FTP editor ──
+    // Loaded from assets/vendor/codemirror/. If it fails to load, the plain
+    // textarea + gutter stay functional (every CM path has a textarea fallback).
+    _ftpLoadCM() {
+        if (this._ftpCMReady) return this._ftpCMReady;
+        if (window.CodeMirror) { this._ftpDefineLpcMode(); this._ftpCMReady = Promise.resolve(); return this._ftpCMReady; }
+        const dir = 'assets/vendor/codemirror/';
+        const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = dir + 'codemirror.css'; document.head.appendChild(link);
+        const loadScript = (src) => new Promise((res, rej) => {
+            const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('load ' + src)); document.head.appendChild(s);
+        });
+        this._ftpCMReady = loadScript(dir + 'codemirror.js')
+            .then(() => Promise.all(['clike.js', 'matchbrackets.js', 'closebrackets.js', 'comment.js', 'searchcursor.js', 'rulers.js', 'active-line.js'].map(f => loadScript(dir + f))))
+            .then(() => { this._ftpDefineLpcMode(); })
+            .catch((e) => { console.warn('CodeMirror load failed; using plain editor:', e); this._ftpCMReady = null; });
+        return this._ftpCMReady;
+    }
+
+    _ftpDefineLpcMode() {
+        if (!window.CodeMirror || this._ftpLpcDefined) return;
+        const set = (str) => { const o = {}; str.split(/\s+/).forEach(w => { if (w) o[w] = true; }); return o; };
+        window.CodeMirror.defineMIME('text/x-lpc', {
+            name: 'clike',
+            keywords: set('break case catch continue default do else for foreach if return switch while inherit nomask varargs private protected public static nosave virtual new'),
+            types: set('int float string object mapping mixed status closure function void buffer array'),
+            blockKeywords: set('case do else for foreach if switch while catch'),
+            defKeywords: set('inherit'),
+            atoms: set('null true false'),
+            // LPC-specific tokens. clike calls these only in code context (not inside
+            // strings/comments), and the leading char is already consumed when the hook runs.
+            hooks: {
+                // #'func closure reference; otherwise a preprocessor directive (#include/#define/#pragma)
+                '#': function (stream) {
+                    if (stream.eat("'")) { stream.eatWhile(/[\w$]/); return 'lpc-closure'; }
+                    stream.eatWhile(/[A-Za-z]/); return 'meta';
+                },
+                // LPC literal openers: ({  ([  (:    (a plain ( falls through to normal handling)
+                '(': function (stream) { return (stream.eat('{') || stream.eat('[') || stream.eat(':')) ? 'lpc-literal' : false; },
+                // LPC literal closers: })  ])  :)
+                '}': function (stream) { return stream.eat(')') ? 'lpc-literal' : false; },
+                ']': function (stream) { return stream.eat(')') ? 'lpc-literal' : false; },
+                ':': function (stream) { return stream.eat(')') ? 'lpc-literal' : false; },
+            },
+        });
+        this._ftpLpcDefined = true;
+    }
+
+    // Init the CM instance over the existing textarea once the workspace is visible
+    // (CM needs a laid-out element to size itself). Safe to call repeatedly.
+    _ftpInitCM() {
+        if (this._ftpCM || !window.CodeMirror) return;
+        const ta = document.getElementById('ftp-textarea'); if (!ta) return;
+        const cmSave = () => this._ftpSave();
+        const focusFind = () => { const f = document.getElementById('ftp-find'); if (f) { f.focus(); f.select(); } };
+        this._ftpCM = window.CodeMirror.fromTextArea(ta, {
+            lineNumbers: true, mode: 'text/x-lpc', matchBrackets: true, autoCloseBrackets: true, styleActiveLine: true,
+            indentUnit: 2, tabSize: 4, indentWithTabs: false, lineWrapping: false,
+            rulers: [{ column: 80, color: '#34345a', lineStyle: 'solid' }],
+            extraKeys: {
+                'Ctrl-S': cmSave, 'Cmd-S': cmSave,                 // save without reaching for the mouse
+                'Ctrl-F': focusFind, 'Cmd-F': focusFind,           // jump to the find box
+                'Ctrl-/': 'toggleComment', 'Cmd-/': 'toggleComment', // toggle // line comments
+                // Tab inserts 2 spaces, never a tab char (3K's no-tabs rule); Shift-Tab dedents.
+                'Tab': (cm) => { cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('  ', 'end'); },
+                'Shift-Tab': (cm) => cm.indentSelection('subtract'),
+            },
+        });
+        this._ftpCM.setSize('100%', '100%');
+        this._ftpCM.on('change', () => { this._ftpSetDirty(true); this._ftpMarkLongLines(); });
+        const gut = document.getElementById('ftp-gutter'); if (gut) gut.style.display = 'none';   // CM draws its own line numbers
+        // If a file was already loaded into the textarea before CM came up, carry it over.
+        if (this._ftp && this._ftp.curFile && ta.value) { this._ftpCM.setValue(ta.value); this._ftpSetDirty(false); }
+        this._ftpMarkLongLines();
+    }
+
+    _ftpEditorValue() { return this._ftpCM ? this._ftpCM.getValue() : (document.getElementById('ftp-textarea') || {}).value || ''; }
+
+    // Flag lines over 80 chars: a faint background per line (skipped on huge files
+    // for performance — the 80-col ruler still shows) + a clickable count up top.
+    _ftpMarkLongLines() {
+        const cm = this._ftpCM;
+        if (!cm) { this._ftpUpdateGutter(); return; }
+        const big = cm.lineCount() > 4000;
+        let longCount = 0;
+        cm.operation(() => {
+            for (let i = 0; i < cm.lineCount(); i++) {
+                const over = cm.getLine(i).length > 80;
+                if (over) longCount++;
+                if (!big) { if (over) cm.addLineClass(i, 'background', 'ftp-overlong'); else cm.removeLineClass(i, 'background', 'ftp-overlong'); }
+            }
+        });
+        const w = document.getElementById('ftp-longwarn');
+        if (w) w.textContent = longCount ? `⚠ ${longCount} line${longCount > 1 ? 's' : ''} > 80` : '';
     }
 
     _ensureFtpModal() {
         if (document.getElementById('ftp-modal')) return;
         const style = document.createElement('style');
         style.textContent = `
-        .ftp-modal .modal { max-width: 1000px; width: 95vw; }
-        .ftp-row { display:flex; align-items:center; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
-        .ftp-row label { display:flex; align-items:center; gap:6px; }
-        #ftp-user, #ftp-pass { background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:5px 8px; }
-        .ftp-remember { font-size:.85em; color:var(--text-muted); }
-        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; gap:10px; height:60vh; }
+        .ftp-modal .modal { max-width: 460px; width: 92vw; }            /* compact: login form */
+        .ftp-modal.ftp-wide .modal { max-width: 1000px; width: 95vw; } /* wide: editor workspace */
+        /* flex column so the footer (Close/Save) stays pinned at the bottom and never scrolls with the file */
+        .ftp-modal.ftp-wide .modal { display:flex; flex-direction:column; max-height:92vh; }
+        .ftp-modal.ftp-wide .modal-body { flex:1 1 auto; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
+        .ftp-modal.ftp-wide #ftp-workspace { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+        .ftp-modal.ftp-wide .modal-footer { flex:0 0 auto; }
+        #ftp-save.ftp-dirty { background:#caa300; border-color:#caa300; color:#161616; }
+        #ftp-save.ftp-saved { background:#2ecc71; border-color:#2ecc71; color:#161616; }
+        .ftp-treebar { display:flex; gap:4px; padding:6px 6px 0; }
+        .ftp-treebar .ef-btn { flex:1; font-size:.78em; padding:3px 4px; }
+        .ftp-account-form { max-width: 430px; }
+        .ftp-field { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+        .ftp-lbl { width:74px; flex:0 0 auto; color:var(--text-muted); }
+        #ftp-user, #ftp-pass { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 10px; }
+        .ftp-remember { font-size:.85em; color:var(--text-muted); white-space:nowrap; }
+        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; gap:10px; flex:1 1 auto; min-height:0; }
         .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; background:#0b0b14; }
         .ftp-breadcrumb { padding:6px 8px; border-bottom:1px solid var(--border-color); font-size:.8em; position:sticky; top:0; background:#0b0b14; }
         .ftp-crumb { color:var(--primary-color); cursor:pointer; } .ftp-crumb:hover { text-decoration:underline; }
         .ftp-list { list-style:none; margin:0; padding:4px; }
-        .ftp-item { padding:3px 6px; border-radius:4px; cursor:pointer; font-size:.85em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .ftp-item { display:flex; align-items:baseline; gap:8px; padding:3px 6px; border-radius:4px; cursor:pointer; font-size:.85em; }
         .ftp-item:hover { background:rgba(255,255,255,.06); } .ftp-dir { color:var(--primary-color); }
+        .ftp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .ftp-size { flex:0 0 auto; color:var(--text-muted); font-size:.82em; font-variant-numeric:tabular-nums; }
         .ftp-editor { display:flex; flex-direction:column; min-width:0; }
         .ftp-editor-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
         #ftp-filename { font-family:var(--font-mono); font-size:.85em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -4680,7 +4916,26 @@ class WMTClient {
         .ftp-findbar input { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:3px 6px; font-size:.8em; }
         .ftp-edit-wrap { display:flex; flex:1; min-height:0; border:1px solid var(--border-color); border-radius:6px; overflow:hidden; }
         .ftp-gutter { width:46px; padding:8px 6px; text-align:right; color:var(--text-muted); background:#0b0b14; font-family:var(--font-mono); font-size:13px; line-height:1.4; overflow:hidden; user-select:none; white-space:pre; }
-        #ftp-textarea { flex:1; padding:8px; border:none; resize:none; background:#0b0b14; color:var(--text-color); font-family:var(--font-mono); font-size:13px; line-height:1.4; white-space:pre; overflow:auto; tab-size:4; outline:none; }
+        /* 80-col ruler drawn as a background line; background-attachment:local makes it track horizontal scroll so it always marks column 80 (3K's max line length). */
+        #ftp-textarea { flex:1; padding:8px; border:none; resize:none; background-color:#0b0b14; background-image:linear-gradient(to right, transparent calc(80ch + 8px), #34345a calc(80ch + 8px), #34345a calc(80ch + 9px), transparent calc(80ch + 9px)); background-attachment:local; background-repeat:no-repeat; color:var(--text-color); font-family:var(--font-mono); font-size:13px; line-height:1.4; white-space:pre; overflow:auto; tab-size:4; outline:none; }
+        #ftp-longwarn { color:#caa300; cursor:pointer; } #ftp-longwarn:hover { text-decoration:underline; }
+        /* CodeMirror (self-hosted) dark theme + LPC token colors. Only loads for the FTP editor. */
+        .ftp-edit-wrap .CodeMirror { flex:1; min-width:0; height:100%; background:#0b0b14; color:#d6d6e0; font-family:var(--font-mono); font-size:13px; line-height:1.4; }
+        .ftp-edit-wrap .CodeMirror-gutters { background:#0b0b14; border-right:1px solid var(--border-color); }
+        .ftp-edit-wrap .CodeMirror-linenumber { color:#5a5a78; }
+        .ftp-edit-wrap .CodeMirror-cursor { border-left:1px solid #d6d6e0; }
+        .ftp-edit-wrap .CodeMirror-selected { background:#2a2a44 !important; }
+        .ftp-edit-wrap .CodeMirror-activeline-background { background:rgba(255,255,255,.03); }
+        .ftp-edit-wrap .CodeMirror-matchingbracket { color:#fff !important; background:#3a3a66; border-bottom:1px solid #89ddff; }
+        .ftp-edit-wrap .CodeMirror-nonmatchingbracket { color:#ff5370 !important; }
+        .ftp-edit-wrap .cm-lpc-closure { color:#ffcb6b; }                    /* #'func closure refs */
+        .ftp-edit-wrap .cm-lpc-literal { color:#89ddff; font-weight:600; }   /* ({ }) ([ ]) (: :) literals */
+        .ftp-edit-wrap .CodeMirror-ruler { border-left:1px solid #34345a; }
+        .ftp-overlong { background:rgba(202,163,0,.10); }
+        .ftp-edit-wrap .cm-keyword { color:#c792ea; } .ftp-edit-wrap .cm-type, .ftp-edit-wrap .cm-variable-3 { color:#82aaff; }
+        .ftp-edit-wrap .cm-string, .ftp-edit-wrap .cm-string-2 { color:#c3e88d; } .ftp-edit-wrap .cm-comment { color:#676e95; font-style:italic; }
+        .ftp-edit-wrap .cm-number { color:#f78c6c; } .ftp-edit-wrap .cm-def { color:#82aaff; } .ftp-edit-wrap .cm-operator { color:#89ddff; }
+        .ftp-edit-wrap .cm-meta { color:#ffcb6b; } .ftp-edit-wrap .cm-atom { color:#f78c6c; } .ftp-edit-wrap .cm-bracket { color:#89ddff; }
         .ftp-status { font-size:.8em; color:var(--text-muted); }
         @media (max-width:760px) {
           .ftp-modal .modal { width:98vw; }
@@ -4699,27 +4954,29 @@ class WMTClient {
             </div>
             <div class="modal-body">
               <div id="ftp-account">
-                <p style="font-size:.82em;color:var(--text-muted)">Connect to your 3k.org file account. The password is used for this session only and is never stored.</p>
-                <div class="ftp-row">
-                  <label>Username <input id="ftp-user" type="text" autocomplete="off" spellcheck="false"></label>
-                  <label class="ftp-remember"><input type="checkbox" id="ftp-remember"> Remember name</label>
+                <p style="font-size:.82em;color:var(--text-muted);margin:0 0 14px">Connect to your 3k.org file account. The password is used for this session only and is never stored.</p>
+                <div class="ftp-account-form">
+                  <div class="ftp-field"><span class="ftp-lbl">Username</span><input id="ftp-user" type="text" autocomplete="off" spellcheck="false"></div>
+                  <div class="ftp-field"><span class="ftp-lbl">Password</span><input id="ftp-pass" type="password" autocomplete="off"></div>
+                  <div class="ftp-field"><span class="ftp-lbl"></span><label class="ftp-remember"><input type="checkbox" id="ftp-remember"> Remember name</label><button class="btn btn-primary" id="ftp-connect-btn" style="margin-left:auto">Connect</button></div>
+                  <div class="ftp-status" id="ftp-acct-status"></div>
                 </div>
-                <div class="ftp-row">
-                  <label>Password <input id="ftp-pass" type="password" autocomplete="off"></label>
-                  <button class="btn btn-primary" id="ftp-connect-btn">Connect</button>
-                </div>
-                <div class="ftp-status" id="ftp-acct-status"></div>
               </div>
               <div id="ftp-workspace" style="display:none">
                 <div class="ftp-grid">
                   <div class="ftp-tree">
+                    <div class="ftp-treebar">
+                      <button class="ef-btn" id="ftp-home" title="Your home folder">🏠 Home</button>
+                      <button class="ef-btn" id="ftp-root" title="Filesystem root /">/ Root</button>
+                    </div>
                     <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
                   </div>
                   <div class="ftp-editor">
                     <div class="ftp-editor-head">
                       <span id="ftp-filename">(no file open)</span>
-                      <span class="ftp-status" id="ftp-edit-status" style="margin-left:auto"></span>
+                      <span class="ftp-status" id="ftp-longwarn" style="margin-left:auto" title="jump to next line over 80 chars"></span>
+                      <span class="ftp-status" id="ftp-edit-status" style="margin-left:10px"></span>
                     </div>
                     <div class="ftp-findbar">
                       <input id="ftp-find" placeholder="find" spellcheck="false">
@@ -4738,6 +4995,7 @@ class WMTClient {
             </div>
             <div class="modal-footer">
               <span class="ftp-status" id="ftp-foot" style="margin-right:auto"></span>
+              <button class="btn" id="ftp-disconnect" style="display:none">Disconnect</button>
               <button class="btn" id="ftp-cancel">Close</button>
               <button class="btn btn-primary" id="ftp-save" style="display:none">Save to MUD</button>
             </div>
@@ -4748,14 +5006,19 @@ class WMTClient {
         overlay.querySelector('#ftp-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpDoConnect(); });
         overlay.querySelector('#ftp-close').addEventListener('click', () => this._ftpCloseModal());
         overlay.querySelector('#ftp-cancel').addEventListener('click', () => this._ftpCloseModal());
+        overlay.querySelector('#ftp-disconnect').addEventListener('click', () => this._ftpDisconnect());
         overlay.querySelector('#ftp-save').addEventListener('click', () => this._ftpSave());
+        overlay.querySelector('#ftp-home').addEventListener('click', () => this._ftpOpenDir('.'));
+        overlay.querySelector('#ftp-root').addEventListener('click', () => this._ftpOpenDir('/'));
+        overlay.querySelector('#ftp-longwarn').addEventListener('click', () => this._ftpJumpLongLine());
         const ta = overlay.querySelector('#ftp-textarea');
-        ta.addEventListener('input', () => { if (this._ftp) this._ftp.dirty = true; this._ftpUpdateGutter(); });
+        ta.addEventListener('input', () => { this._ftpSetDirty(true); this._ftpUpdateGutter(); });
         ta.addEventListener('scroll', () => { overlay.querySelector('#ftp-gutter').scrollTop = ta.scrollTop; });
         overlay.querySelector('#ftp-find-next').addEventListener('click', () => this._ftpFindNext());
         overlay.querySelector('#ftp-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpFindNext(); });
         overlay.querySelector('#ftp-replace-one').addEventListener('click', () => this._ftpReplaceOne());
         overlay.querySelector('#ftp-replace-all').addEventListener('click', () => this._ftpReplaceAll());
+        this._ftpLoadCM();   // begin loading CodeMirror in the background; editor upgrades when ready
     }
 
     // MIP (MUD Interface Protocol) functions
