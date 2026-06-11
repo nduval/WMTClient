@@ -4504,12 +4504,10 @@ class WMTClient {
 
     _ftpJoin(base, name) { return (base === '.' || base === '') ? name : base.replace(/\/+$/, '') + '/' + name; }
 
-    // Human-readable file size for the quiet right-hand column (B / KB / MB).
+    // File size for the quiet right-hand column. Always KB, rounded; anything
+    // under 1 KB just shows "1 KB" (mimic's preference — uniform, easy to scan).
     _ftpFmtSize(n) {
-        n = Number(n) || 0;
-        if (n < 1024) return n + ' B';
-        if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
-        return (n / 1048576).toFixed(1) + ' MB';
+        return Math.max(1, Math.round((Number(n) || 0) / 1024)) + ' KB';
     }
 
     _ftpShowAccount() {
@@ -4862,6 +4860,22 @@ class WMTClient {
 
     _ftpEditorValue() { return this._ftpCM ? this._ftpCM.getValue() : (document.getElementById('ftp-textarea') || {}).value || ''; }
 
+    // Light/dark editor theme, remembered per browser (localStorage). Applies a
+    // class to the editor wrap; the CSS retunes CM background + token colors.
+    _ftpApplyTheme() {
+        const wrap = document.querySelector('#ftp-modal .ftp-edit-wrap');
+        if (wrap) wrap.classList.toggle('ftp-light', !!this._ftpLight);
+        const b = document.getElementById('ftp-theme');
+        if (b) b.textContent = this._ftpLight ? '🌙 Dark' : '☀ Light';
+        if (this._ftpCM) this._ftpCM.refresh();
+    }
+
+    _ftpToggleTheme() {
+        this._ftpLight = !this._ftpLight;
+        try { localStorage.setItem('wmt_ftp_light', this._ftpLight ? '1' : '0'); } catch (e) {}
+        this._ftpApplyTheme();
+    }
+
     // Flag lines over 80 chars: a faint background per line (skipped on huge files
     // for performance — the 80-col ruler still shows) + a clickable count up top.
     _ftpMarkLongLines() {
@@ -4900,8 +4914,8 @@ class WMTClient {
         .ftp-lbl { width:74px; flex:0 0 auto; color:var(--text-muted); }
         #ftp-user, #ftp-pass { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 10px; }
         .ftp-remember { font-size:.85em; color:var(--text-muted); white-space:nowrap; }
-        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; gap:10px; flex:1 1 auto; min-height:0; }
-        .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; background:#0b0b14; }
+        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; grid-template-rows: minmax(0, 1fr); gap:10px; flex:1 1 auto; min-height:0; }
+        .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; min-height:0; background:#0b0b14; }
         .ftp-breadcrumb { padding:6px 8px; border-bottom:1px solid var(--border-color); font-size:.8em; position:sticky; top:0; background:#0b0b14; }
         .ftp-crumb { color:var(--primary-color); cursor:pointer; } .ftp-crumb:hover { text-decoration:underline; }
         .ftp-list { list-style:none; margin:0; padding:4px; }
@@ -4909,7 +4923,7 @@ class WMTClient {
         .ftp-item:hover { background:rgba(255,255,255,.06); } .ftp-dir { color:var(--primary-color); }
         .ftp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .ftp-size { flex:0 0 auto; color:var(--text-muted); font-size:.82em; font-variant-numeric:tabular-nums; }
-        .ftp-editor { display:flex; flex-direction:column; min-width:0; }
+        .ftp-editor { display:flex; flex-direction:column; min-width:0; min-height:0; }
         .ftp-editor-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
         #ftp-filename { font-family:var(--font-mono); font-size:.85em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .ftp-findbar { display:flex; gap:4px; margin-bottom:6px; }
@@ -4930,6 +4944,20 @@ class WMTClient {
         .ftp-edit-wrap .CodeMirror-nonmatchingbracket { color:#ff5370 !important; }
         .ftp-edit-wrap .cm-lpc-closure { color:#ffcb6b; }                    /* #'func closure refs */
         .ftp-edit-wrap .cm-lpc-literal { color:#89ddff; font-weight:600; }   /* ({ }) ([ ]) (: :) literals */
+        /* Light theme (toggle) — opt-in white background with token colors retuned for readability on white. */
+        .ftp-edit-wrap.ftp-light .CodeMirror { background:#ffffff; color:#1a1a2e; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-gutters { background:#f3f3f7; border-right:1px solid #d7d7e0; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-linenumber { color:#9a9ab0; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-cursor { border-left:1px solid #1a1a2e; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-selected { background:#cfe2ff !important; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-activeline-background { background:rgba(0,0,0,.04); }
+        .ftp-edit-wrap.ftp-light .CodeMirror-matchingbracket { color:#000 !important; background:#cfe2ff; border-bottom:1px solid #0b7285; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-ruler { border-left:1px solid #d0d0e0; }
+        .ftp-edit-wrap.ftp-light .ftp-overlong, .ftp-edit-wrap.ftp-light .CodeMirror-linebackground.ftp-overlong { background:rgba(202,163,0,.18); }
+        .ftp-edit-wrap.ftp-light .cm-keyword { color:#7c3aed; } .ftp-edit-wrap.ftp-light .cm-type, .ftp-edit-wrap.ftp-light .cm-variable-3, .ftp-edit-wrap.ftp-light .cm-def { color:#0550ae; }
+        .ftp-edit-wrap.ftp-light .cm-string, .ftp-edit-wrap.ftp-light .cm-string-2 { color:#0a7d28; } .ftp-edit-wrap.ftp-light .cm-comment { color:#6a737d; }
+        .ftp-edit-wrap.ftp-light .cm-number, .ftp-edit-wrap.ftp-light .cm-atom { color:#b35900; } .ftp-edit-wrap.ftp-light .cm-operator, .ftp-edit-wrap.ftp-light .cm-bracket { color:#0b7285; }
+        .ftp-edit-wrap.ftp-light .cm-meta, .ftp-edit-wrap.ftp-light .cm-lpc-closure { color:#9a6700; } .ftp-edit-wrap.ftp-light .cm-lpc-literal { color:#0b7285; font-weight:600; }
         .ftp-edit-wrap .CodeMirror-ruler { border-left:1px solid #34345a; }
         .ftp-overlong { background:rgba(202,163,0,.10); }
         .ftp-edit-wrap .cm-keyword { color:#c792ea; } .ftp-edit-wrap .cm-type, .ftp-edit-wrap .cm-variable-3 { color:#82aaff; }
@@ -4939,7 +4967,7 @@ class WMTClient {
         .ftp-status { font-size:.8em; color:var(--text-muted); }
         @media (max-width:760px) {
           .ftp-modal .modal { width:98vw; }
-          .ftp-grid { grid-template-columns:1fr; height:auto; }
+          .ftp-grid { grid-template-columns:1fr; grid-template-rows:auto auto; height:auto; }
           .ftp-tree { height:22vh; } .ftp-edit-wrap { height:40vh; }
         }`;
         document.head.appendChild(style);
@@ -4975,7 +5003,8 @@ class WMTClient {
                   <div class="ftp-editor">
                     <div class="ftp-editor-head">
                       <span id="ftp-filename">(no file open)</span>
-                      <span class="ftp-status" id="ftp-longwarn" style="margin-left:auto" title="jump to next line over 80 chars"></span>
+                      <button class="ef-btn" id="ftp-theme" style="margin-left:auto" title="Toggle light/dark editor">☀ Light</button>
+                      <span class="ftp-status" id="ftp-longwarn" style="margin-left:10px" title="jump to next line over 80 chars"></span>
                       <span class="ftp-status" id="ftp-edit-status" style="margin-left:10px"></span>
                     </div>
                     <div class="ftp-findbar">
@@ -5011,6 +5040,9 @@ class WMTClient {
         overlay.querySelector('#ftp-home').addEventListener('click', () => this._ftpOpenDir('.'));
         overlay.querySelector('#ftp-root').addEventListener('click', () => this._ftpOpenDir('/'));
         overlay.querySelector('#ftp-longwarn').addEventListener('click', () => this._ftpJumpLongLine());
+        overlay.querySelector('#ftp-theme').addEventListener('click', () => this._ftpToggleTheme());
+        try { this._ftpLight = localStorage.getItem('wmt_ftp_light') === '1'; } catch (e) { this._ftpLight = false; }
+        this._ftpApplyTheme();
         const ta = overlay.querySelector('#ftp-textarea');
         ta.addEventListener('input', () => { this._ftpSetDirty(true); this._ftpUpdateGutter(); });
         ta.addEventListener('scroll', () => { overlay.querySelector('#ftp-gutter').scrollTop = ta.scrollTop; });
