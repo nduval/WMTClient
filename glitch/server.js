@@ -13,6 +13,7 @@ const https = require('https');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
+const ftp = require('basic-ftp');   // wizard FTP file editor — see project_ftp_wizard_editor
 
 let Database;
 try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
@@ -5437,10 +5438,36 @@ function replayBuffer(session) {
 /**
  * Close a session completely
  */
+// ─── Wizard FTP file editor (proxy to the file host; project_ftp_wizard_editor) ──
+// Session-only credentials live ONLY in session._ftp.creds (in memory) — never
+// persisted (the persist payloads are explicit and don't include _ftp) and never
+// logged (FTP_CONNECT logs the ftpUser, never the password). A basic-ftp Client is
+// opened lazily and reused across ops for the session. TRIAL: gated to mimic only.
+function ftpEditorAllowed(session) {
+  return !!session && session.isWizard && effectiveCharName(session).toLowerCase() === 'mimic';
+}
+async function ftpEnsureClient(session) {
+  const st = session._ftp;
+  if (!st || !st.creds) throw new Error('FTP: not connected');
+  if (st.client && !st.client.closed) return st.client;
+  const client = new ftp.Client(30000);   // generous: ProFTPD's 220 banner can lag ~10s
+  client.ftp.verbose = false;
+  await client.access({ host: st.creds.host, port: st.creds.port, user: st.creds.user, password: st.creds.pass, secure: false });
+  st.client = client;
+  return client;
+}
+function ftpClose(session) {
+  const st = session && session._ftp;
+  if (st && st.client) { try { st.client.close(); } catch (e) {} st.client = null; }
+  if (session) session._ftp = null;   // drop the in-memory creds
+}
+function ftpEntryType(e) { return e.type === 2 ? 'dir' : (e.type === 1 ? 'file' : (e.type === 3 ? 'link' : 'other')); }
+
 function closeSession(session, reason) {
   // Guard against double-close (e.g., explicit disconnect + socket close event)
   if (session.closed) return;
   session.closed = true;
+  ftpClose(session);   // tear down any wizard FTP connection + clear its creds
 
   const mudConnected = session.mudSocket && !session.mudSocket.destroyed;
   logSessionEvent('SESSION_CLOSE', {
@@ -7225,6 +7252,65 @@ wss.on('connection', (ws, req) => {
 
       // Handle authenticated messages
       switch (data.type) {
+        // ─── Wizard FTP file editor (project_ftp_wizard_editor; trial: mimic only) ──
+        case 'ftp_connect': {
+          if (!ftpEditorAllowed(session)) { sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'FTP editor not available for this character.' }); break; }
+          const ftpUser = String(data.user || '').trim();
+          const ftpPass = typeof data.pass === 'string' ? data.pass : '';
+          if (!ftpUser || !ftpPass) { sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'Username and password required.' }); break; }
+          // Session-only creds: in memory for this session, NEVER persisted/logged.
+          session._ftp = { creds: { host: '3k.org', port: 3001, user: ftpUser, pass: ftpPass }, client: null };
+          logSessionEvent('FTP_CONNECT', { token: session.token ? session.token.substring(0, 8) : null, user: session.userId, char: effectiveCharName(session), ftpUser });
+          (async () => {
+            try { await ftpEnsureClient(session); sendToClient(session, { type: 'ftp_connected', user: ftpUser }); }
+            catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'Login failed: ' + (e.message || 'error') }); }
+          })();
+          break;
+        }
+        case 'ftp_list': {
+          if (!ftpEditorAllowed(session)) break;
+          const p = String(data.path || '.');
+          (async () => {
+            try {
+              const client = await ftpEnsureClient(session);
+              const entries = await client.list(p);
+              sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size })) });
+            } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'list', path: p, message: e.message || 'list failed' }); }
+          })();
+          break;
+        }
+        case 'ftp_get': {
+          if (!ftpEditorAllowed(session)) break;
+          const p = String(data.path || '');
+          (async () => {
+            try {
+              const client = await ftpEnsureClient(session);
+              const chunks = [];
+              const sink = new (require('stream').Writable)({ write(c, enc, cb) { chunks.push(c); cb(); } });
+              await client.downloadTo(sink, p);
+              sendToClient(session, { type: 'ftp_file', path: p, content: Buffer.concat(chunks).toString('utf8') });
+            } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: e.message || 'get failed' }); }
+          })();
+          break;
+        }
+        case 'ftp_put': {
+          if (!ftpEditorAllowed(session)) break;
+          const p = String(data.path || '');
+          const body = typeof data.content === 'string' ? data.content : '';
+          (async () => {
+            try {
+              const client = await ftpEnsureClient(session);
+              await client.uploadFrom(require('stream').Readable.from(Buffer.from(body, 'utf8')), p);
+              sendToClient(session, { type: 'ftp_saved', path: p });
+            } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'put', path: p, message: e.message || 'put failed' }); }
+          })();
+          break;
+        }
+        case 'ftp_disconnect': {
+          ftpClose(session);
+          break;
+        }
+
         case 'mud_send_file': {
           // Guild-file UPLOAD (Portal wizard file editor; see memory
           // reference_mip_file_transfer.md). Stream the file RAW to the MUD,
