@@ -4489,8 +4489,8 @@ class WMTClient {
     // "Remember name" in localStorage. Gated to mimic for the trial.
     cmdFtpEdit() {
         const cfg = window.WMT_CONFIG || {};
-        if (!(cfg.isWizard && (cfg.characterName || '').toLowerCase() === 'mimic')) {
-            this.appendOutput('#ftpedit is in trial for mimic only.', 'error');
+        if (!(cfg.isWizard && ['mimic', 'crolack'].includes((cfg.characterName || '').toLowerCase()))) {
+            this.appendOutput('#ftpedit is in trial for mimic and crolack only.', 'error');
             return;
         }
         if (!this.connection || !this.connection.connected) {
@@ -4632,6 +4632,33 @@ class WMTClient {
     // Re-list the current directory (FTP views can go stale — explicit refresh matters).
     _ftpRefresh() {
         if (this._ftp && this.connection && this.connection.connected) this.connection.send('ftp_list', { path: this._ftp.cwd || '.' });
+    }
+
+    // ── Go to a path (for dirs you can reach but can't drill to from a higher folder).
+    // Keeps a recent-paths list (localStorage) shown as a dropdown via <datalist>. ──
+    _ftpLoadRecent() { try { const a = JSON.parse(localStorage.getItem('wmt_ftp_recent') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+    _ftpPopulateRecent() {
+        const dl = document.getElementById('ftp-goto-recent'); if (!dl) return;
+        dl.innerHTML = '';
+        for (const p of this._ftpLoadRecent()) { const o = document.createElement('option'); o.value = p; dl.appendChild(o); }
+    }
+    _ftpAddRecent(path) {
+        let a = this._ftpLoadRecent().filter(p => p !== path); a.unshift(path); a = a.slice(0, 10);
+        try { localStorage.setItem('wmt_ftp_recent', JSON.stringify(a)); } catch (e) {}
+        this._ftpPopulateRecent();
+    }
+    _ftpShowGoto() {
+        const pop = document.getElementById('ftp-goto-pop'); if (!pop) return;
+        this._ftpPopulateRecent();
+        pop.style.display = '';
+        const inp = document.getElementById('ftp-goto-input'); if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 30); }
+    }
+    _ftpGotoSubmit() {
+        const inp = document.getElementById('ftp-goto-input'); if (!inp) return;
+        const path = inp.value.trim(); if (!path) return;
+        this._ftpAddRecent(path);
+        const pop = document.getElementById('ftp-goto-pop'); if (pop) pop.style.display = 'none';
+        this._ftpOpenDir(path);
     }
 
     _ftpNewFolder() {
@@ -5030,6 +5057,23 @@ class WMTClient {
             this._ftpApplyGeom(); if (this._ftpCM) this._ftpCM.refresh();
         });
         modal.addEventListener('mouseup', () => { if (floating()) { this._ftpSaveGeom(); if (this._ftpCM) this._ftpCM.refresh(); } });   // catches resize-grip end
+        // Top-left resize handle (mirror of the native bottom-right grip; useful if a corner is off-screen).
+        const tl = overlay.querySelector('.ftp-resize-tl');
+        if (tl) {
+            let rz = false, rRight = 0, rBottom = 0;
+            tl.addEventListener('mousedown', (e) => {
+                if (!floating()) return;
+                rz = true; const r = modal.getBoundingClientRect(); rRight = r.right; rBottom = r.bottom; e.preventDefault(); e.stopPropagation();
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!rz) return;
+                const nx = Math.max(0, Math.min(rRight - 320, e.clientX));
+                const ny = Math.max(0, Math.min(rBottom - 220, e.clientY));
+                modal.style.left = nx + 'px'; modal.style.top = ny + 'px';
+                modal.style.width = (rRight - nx) + 'px'; modal.style.height = (rBottom - ny) + 'px';
+            });
+            window.addEventListener('mouseup', () => { if (rz) { rz = false; this._ftpSaveGeom(); if (this._ftpCM) this._ftpCM.refresh(); } });
+        }
     }
 
     // Flag lines over 80 chars: a faint background per line (skipped on huge files
@@ -5066,6 +5110,8 @@ class WMTClient {
         .ftp-modal.ftp-floating.ftp-wide.open { display:block; }
         .ftp-modal.ftp-floating.ftp-wide .modal { pointer-events:auto; position:fixed; margin:0; max-width:none; max-height:none; width:min(1000px,92vw); height:85vh; min-width:480px; min-height:360px; resize:both; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,.6); }
         .ftp-modal.ftp-floating.ftp-wide .modal-header { cursor:move; user-select:none; }
+        .ftp-resize-tl { display:none; }
+        .ftp-modal.ftp-floating.ftp-wide .ftp-resize-tl { display:block; position:absolute; top:0; left:0; width:16px; height:16px; cursor:nwse-resize; z-index:30; border-left:2px solid var(--border-color); border-top:2px solid var(--border-color); border-top-left-radius:8px; }
         #ftp-save.ftp-dirty { background:#caa300; border-color:#caa300; color:#161616; }
         #ftp-save.ftp-saved { background:#2ecc71; border-color:#2ecc71; color:#161616; }
         .ftp-treebar { display:flex; align-items:center; gap:4px; padding:6px 6px 0; }
@@ -5078,9 +5124,13 @@ class WMTClient {
         .ftp-lbl { width:84px; flex:0 0 auto; color:var(--text-muted); font-size:15px; }
         #ftp-user, #ftp-pass { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px 10px; font-size:15px; }
         .ftp-remember { font-size:13px; color:var(--text-muted); white-space:nowrap; }
-        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; grid-template-rows: minmax(0, 1fr); gap:10px; flex:1 1 auto; min-height:0; }
+        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; grid-template-rows: minmax(0, 1fr); gap:10px; flex:1 1 auto; min-height:0; position:relative; }
         .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; min-height:0; background:#0b0b14; }
-        .ftp-breadcrumb { padding:6px 8px; border-bottom:1px solid var(--border-color); font-size:.8em; position:sticky; top:0; background:#0b0b14; }
+        .ftp-breadcrumb-row { display:flex; align-items:center; gap:8px; padding:5px 8px; border-bottom:1px solid var(--border-color); position:sticky; top:0; background:#0b0b14; z-index:1; }
+        .ftp-breadcrumb { flex:1; min-width:0; font-size:.8em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #ftp-goto { flex:0 0 auto; font-size:.78em; padding:4px 9px; white-space:nowrap; }
+        #ftp-goto-pop { top:46px; left:8px; right:auto; }
+        #ftp-goto-input { width:100%; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 8px; font-size:.9em; }
         .ftp-crumb { color:var(--primary-color); cursor:pointer; } .ftp-crumb:hover { text-decoration:underline; }
         .ftp-list { list-style:none; margin:0; padding:4px; }
         .ftp-item { display:flex; align-items:baseline; gap:8px; padding:3px 6px; border-radius:4px; cursor:pointer; font-size:.85em; }
@@ -5089,7 +5139,7 @@ class WMTClient {
         .ftp-size { flex:0 0 auto; color:var(--text-muted); font-size:.82em; font-variant-numeric:tabular-nums; }
         .ftp-editor { display:flex; flex-direction:column; min-width:0; min-height:0; }
         .ftp-editor-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; position:relative; }
-        .ftp-editor-head .ef-btn { padding:5px 12px; font-size:.85em; white-space:nowrap; border-radius:4px; line-height:1.2; }
+        .ftp-editor-head .ef-btn { padding:5px 12px; font-size:.85em; white-space:nowrap; border-radius:4px; line-height:1.2; min-width:96px; display:inline-flex; align-items:center; justify-content:center; gap:5px; }
         .ftp-editor-head .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
         .ftp-pop { position:absolute; top:34px; right:0; z-index:20; width:290px; background:var(--bg-dark,#0e0e18); border:1px solid var(--border-color); border-radius:8px; padding:16px; box-shadow:0 12px 34px rgba(0,0,0,.55); }
         .ftp-pop h4 { margin:0 0 14px; font-size:1.05em; }
@@ -5158,6 +5208,7 @@ class WMTClient {
         overlay.id = 'ftp-modal'; overlay.className = 'modal-overlay ftp-modal';
         overlay.innerHTML = `
           <div class="modal">
+            <div class="ftp-resize-tl" title="Resize"></div>
             <div class="modal-header">
               <h3>Wizard File Editor (FTP)</h3>
               <button class="panel-close" id="ftp-close">&times;</button>
@@ -5182,20 +5233,34 @@ class WMTClient {
                       <span style="flex:1"></span>
                       <button class="ef-btn ftp-iconbtn" id="ftp-newfolder" title="New folder">📁<span class="ftp-plus">+</span></button>
                       <button class="ef-btn ftp-iconbtn" id="ftp-newfile" title="New file">📄<span class="ftp-plus">+</span></button>
-                      <button class="ef-btn ftp-iconbtn" id="ftp-delete" title="Delete the open file">🗑</button>
+                      <button class="ef-btn ftp-iconbtn" id="ftp-delete" title="Delete the open file">🗑️<span class="ftp-plus">−</span></button>
                     </div>
-                    <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
+                    <div class="ftp-breadcrumb-row">
+                      <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
+                      <button class="ef-btn" id="ftp-goto" title="Go to a path you can't reach by clicking">Go to…</button>
+                    </div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
+                  </div>
+                  <div id="ftp-goto-pop" class="ftp-pop" style="display:none">
+                    <h4>Go to path</h4>
+                    <div class="form-group">
+                      <input id="ftp-goto-input" list="ftp-goto-recent" placeholder="/players/mimic/areas" autocomplete="off" spellcheck="false">
+                      <datalist id="ftp-goto-recent"></datalist>
+                    </div>
+                    <div class="ftp-pop-foot">
+                      <button class="btn" id="ftp-goto-cancel">Cancel</button>
+                      <button class="btn btn-primary" id="ftp-goto-go">Go</button>
+                    </div>
                   </div>
                   <div class="ftp-editor">
                     <div class="ftp-editor-head">
                       <span id="ftp-filename">(no file open)</span>
                       <span class="ftp-status" id="ftp-filemeta"></span>
-                      <button class="ef-btn" id="ftp-wrap-btn" style="margin-left:auto" title="Toggle word wrap">⮐ Wrap</button>
+                      <span class="ftp-status" id="ftp-edit-status" style="margin-left:8px"></span>
+                      <span class="ftp-status" id="ftp-longwarn" style="margin-left:auto" title="jump to next line over 80 chars"></span>
+                      <button class="ef-btn" id="ftp-wrap-btn" title="Toggle word wrap">⮐ Wrap</button>
                       <button class="ef-btn" id="ftp-theme" title="Toggle light/dark editor">☀ Light</button>
-                      <button class="ef-btn" id="ftp-settings-btn" title="Editor settings">⚙</button>
-                      <span class="ftp-status" id="ftp-longwarn" style="margin-left:10px" title="jump to next line over 80 chars"></span>
-                      <span class="ftp-status" id="ftp-edit-status" style="margin-left:10px"></span>
+                      <button class="ef-btn" id="ftp-settings-btn" title="Editor settings">⚙ Settings</button>
                       <div id="ftp-settings-pop" class="ftp-pop" style="display:none">
                         <h4>Editor Settings</h4>
                         <div class="form-group">
@@ -5249,6 +5314,12 @@ class WMTClient {
         overlay.querySelector('#ftp-newfolder').addEventListener('click', () => this._ftpNewFolder());
         overlay.querySelector('#ftp-newfile').addEventListener('click', () => this._ftpNewFile());
         overlay.querySelector('#ftp-delete').addEventListener('click', () => this._ftpDelete());
+        const gotoBtn = overlay.querySelector('#ftp-goto'), gotoPop = overlay.querySelector('#ftp-goto-pop');
+        gotoBtn.addEventListener('click', (e) => { e.stopPropagation(); this._ftpShowGoto(); });
+        overlay.querySelector('#ftp-goto-go').addEventListener('click', () => this._ftpGotoSubmit());
+        overlay.querySelector('#ftp-goto-cancel').addEventListener('click', () => { gotoPop.style.display = 'none'; });
+        overlay.querySelector('#ftp-goto-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpGotoSubmit(); else if (e.key === 'Escape') gotoPop.style.display = 'none'; });
+        document.addEventListener('mousedown', (e) => { if (gotoPop.style.display !== 'none' && !gotoPop.contains(e.target) && e.target !== gotoBtn) gotoPop.style.display = 'none'; });
         overlay.querySelector('#ftp-wrap-btn').addEventListener('click', () => this._ftpSetWrap(!this._ftpWrap));
         overlay.querySelector('#ftp-longwarn').addEventListener('click', () => this._ftpJumpLongLine());
         overlay.querySelector('#ftp-theme').addEventListener('click', () => this._ftpToggleTheme());

@@ -5444,7 +5444,7 @@ function replayBuffer(session) {
 // logged (FTP_CONNECT logs the ftpUser, never the password). A basic-ftp Client is
 // opened lazily and reused across ops for the session. TRIAL: gated to mimic only.
 function ftpEditorAllowed(session) {
-  return !!session && session.isWizard && effectiveCharName(session).toLowerCase() === 'mimic';
+  return !!session && session.isWizard && ['mimic', 'crolack'].includes(effectiveCharName(session).toLowerCase());
 }
 async function ftpEnsureClient(session) {
   const st = session._ftp;
