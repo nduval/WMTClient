@@ -1343,6 +1343,7 @@ class WMTClient {
             case 'ftp_list':      this._onFtpList(data); break;
             case 'ftp_file':      this._onFtpFile(data); break;
             case 'ftp_saved':     this._onFtpSaved(data); break;
+            case 'ftp_mkdir_ok':  this._onFtpMkdirOk(data); break;
 
             case 'bot_status': {
                 const prevActive = this.botState.active;
@@ -4510,8 +4511,18 @@ class WMTClient {
         return Math.max(1, Math.round((Number(n) || 0) / 1024)) + ' KB';
     }
 
+    // FTP last-modified (ISO from the server, in UTC) → compact local "YYYY-MM-DD HH:MM".
+    _ftpFmtDate(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
     _ftpShowAccount() {
         document.getElementById('ftp-modal').classList.remove('ftp-wide');
+        const m = document.querySelector('#ftp-modal .modal'); if (m) { m.style.left = m.style.top = m.style.width = m.style.height = ''; }   // drop floating geometry for the centered login form
         document.getElementById('ftp-account').style.display = '';
         document.getElementById('ftp-workspace').style.display = 'none';
         document.getElementById('ftp-save').style.display = 'none';
@@ -4530,6 +4541,7 @@ class WMTClient {
         document.getElementById('ftp-workspace').style.display = '';
         document.getElementById('ftp-save').style.display = '';
         const dc = document.getElementById('ftp-disconnect'); if (dc) dc.style.display = '';
+        if (document.getElementById('ftp-modal').classList.contains('ftp-floating')) this._ftpApplyGeom();   // position the floating window now that it's wide
         // Init/refresh CodeMirror now that the editor pane is laid out (CM needs a visible host).
         if (this._ftpCMReady) this._ftpCMReady.then(() => { this._ftpInitCM(); if (this._ftpCM) this._ftpCM.refresh(); });
     }
@@ -4564,6 +4576,7 @@ class WMTClient {
     _onFtpList(data) {
         if (!this._ftp) return;
         this._ftp.cwd = data.path;
+        if (!this._ftp.mtimes) this._ftp.mtimes = {};
         this._ftpRenderBreadcrumb();
         const ul = document.getElementById('ftp-filelist'); ul.innerHTML = '';
         const entries = (data.entries || []).slice().sort((a, b) => {
@@ -4576,8 +4589,11 @@ class WMTClient {
             const nm = document.createElement('span'); nm.className = 'ftp-name';
             nm.textContent = (e.type === 'dir' ? '📁 ' : '📄 ') + e.name;
             li.appendChild(nm);
-            if (e.type === 'file') { const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(e.size); li.appendChild(sz); }
             const full = this._ftpJoin(data.path, e.name);
+            if (e.type === 'file') {
+                const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(e.size); li.appendChild(sz);
+                this._ftp.mtimes[full] = e.modifiedAt || null;   // remember the FTP last-modified for the editor header
+            }
             li.addEventListener('click', () => { e.type === 'dir' ? this._ftpOpenDir(full) : this._ftpOpenFile(full); });
             ul.appendChild(li);
         }
@@ -4612,6 +4628,41 @@ class WMTClient {
         });
     }
 
+    // Re-list the current directory (FTP views can go stale — explicit refresh matters).
+    _ftpRefresh() {
+        if (this._ftp && this.connection && this.connection.connected) this.connection.send('ftp_list', { path: this._ftp.cwd || '.' });
+    }
+
+    _ftpNewFolder() {
+        if (!this._ftp || !this._ftp.connected) return;
+        const name = (window.prompt('New folder name:') || '').trim();
+        if (!name) return;
+        if (/[\/\\]/.test(name)) { const f = document.getElementById('ftp-foot'); if (f) { f.textContent = 'Folder name cannot contain slashes.'; f.style.color = '#ff6666'; } return; }
+        this.connection.send('ftp_mkdir', { path: this._ftpJoin(this._ftp.cwd || '.', name) });
+    }
+
+    _onFtpMkdirOk(data) {
+        this.appendOutput(`FTP created folder ${data.path}.`, 'system');
+        this._ftpRefresh();
+    }
+
+    // New file: open a blank buffer with the chosen name; the first Save (ftp_put) creates it.
+    _ftpNewFile() {
+        if (!this._ftp || !this._ftp.connected) return;
+        if (!this._ftpConfirmDiscard()) return;
+        const name = (window.prompt('New file name:') || '').trim();
+        if (!name) return;
+        if (/[\/\\]/.test(name)) { const f = document.getElementById('ftp-foot'); if (f) { f.textContent = 'File name cannot contain slashes.'; f.style.color = '#ff6666'; } return; }
+        const path = this._ftpJoin(this._ftp.cwd || '.', name);
+        this._ftp.curFile = path;
+        document.getElementById('ftp-filename').textContent = path;
+        const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = '(new — Save to create)';
+        if (this._ftpCM) { this._ftpCM.setValue(''); this._ftpCM.focus(); } else { const ta = document.getElementById('ftp-textarea'); if (ta) ta.value = ''; }
+        this._ftpSetDirty(true);            // mark unsaved so Save is clearly the next step
+        this._ftpMarkLongLines();
+        document.getElementById('ftp-edit-status').textContent = '';
+    }
+
     _ftpConfirmDiscard() { return !(this._ftp && this._ftp.dirty) || window.confirm('You have unsaved changes. Discard them?'); }
     _ftpOpenDir(path) { if (this._ftpConfirmDiscard()) this.connection.send('ftp_list', { path }); }
     _ftpOpenFile(path) { if (!this._ftpConfirmDiscard()) return; document.getElementById('ftp-edit-status').textContent = 'Loading…'; this.connection.send('ftp_get', { path }); }
@@ -4620,6 +4671,8 @@ class WMTClient {
         if (!this._ftp) return;
         this._ftp.curFile = data.path;
         document.getElementById('ftp-filename').textContent = data.path;
+        const meta = document.getElementById('ftp-filemeta');
+        if (meta) { const ts = this._ftpFmtDate((this._ftp.mtimes || {})[data.path]); meta.textContent = ts ? 'modified ' + ts : ''; }
         const content = typeof data.content === 'string' ? data.content : '';
         const ta = document.getElementById('ftp-textarea');
         if (this._ftpCM) {
@@ -4856,6 +4909,7 @@ class WMTClient {
         // If a file was already loaded into the textarea before CM came up, carry it over.
         if (this._ftp && this._ftp.curFile && ta.value) { this._ftpCM.setValue(ta.value); this._ftpSetDirty(false); }
         this._ftpMarkLongLines();
+        this._ftpApplyEditorPrefs();   // font size + word wrap from saved prefs
     }
 
     _ftpEditorValue() { return this._ftpCM ? this._ftpCM.getValue() : (document.getElementById('ftp-textarea') || {}).value || ''; }
@@ -4874,6 +4928,93 @@ class WMTClient {
         this._ftpLight = !this._ftpLight;
         try { localStorage.setItem('wmt_ftp_light', this._ftpLight ? '1' : '0'); } catch (e) {}
         this._ftpApplyTheme();
+    }
+
+    // Editor preferences (font size + word wrap), remembered per browser.
+    _ftpApplyEditorPrefs() {
+        const size = this._ftpFontSize || 13;
+        if (this._ftpCM) {
+            this._ftpCM.getWrapperElement().style.fontSize = size + 'px';
+            this._ftpCM.setOption('lineWrapping', !!this._ftpWrap);
+            this._ftpCM.refresh();
+        } else {
+            const ta = document.getElementById('ftp-textarea'), g = document.getElementById('ftp-gutter');
+            if (ta) { ta.style.fontSize = size + 'px'; ta.style.whiteSpace = this._ftpWrap ? 'pre-wrap' : 'pre'; ta.setAttribute('wrap', this._ftpWrap ? 'soft' : 'off'); }
+            if (g) g.style.fontSize = size + 'px';
+        }
+        const lbl = document.getElementById('ftp-fontsize-val'); if (lbl) lbl.textContent = size + 'px';
+        const wrapCb = document.getElementById('ftp-wrap'); if (wrapCb) wrapCb.checked = !!this._ftpWrap;
+        const wrapBtn = document.getElementById('ftp-wrap-btn'); if (wrapBtn) wrapBtn.classList.toggle('active', !!this._ftpWrap);
+    }
+
+    _ftpFontStep(delta) {
+        this._ftpFontSize = Math.max(9, Math.min(24, (this._ftpFontSize || 13) + delta));
+        try { localStorage.setItem('wmt_ftp_fontsize', String(this._ftpFontSize)); } catch (e) {}
+        this._ftpApplyEditorPrefs();
+    }
+
+    _ftpToggleWrap() {
+        this._ftpWrap = !this._ftpWrap;
+        try { localStorage.setItem('wmt_ftp_wrap', this._ftpWrap ? '1' : '0'); } catch (e) {}
+        this._ftpApplyEditorPrefs();
+    }
+
+    // ── Floating / hover window (desktop): drag aside, resize, keep editing while
+    // watching the MUD. Non-blocking overlay; geometry remembered per browser. ──
+    _ftpToggleFloat() {
+        const overlay = document.getElementById('ftp-modal'); if (!overlay) return;
+        const on = !overlay.classList.contains('ftp-floating');
+        overlay.classList.toggle('ftp-floating', on);
+        try { localStorage.setItem('wmt_ftp_float', on ? '1' : '0'); } catch (e) {}
+        const m = overlay.querySelector('.modal');
+        if (on) { this._ftpApplyGeom(); }
+        else if (m) { m.style.left = m.style.top = m.style.width = m.style.height = ''; }   // back to centered modal
+        if (this._ftpCM) setTimeout(() => this._ftpCM.refresh(), 0);
+    }
+
+    _ftpApplyGeom() {
+        const overlay = document.getElementById('ftp-modal');
+        if (!overlay || !overlay.classList.contains('ftp-wide')) return;   // geometry only applies to the wide editor, not the login form
+        const m = overlay.querySelector('.modal'); if (!m) return;
+        let g = null; try { g = JSON.parse(localStorage.getItem('wmt_ftp_geom') || 'null'); } catch (e) {}
+        const W = Math.min(1000, window.innerWidth - 40), H = Math.min(Math.round(window.innerHeight * 0.82), window.innerHeight - 40);
+        if (!g) g = { x: Math.max(10, window.innerWidth - W - 30), y: 60, w: W, h: H };   // default: top-right, leaving the MUD output visible
+        g.x = Math.max(0, Math.min(window.innerWidth - 120, g.x));
+        g.y = Math.max(0, Math.min(window.innerHeight - 60, g.y));
+        g.w = Math.max(420, Math.min(window.innerWidth, g.w || W));
+        g.h = Math.max(300, Math.min(window.innerHeight, g.h || H));
+        m.style.left = g.x + 'px'; m.style.top = g.y + 'px'; m.style.width = g.w + 'px'; m.style.height = g.h + 'px';
+    }
+
+    _ftpSaveGeom() {
+        const m = document.querySelector('#ftp-modal .modal'); if (!m) return;
+        const r = m.getBoundingClientRect();
+        try { localStorage.setItem('wmt_ftp_geom', JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) })); } catch (e) {}
+    }
+
+    _ftpInitFloatDrag(overlay) {
+        const modal = overlay.querySelector('.modal'), header = overlay.querySelector('.modal-header');
+        if (!modal || !header) return;
+        let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        const floating = () => overlay.classList.contains('ftp-floating');
+        header.addEventListener('mousedown', (e) => {
+            if (!floating() || e.target.closest('button')) return;
+            dragging = true; sx = e.clientX; sy = e.clientY;
+            const r = modal.getBoundingClientRect(); ox = r.left; oy = r.top; e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            let nx = Math.max(0, Math.min(window.innerWidth - 100, ox + e.clientX - sx));
+            let ny = Math.max(0, Math.min(window.innerHeight - 40, oy + e.clientY - sy));
+            modal.style.left = nx + 'px'; modal.style.top = ny + 'px';
+        });
+        window.addEventListener('mouseup', () => { if (dragging) { dragging = false; this._ftpSaveGeom(); } });
+        header.addEventListener('dblclick', (e) => {   // reset to default position/size
+            if (!floating() || e.target.closest('button')) return;
+            try { localStorage.removeItem('wmt_ftp_geom'); } catch (e2) {}
+            this._ftpApplyGeom(); if (this._ftpCM) this._ftpCM.refresh();
+        });
+        modal.addEventListener('mouseup', () => { if (floating()) { this._ftpSaveGeom(); if (this._ftpCM) this._ftpCM.refresh(); } });   // catches resize-grip end
     }
 
     // Flag lines over 80 chars: a faint background per line (skipped on huge files
@@ -4905,15 +5046,22 @@ class WMTClient {
         .ftp-modal.ftp-wide .modal-body { flex:1 1 auto; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
         .ftp-modal.ftp-wide #ftp-workspace { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
         .ftp-modal.ftp-wide .modal-footer { flex:0 0 auto; }
+        /* Floating / hover mode (desktop): non-blocking overlay + draggable, resizable window so you can edit and watch the MUD at once. */
+        .ftp-modal.ftp-floating.ftp-wide { background:transparent; pointer-events:none; }
+        .ftp-modal.ftp-floating.ftp-wide.open { display:block; }
+        .ftp-modal.ftp-floating.ftp-wide .modal { pointer-events:auto; position:fixed; margin:0; max-width:none; max-height:none; width:1000px; resize:both; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,.6); }
+        .ftp-modal.ftp-floating.ftp-wide .modal-header { cursor:move; user-select:none; }
         #ftp-save.ftp-dirty { background:#caa300; border-color:#caa300; color:#161616; }
         #ftp-save.ftp-saved { background:#2ecc71; border-color:#2ecc71; color:#161616; }
-        .ftp-treebar { display:flex; gap:4px; padding:6px 6px 0; }
-        .ftp-treebar .ef-btn { flex:1; font-size:.78em; padding:3px 4px; }
-        .ftp-account-form { max-width: 430px; }
+        .ftp-treebar { display:flex; align-items:center; gap:4px; padding:6px 6px 0; }
+        .ftp-iconbtn { flex:0 0 auto; font-size:1.05em; line-height:1; padding:5px 9px; }
+        #ftp-account { font-size:15px; }
+        #ftp-account > p { font-size:14px !important; line-height:1.45; }
+        .ftp-account-form { max-width: 430px; font-size:15px; }
         .ftp-field { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
-        .ftp-lbl { width:74px; flex:0 0 auto; color:var(--text-muted); }
-        #ftp-user, #ftp-pass { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 10px; }
-        .ftp-remember { font-size:.85em; color:var(--text-muted); white-space:nowrap; }
+        .ftp-lbl { width:84px; flex:0 0 auto; color:var(--text-muted); font-size:15px; }
+        #ftp-user, #ftp-pass { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px 10px; font-size:15px; }
+        .ftp-remember { font-size:13px; color:var(--text-muted); white-space:nowrap; }
         .ftp-grid { display:grid; grid-template-columns: 260px 1fr; grid-template-rows: minmax(0, 1fr); gap:10px; flex:1 1 auto; min-height:0; }
         .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; min-height:0; background:#0b0b14; }
         .ftp-breadcrumb { padding:6px 8px; border-bottom:1px solid var(--border-color); font-size:.8em; position:sticky; top:0; background:#0b0b14; }
@@ -4924,10 +5072,18 @@ class WMTClient {
         .ftp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .ftp-size { flex:0 0 auto; color:var(--text-muted); font-size:.82em; font-variant-numeric:tabular-nums; }
         .ftp-editor { display:flex; flex-direction:column; min-width:0; min-height:0; }
-        .ftp-editor-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+        .ftp-editor-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; position:relative; }
+        .ftp-editor-head .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
+        .ftp-pop { position:absolute; top:30px; right:0; z-index:20; background:var(--bg-darker,#12121c); border:1px solid var(--border-color); border-radius:6px; padding:8px 12px; min-width:190px; box-shadow:0 8px 22px rgba(0,0,0,.45); }
+        .ftp-pop-row { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:7px 0; font-size:13px; }
+        .ftp-pop-row label { display:flex; align-items:center; gap:6px; cursor:pointer; }
+        .ftp-stepper { display:flex; align-items:center; gap:8px; }
+        .ftp-stepper .ef-btn { padding:1px 9px; line-height:1.3; }
+        #ftp-fontsize-val { min-width:40px; text-align:center; display:inline-block; }
         #ftp-filename { font-family:var(--font-mono); font-size:.85em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .ftp-findbar { display:flex; gap:4px; margin-bottom:6px; }
-        .ftp-findbar input { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:3px 6px; font-size:.8em; }
+        .ftp-findbar { display:flex; gap:6px; margin-bottom:6px; align-items:center; }
+        .ftp-findbar input { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:5px 8px; font-size:.85em; }
+        .ftp-findbar .ef-btn { flex:0 0 auto; padding:5px 14px; font-size:.85em; white-space:nowrap; border-radius:4px; line-height:1.2; }
         .ftp-edit-wrap { display:flex; flex:1; min-height:0; border:1px solid var(--border-color); border-radius:6px; overflow:hidden; }
         .ftp-gutter { width:46px; padding:8px 6px; text-align:right; color:var(--text-muted); background:#0b0b14; font-family:var(--font-mono); font-size:13px; line-height:1.4; overflow:hidden; user-select:none; white-space:pre; }
         /* 80-col ruler drawn as a background line; background-attachment:local makes it track horizontal scroll so it always marks column 80 (3K's max line length). */
@@ -4978,6 +5134,7 @@ class WMTClient {
           <div class="modal">
             <div class="modal-header">
               <h3>Wizard File Editor (FTP)</h3>
+              <button class="panel-close" id="ftp-float" title="Float / dock window (drag the title bar to move; double-click it to reset)" style="margin-left:auto;font-size:1em">⤢</button>
               <button class="panel-close" id="ftp-close">&times;</button>
             </div>
             <div class="modal-body">
@@ -4994,8 +5151,12 @@ class WMTClient {
                 <div class="ftp-grid">
                   <div class="ftp-tree">
                     <div class="ftp-treebar">
-                      <button class="ef-btn" id="ftp-home" title="Your home folder">🏠 Home</button>
-                      <button class="ef-btn" id="ftp-root" title="Filesystem root /">/ Root</button>
+                      <button class="ef-btn ftp-iconbtn" id="ftp-home" title="Home folder">🏠</button>
+                      <button class="ef-btn ftp-iconbtn" id="ftp-root" title="Filesystem root /">/</button>
+                      <button class="ef-btn ftp-iconbtn" id="ftp-refresh" title="Refresh this directory">⟳</button>
+                      <span style="flex:1"></span>
+                      <button class="ef-btn ftp-iconbtn" id="ftp-newfolder" title="New folder">📁+</button>
+                      <button class="ef-btn ftp-iconbtn" id="ftp-newfile" title="New file">📄+</button>
                     </div>
                     <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
@@ -5003,16 +5164,23 @@ class WMTClient {
                   <div class="ftp-editor">
                     <div class="ftp-editor-head">
                       <span id="ftp-filename">(no file open)</span>
-                      <button class="ef-btn" id="ftp-theme" style="margin-left:auto" title="Toggle light/dark editor">☀ Light</button>
+                      <span class="ftp-status" id="ftp-filemeta"></span>
+                      <button class="ef-btn" id="ftp-wrap-btn" style="margin-left:auto" title="Toggle word wrap">⮐ Wrap</button>
+                      <button class="ef-btn" id="ftp-theme" title="Toggle light/dark editor">☀ Light</button>
+                      <button class="ef-btn" id="ftp-settings-btn" title="Editor settings">⚙</button>
                       <span class="ftp-status" id="ftp-longwarn" style="margin-left:10px" title="jump to next line over 80 chars"></span>
                       <span class="ftp-status" id="ftp-edit-status" style="margin-left:10px"></span>
+                      <div id="ftp-settings-pop" class="ftp-pop" style="display:none">
+                        <div class="ftp-pop-row"><span>Font size</span><span class="ftp-stepper"><button class="ef-btn" id="ftp-font-dec" title="Smaller">−</button><span id="ftp-fontsize-val">13px</span><button class="ef-btn" id="ftp-font-inc" title="Larger">+</button></span></div>
+                        <div class="ftp-pop-row"><label><input type="checkbox" id="ftp-wrap"> Word wrap</label></div>
+                      </div>
                     </div>
                     <div class="ftp-findbar">
                       <input id="ftp-find" placeholder="find" spellcheck="false">
-                      <button class="ef-btn" id="ftp-find-next" title="find next">find ▾</button>
+                      <button class="ef-btn" id="ftp-find-next" title="Find next (Enter)">Find Next</button>
                       <input id="ftp-replace" placeholder="replace with" spellcheck="false">
-                      <button class="ef-btn" id="ftp-replace-one">replace</button>
-                      <button class="ef-btn" id="ftp-replace-all">all</button>
+                      <button class="ef-btn" id="ftp-replace-one" title="Replace the current match">Replace</button>
+                      <button class="ef-btn" id="ftp-replace-all" title="Replace every match">Replace All</button>
                     </div>
                     <div class="ftp-edit-wrap">
                       <div class="ftp-gutter" id="ftp-gutter">1</div>
@@ -5039,10 +5207,29 @@ class WMTClient {
         overlay.querySelector('#ftp-save').addEventListener('click', () => this._ftpSave());
         overlay.querySelector('#ftp-home').addEventListener('click', () => this._ftpOpenDir('.'));
         overlay.querySelector('#ftp-root').addEventListener('click', () => this._ftpOpenDir('/'));
+        overlay.querySelector('#ftp-refresh').addEventListener('click', () => this._ftpRefresh());
+        overlay.querySelector('#ftp-newfolder').addEventListener('click', () => this._ftpNewFolder());
+        overlay.querySelector('#ftp-newfile').addEventListener('click', () => this._ftpNewFile());
+        overlay.querySelector('#ftp-wrap-btn').addEventListener('click', () => this._ftpToggleWrap());
         overlay.querySelector('#ftp-longwarn').addEventListener('click', () => this._ftpJumpLongLine());
         overlay.querySelector('#ftp-theme').addEventListener('click', () => this._ftpToggleTheme());
+        const gear = overlay.querySelector('#ftp-settings-btn'), pop = overlay.querySelector('#ftp-settings-pop');
+        gear.addEventListener('click', (e) => { e.stopPropagation(); pop.style.display = (pop.style.display === 'none') ? '' : 'none'; });
+        document.addEventListener('mousedown', (e) => { if (pop.style.display !== 'none' && !pop.contains(e.target) && e.target !== gear) pop.style.display = 'none'; });
+        overlay.querySelector('#ftp-font-dec').addEventListener('click', () => this._ftpFontStep(-1));
+        overlay.querySelector('#ftp-font-inc').addEventListener('click', () => this._ftpFontStep(1));
+        overlay.querySelector('#ftp-wrap').addEventListener('change', () => this._ftpToggleWrap());
+        overlay.querySelector('#ftp-float').addEventListener('click', () => this._ftpToggleFloat());
+        this._ftpInitFloatDrag(overlay);
         try { this._ftpLight = localStorage.getItem('wmt_ftp_light') === '1'; } catch (e) { this._ftpLight = false; }
+        try { this._ftpFontSize = Math.max(9, Math.min(24, parseInt(localStorage.getItem('wmt_ftp_fontsize'), 10) || 13)); } catch (e) { this._ftpFontSize = 13; }
+        try { this._ftpWrap = localStorage.getItem('wmt_ftp_wrap') === '1'; } catch (e) { this._ftpWrap = false; }
+        // Float by default on desktop (the hover behavior); docked full-screen on narrow/mobile.
+        const desktop = window.matchMedia('(min-width:761px)').matches;
+        let floatPref = null; try { floatPref = localStorage.getItem('wmt_ftp_float'); } catch (e) {}
+        if (desktop && (floatPref === null ? true : floatPref === '1')) overlay.classList.add('ftp-floating');
         this._ftpApplyTheme();
+        this._ftpApplyEditorPrefs();
         const ta = overlay.querySelector('#ftp-textarea');
         ta.addEventListener('input', () => { this._ftpSetDirty(true); this._ftpUpdateGutter(); });
         ta.addEventListener('scroll', () => { overlay.querySelector('#ftp-gutter').scrollTop = ta.scrollTop; });

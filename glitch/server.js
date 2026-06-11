@@ -7274,8 +7274,20 @@ wss.on('connection', (ws, req) => {
             try {
               const client = await ftpEnsureClient(session);
               const entries = await client.list(p);
-              sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size })) });
+              sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size, modifiedAt: (e.modifiedAt instanceof Date ? e.modifiedAt.toISOString() : (e.rawModifiedAt || null)) })) });
             } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'list', path: p, message: e.message || 'list failed' }); }
+          })();
+          break;
+        }
+        case 'ftp_mkdir': {
+          if (!ftpEditorAllowed(session)) break;
+          const p = String(data.path || '');
+          if (!p) break;
+          (async () => {
+            // MKD only; do NOT ftpClose on failure (e.g. "dir exists") — a bad mkdir
+            // shouldn't drop the whole session like list/get/put do.
+            try { const client = await ftpEnsureClient(session); await client.send('MKD ' + p); sendToClient(session, { type: 'ftp_mkdir_ok', path: p }); }
+            catch (e) { sendToClient(session, { type: 'ftp_error', op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); }
           })();
           break;
         }
