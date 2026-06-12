@@ -80,3 +80,21 @@ db_ids.json
 glitch/setup_db.js
 glitch/seed_db.js
 3kmap/
+
+# Packet captures & reverse-engineering scratch (local research, binaries)
+*.pcapng
+*.bin
+portal_decode.py
+portal_parse.py
+upload_decode.py
+
+# Ad-hoc sandbox debug/probe scripts (local one-offs — NOT the committed gate suites)
+tests/sandbox/*.sh
+tests/sandbox/cookieprobe.php
+tests/sandbox/ftp_*.js
+tests/sandbox/test_deploy_resume_live.js
+
+# Server-side scratch/seed utilities (local, not deployed via deploy.py)
+glitch/query_smurf.js
+glitch/seed_all.js
+glitch/test_mud_events.js
