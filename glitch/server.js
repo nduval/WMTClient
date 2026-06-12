@@ -2537,7 +2537,7 @@ async function loadPersistedIdentity() {
       if (!ps || !ps.userId || !ps.characterId || !ps.bridgeToken) continue;
       // Same freshness window as RESTORE_SKIP_STALE — never adopt a stale token.
       if (ps.persistedAt && (now - ps.persistedAt > 120000)) continue;
-      persistedIdentity.set(`${ps.userId}:${ps.characterId}`, { bridgeToken: ps.bridgeToken, persistedAt: ps.persistedAt || now });
+      persistedIdentity.set(`${ps.userId}:${ps.characterId}`, { bridgeToken: ps.bridgeToken, actualMudChar: ps.actualMudChar || null, persistedAt: ps.persistedAt || now });
       kept++;
     }
     logSessionEvent('PERSISTED_IDENTITY_LOADED', { count: kept });
@@ -2561,6 +2561,15 @@ function adoptPersistedBridgeToken(session) {
   const from = session.bridgeToken;
   session.bridgeToken = entry.bridgeToken;
   session._bridgeTokenPinned = true;
+  // Carry the persisted login state along with the identity. mudLoggedIn is
+  // derived from _actualMudChar at connect time; without it a live resumed
+  // socket is misclassified as "at the name prompt" and the relink path types
+  // the char name into the running game ("There is no reason to 'mimic'
+  // here.", 2026-06-12). Same one-shot freshness window as the token itself;
+  // null stays null so a genuinely-parked char still gets the relink flow.
+  if (entry.actualMudChar && !session._actualMudChar) {
+    session._actualMudChar = entry.actualMudChar;
+  }
   persistedIdentity.delete(key);   // one-shot — don't re-adopt a now-stale token on a later reconnect
   logSessionEvent('ADOPT_PERSISTED_BRIDGETOKEN', {
     token: (session.token || '').substring(0, 8),
@@ -2568,6 +2577,7 @@ function adoptPersistedBridgeToken(session) {
     char: effectiveCharName(session),
     from: (from || '').substring(0, 8),
     to: entry.bridgeToken.substring(0, 8),
+    mudChar: entry.actualMudChar || null,
     note: 'browser reconnected before restore — resuming live socket by persisted bridgeToken'
   });
   return true;

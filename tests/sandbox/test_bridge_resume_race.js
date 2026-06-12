@@ -23,8 +23,15 @@
  *   T3  restart with restore DELAYED; browser reconnects with the drifted token B
  *       BEFORE restore runs -> must RESUME the live socket under bridgeToken A
  *   T4  ...and must NOT open a fresh MUD login under token B
+ *   T5  the adopted session carries the persisted actualMudChar (mudLoggedIn), so
+ *       the browser gets session_resumed — NOT session_new (which makes the client
+ *       type the char name into the running game: "There is no reason to 'mimic'
+ *       here.", 2026-06-12 04:33 prod)
+ *   T6  ...and the server logs no AUTOLOGIN_RELINK for a live resumed socket
  *
  * OLD code: T3/T4 fail — connectToMud keys by B -> "(Bshort)" fresh login, no resume.
+ * PRE-2026-06-12 code: T5/T6 fail — adopt carried only the bridgeToken, dropped
+ * actualMudChar -> mudLoggedIn=false -> relink dispatched session_new.
  * Run: sudo -n node test_bridge_resume_race.js   (spawns its own bridge+server)
  */
 const http = require('http');
@@ -199,6 +206,11 @@ async function main() {
 
     // --- T3/T4: restart with restore DELAYED; browser reconnects with the
     //     drifted token B BEFORE restore runs -> must resume socket A, not B. ---
+    // Pin the prod precondition for T5/T6 deterministically: the char was LOGGED
+    // IN when persisted (in prod the name sniffer fills actualMudChar; the mock
+    // MUD's login flow may not exercise it). The adopt path must carry this bit.
+    for (const s of mock.state.store) { if (s.userId === USER) s.actualMudChar = 'racerunner'; }
+    const srvLenBeforeRestart = srvLog.join('').length;
     const lenBeforeRestart = blob().length;
     srvB = spawnServer(PORT_A, mock.port, 'B', srvLog, { BRIDGE_RESTORE_DELAY_MS: String(RESTORE_DELAY_MS) });
     await waitForListening(PORT_A);
@@ -210,13 +222,27 @@ async function main() {
     const resumedA = await waitFor(
       () => new RegExp(`Resume \\(${Ashort}\\)`).test(blob().slice(lenBeforeRestart)), RESTORE_DELAY_MS - 1000);
     const tail = blob().slice(lenBeforeRestart);
-    try { cC.ws.close(); } catch (e) {}
 
     if (resumedA) ok('T3: reconnect during restore window RESUMED the live socket by bridgeToken A');
     else bad('T3: race reconnect resumed by bridgeToken A', `no "Resume (${Ashort})" before restore. tail:\n${tail}`);
 
     if (!new RegExp(`\\(${Bshort}\\)`).test(tail)) ok('T4: race reconnect did NOT fresh-login under the drifted token B');
     else bad('T4: no fresh login under B', `found (${Bshort}) after restart (fresh login = the boot):\n${tail}`);
+
+    // --- T5/T6: the resumed-live session must be SILENT — session_resumed to the
+    //     browser (no session_new => no client-typed char name), no RELINK event. ---
+    // The auth-time `session_new {bridgeMode:true}` is the SILENT init (client
+    // types nothing) — only a session_new WITHOUT bridgeMode runs the onConnect
+    // auto-login flow that types the char name (server.js ~7310 contract).
+    const gotResumedMsg = await waitFor(() => cC.msgs.some(m => m.type === 'session_resumed'), 4000);
+    const gotLoginNewMsg = cC.msgs.some(m => m.type === 'session_new' && !m.bridgeMode);
+    if (gotResumedMsg && !gotLoginNewMsg) ok('T5: browser got session_resumed, no login-flow session_new (no name typed into the game)');
+    else bad('T5: session_resumed without login-flow session_new', `session_resumed=${gotResumedMsg} loginFlowSessionNew=${gotLoginNewMsg}`);
+
+    const srvTail = srvLog.join('').slice(srvLenBeforeRestart);
+    if (!srvTail.includes('AUTOLOGIN_RELINK')) ok('T6: no AUTOLOGIN_RELINK for a live resumed socket');
+    else bad('T6: no AUTOLOGIN_RELINK', 'relink fired for a socket that was logged in at persist time');
+    try { cC.ws.close(); } catch (e) {}
 
   } finally {
     try { if (srvB) srvB.kill('SIGKILL'); } catch (e) {}
