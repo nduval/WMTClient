@@ -2317,7 +2317,9 @@ class WMTClient {
             chatWindow.contains(document.activeElement)
         );
 
-        if (!this.chatWindowOpen || !isChatFocused) {
+        // _chatReplaying: skip the unread dot during the post-refresh/reconnect history
+        // replay burst — replayed messages aren't "new", so a refresh shouldn't relight it.
+        if ((!this.chatWindowOpen || !isChatFocused) && !this._chatReplaying) {
             // Add indicator to chat button (stays until chat is focused)
             const chatBtn = document.getElementById('chat-toggle-btn');
             if (chatBtn) {
@@ -4650,15 +4652,49 @@ class WMTClient {
     _ftpShowGoto() {
         const pop = document.getElementById('ftp-goto-pop'); if (!pop) return;
         this._ftpPopulateRecent();
+        this._ftpRenderFavorites();
         pop.style.display = '';
         const inp = document.getElementById('ftp-goto-input'); if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 30); }
     }
+
+    // Favorite folders — one-click bookmarks in the Go-to popover, per browser.
+    _ftpLoadFavorites() { try { const a = JSON.parse(localStorage.getItem('wmt_ftp_favorites') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+    _ftpSaveFavorites(a) { try { localStorage.setItem('wmt_ftp_favorites', JSON.stringify(a)); } catch (e) {} }
+    _ftpAddFavorite() {
+        // Favorite the path typed in the box if there is one (what the user is looking
+        // at), else fall back to the folder they're currently in.
+        const inp = document.getElementById('ftp-goto-input');
+        const typed = inp ? inp.value.trim() : '';
+        const p = typed || ((this._ftp && this._ftp.cwd) || '.');
+        const favs = this._ftpLoadFavorites();
+        if (!favs.includes(p)) { favs.unshift(p); this._ftpSaveFavorites(favs.slice(0, 20)); }
+        this._ftpRenderFavorites();
+    }
+    _ftpRenderFavorites() {
+        const ul = document.getElementById('ftp-fav-list'); if (!ul) return;
+        ul.innerHTML = '';
+        const favs = this._ftpLoadFavorites();
+        if (!favs.length) {
+            const li = document.createElement('li'); li.className = 'ftp-fav-empty';
+            li.textContent = 'No favorites yet — open a folder and click ☆ Add current.';
+            ul.appendChild(li); return;
+        }
+        for (const p of favs) {
+            const li = document.createElement('li'); li.className = 'ftp-fav-item';
+            const name = document.createElement('span'); name.className = 'ftp-fav-path';
+            name.textContent = (p === '.' || p === '') ? '~ (home)' : p; name.title = 'Go to ' + name.textContent;
+            name.addEventListener('click', () => { document.getElementById('ftp-goto-pop').style.display = 'none'; this._ftpAddRecent(p); this._ftpOpenDir(p); });
+            const rm = document.createElement('button'); rm.className = 'ftp-fav-rm'; rm.textContent = '×'; rm.title = 'Remove favorite';
+            rm.addEventListener('click', (e) => { e.stopPropagation(); this._ftpSaveFavorites(this._ftpLoadFavorites().filter(x => x !== p)); this._ftpRenderFavorites(); });
+            li.appendChild(name); li.appendChild(rm); ul.appendChild(li);
+        }
+    }
     _ftpGotoSubmit() {
+        const pop = document.getElementById('ftp-goto-pop'); if (pop) pop.style.display = 'none';   // always close on Go
         const inp = document.getElementById('ftp-goto-input'); if (!inp) return;
-        const path = inp.value.trim(); if (!path) return;
+        const path = inp.value.trim(); if (!path) return;   // nothing typed — just close, no-op
         this._ftpAddRecent(path);
-        const pop = document.getElementById('ftp-goto-pop'); if (pop) pop.style.display = 'none';
-        this._ftpOpenDir(path);
+        this._ftpOpenDir(path);   // navigates even if it's the same folder (harmless re-list)
     }
 
     _ftpNewFolder() {
@@ -5017,7 +5053,7 @@ class WMTClient {
         const overlay = document.getElementById('ftp-modal');
         if (!overlay || !overlay.classList.contains('ftp-wide')) return;   // geometry only applies to the wide editor, not the login form
         const m = overlay.querySelector('.modal'); if (!m) return;
-        let g = null; try { g = JSON.parse(localStorage.getItem('wmt_ftp_geom2') || 'null'); } catch (e) {}
+        let g = null; try { g = JSON.parse(localStorage.getItem('wmt_ftp_geom3') || 'null'); } catch (e) {}
         const W = Math.min(1000, Math.round(window.innerWidth * 0.92)), H = Math.round(window.innerHeight * 0.85);
         if (!g) g = { x: Math.round((window.innerWidth - W) / 2), y: Math.round((window.innerHeight - H) / 2), w: W, h: H };   // default: large + centered (matches the old docked size)
         g.x = Math.max(0, Math.min(window.innerWidth - 120, g.x));
@@ -5028,10 +5064,40 @@ class WMTClient {
     }
 
     _ftpSaveGeom() {
-        const m = document.querySelector('#ftp-modal .modal'); if (!m) return;
+        const overlay = document.getElementById('ftp-modal');
+        // Only persist the WIDE editor's geometry — never the compact login box. A
+        // mouseup anywhere in the modal (e.g. clicking Connect) reaches the resize-save
+        // handler; without this guard that saved the tiny login-box size, which then got
+        // applied to the workspace (the "opened squished small" bug).
+        if (!overlay || !overlay.classList.contains('ftp-wide')) return;
+        const m = overlay.querySelector('.modal'); if (!m) return;
         const r = m.getBoundingClientRect();
-        if (r.width < 200 || r.height < 150) return;   // ignore degenerate sizes (don't persist a squished window)
-        try { localStorage.setItem('wmt_ftp_geom2', JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) })); } catch (e) {}
+        if (r.width < 200 || r.height < 150) return;   // ignore degenerate sizes
+        try { localStorage.setItem('wmt_ftp_geom3', JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) })); } catch (e) {}
+    }
+
+    // Draggable divider between the file pane and the editor; width persisted.
+    _ftpInitDivider(overlay) {
+        const divider = overlay.querySelector('#ftp-divider');
+        const grid = overlay.querySelector('.ftp-grid');
+        if (!divider || !grid) return;
+        let saved; try { saved = parseInt(localStorage.getItem('wmt_ftp_treew'), 10); } catch (e) {}
+        if (saved && saved >= 140) grid.style.setProperty('--ftp-tree-w', saved + 'px');
+        let dragging = false;
+        divider.addEventListener('mousedown', (e) => { dragging = true; e.preventDefault(); });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            const rect = grid.getBoundingClientRect();
+            const w = Math.max(140, Math.min(rect.width - 320, e.clientX - rect.left));
+            grid.style.setProperty('--ftp-tree-w', w + 'px');
+        });
+        window.addEventListener('mouseup', () => {
+            if (!dragging) return;
+            dragging = false;
+            const w = parseInt(grid.style.getPropertyValue('--ftp-tree-w'), 10);
+            if (w) { try { localStorage.setItem('wmt_ftp_treew', String(w)); } catch (e) {} }
+            if (this._ftpCM) this._ftpCM.refresh();
+        });
     }
 
     _ftpInitFloatDrag(overlay) {
@@ -5124,13 +5190,28 @@ class WMTClient {
         .ftp-lbl { width:84px; flex:0 0 auto; color:var(--text-muted); font-size:15px; }
         #ftp-user, #ftp-pass { flex:1; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px 10px; font-size:15px; }
         .ftp-remember { font-size:13px; color:var(--text-muted); white-space:nowrap; }
-        .ftp-grid { display:grid; grid-template-columns: 260px 1fr; grid-template-rows: minmax(0, 1fr); gap:10px; flex:1 1 auto; min-height:0; position:relative; }
+        /* Top action toolbar — uniform icon buttons in the header strip; the file pane is just the list. */
+        .ftp-toolbar { display:flex; align-items:center; gap:6px; padding:0 0 8px; flex-wrap:wrap; }
+        .ftp-tbtn { flex:0 0 auto; width:36px; height:30px; display:inline-flex; align-items:center; justify-content:center; font-size:1.05em; line-height:1; padding:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; }
+        .ftp-tbtn:hover { border-color:var(--primary-color); }
+        .ftp-tb-sep { flex:0 0 auto; width:1px; height:22px; background:var(--border-color); margin:0 4px; }
+        .ftp-toolbar .ftp-breadcrumb { flex:1; min-width:0; margin-left:10px; font-size:.85em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        /* tree | drag-divider | editor — divider drag updates --ftp-tree-w (persisted). */
+        .ftp-grid { display:grid; grid-template-columns: var(--ftp-tree-w, 260px) 6px minmax(0,1fr); grid-template-rows: minmax(0, 1fr); gap:0; flex:1 1 auto; min-height:0; position:relative; }
+        .ftp-divider { background:var(--border-color); cursor:col-resize; border-radius:3px; }
+        .ftp-divider:hover { background:var(--primary-color); }
         .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; min-height:0; background:#0b0b14; }
-        .ftp-breadcrumb-row { display:flex; align-items:center; gap:8px; padding:5px 8px; border-bottom:1px solid var(--border-color); position:sticky; top:0; background:#0b0b14; z-index:1; }
-        .ftp-breadcrumb { flex:1; min-width:0; font-size:.8em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        #ftp-goto { flex:0 0 auto; font-size:.78em; padding:4px 9px; white-space:nowrap; }
-        #ftp-goto-pop { top:46px; left:8px; right:auto; }
+        #ftp-goto-pop { top:6px; left:6px; right:auto; width:320px; }
         #ftp-goto-input { width:100%; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 8px; font-size:.9em; }
+        .ftp-fav-head { display:flex; align-items:center; justify-content:space-between; margin:12px 0 6px; font-size:.85em; color:var(--text-muted); }
+        .ftp-fav-head .ef-btn { font-size:.78em; padding:3px 9px; }
+        .ftp-fav-list { list-style:none; margin:0 0 8px; padding:0; max-height:170px; overflow:auto; }
+        .ftp-fav-item { display:flex; align-items:center; gap:8px; padding:5px 7px; border-radius:4px; cursor:pointer; font-size:.85em; }
+        .ftp-fav-item:hover { background:rgba(255,255,255,.06); }
+        .ftp-fav-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--primary-color); }
+        .ftp-fav-rm { flex:0 0 auto; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.15em; line-height:1; padding:0 4px; }
+        .ftp-fav-rm:hover { color:#ff6666; }
+        .ftp-fav-empty { list-style:none; font-size:.8em; color:var(--text-muted); padding:4px 6px; }
         .ftp-crumb { color:var(--primary-color); cursor:pointer; } .ftp-crumb:hover { text-decoration:underline; }
         .ftp-list { list-style:none; margin:0; padding:4px; }
         .ftp-item { display:flex; align-items:baseline; gap:8px; padding:3px 6px; border-radius:4px; cursor:pointer; font-size:.85em; }
@@ -5224,29 +5305,34 @@ class WMTClient {
                 </div>
               </div>
               <div id="ftp-workspace" style="display:none">
+                <div class="ftp-toolbar">
+                  <button class="ftp-tbtn" id="ftp-home" title="Home folder">🏠</button>
+                  <button class="ftp-tbtn" id="ftp-root" title="Filesystem root (/)">/</button>
+                  <button class="ftp-tbtn" id="ftp-refresh" title="Refresh this directory">⟳</button>
+                  <span class="ftp-tb-sep"></span>
+                  <button class="ftp-tbtn" id="ftp-newfolder" title="New folder">📁</button>
+                  <button class="ftp-tbtn" id="ftp-newfile" title="New file">📝</button>
+                  <button class="ftp-tbtn" id="ftp-delete" title="Delete the open file">🗑️</button>
+                  <span class="ftp-tb-sep"></span>
+                  <button class="ftp-tbtn" id="ftp-goto" title="Go to a path (e.g. one you can't reach by clicking)">📍</button>
+                  <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
+                </div>
                 <div class="ftp-grid">
                   <div class="ftp-tree">
-                    <div class="ftp-treebar">
-                      <button class="ef-btn ftp-iconbtn" id="ftp-home" title="Home folder">🏠</button>
-                      <button class="ef-btn ftp-iconbtn" id="ftp-root" title="Filesystem root /">/</button>
-                      <button class="ef-btn ftp-iconbtn" id="ftp-refresh" title="Refresh this directory">⟳</button>
-                      <span style="flex:1"></span>
-                      <button class="ef-btn ftp-iconbtn" id="ftp-newfolder" title="New folder">📁<span class="ftp-plus">+</span></button>
-                      <button class="ef-btn ftp-iconbtn" id="ftp-newfile" title="New file">📄<span class="ftp-plus">+</span></button>
-                      <button class="ef-btn ftp-iconbtn" id="ftp-delete" title="Delete the open file">🗑️<span class="ftp-plus">−</span></button>
-                    </div>
-                    <div class="ftp-breadcrumb-row">
-                      <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
-                      <button class="ef-btn" id="ftp-goto" title="Go to a path you can't reach by clicking">Go to…</button>
-                    </div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
                   </div>
+                  <div class="ftp-divider" id="ftp-divider" title="Drag to resize the file pane"></div>
                   <div id="ftp-goto-pop" class="ftp-pop" style="display:none">
                     <h4>Go to path</h4>
                     <div class="form-group">
                       <input id="ftp-goto-input" list="ftp-goto-recent" placeholder="/players/mimic/areas" autocomplete="off" spellcheck="false">
                       <datalist id="ftp-goto-recent"></datalist>
                     </div>
+                    <div class="ftp-fav-head">
+                      <span>★ Favorites</span>
+                      <button class="ef-btn" id="ftp-fav-add" title="Add the path typed above — or your current folder if the box is empty — to favorites">☆ Add</button>
+                    </div>
+                    <ul class="ftp-fav-list" id="ftp-fav-list"></ul>
                     <div class="ftp-pop-foot">
                       <button class="btn" id="ftp-goto-cancel">Cancel</button>
                       <button class="btn btn-primary" id="ftp-goto-go">Go</button>
@@ -5317,6 +5403,7 @@ class WMTClient {
         const gotoBtn = overlay.querySelector('#ftp-goto'), gotoPop = overlay.querySelector('#ftp-goto-pop');
         gotoBtn.addEventListener('click', (e) => { e.stopPropagation(); this._ftpShowGoto(); });
         overlay.querySelector('#ftp-goto-go').addEventListener('click', () => this._ftpGotoSubmit());
+        overlay.querySelector('#ftp-fav-add').addEventListener('click', () => this._ftpAddFavorite());
         overlay.querySelector('#ftp-goto-cancel').addEventListener('click', () => { gotoPop.style.display = 'none'; });
         overlay.querySelector('#ftp-goto-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpGotoSubmit(); else if (e.key === 'Escape') gotoPop.style.display = 'none'; });
         document.addEventListener('mousedown', (e) => { if (gotoPop.style.display !== 'none' && !gotoPop.contains(e.target) && e.target !== gotoBtn) gotoPop.style.display = 'none'; });
@@ -5335,6 +5422,7 @@ class WMTClient {
             setTimeout(() => { pop.style.display = 'none'; }, 600);
         });
         this._ftpInitFloatDrag(overlay);
+        this._ftpInitDivider(overlay);
         try { this._ftpLight = localStorage.getItem('wmt_ftp_light') === '1'; } catch (e) { this._ftpLight = false; }
         try { this._ftpFontSize = Math.max(9, Math.min(24, parseInt(localStorage.getItem('wmt_ftp_fontsize'), 10) || 13)); } catch (e) { this._ftpFontSize = 13; }
         try { this._ftpWrap = localStorage.getItem('wmt_ftp_wrap') === '1'; } catch (e) { this._ftpWrap = false; }
