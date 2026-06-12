@@ -326,6 +326,11 @@ def run_test_suites():
         # + mock session store; proves the stable-bridgeToken resume/rekey fix
         # (the 2026-06-02 deploy-lockout). The only suite that runs BRIDGE mode.
         ('BridgeRekeyResume', 'test_bridge_rekey_resume.js'),
+        # Restore-vs-reconnect RACE (G2/002): a browser that reconnects with a drifted
+        # token DURING the restore window must adopt the persisted stable bridgeToken
+        # and RESUME the live socket, not fresh-login. The 2026-06-11 elminster boot.
+        # Bridge-mode harness; restore deterministically delayed via BRIDGE_RESTORE_DELAY_MS.
+        ('BridgeResumeRace', 'test_bridge_resume_race.js'),
         # Client-side: "already logged in and active" stops the auto-login loop +
         # connect() dedup (vm-loads app.js + connection.js). Guards #4 hardening.
         ('LoginConflict',  'test_login_conflict.js'),

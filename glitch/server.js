@@ -503,6 +503,16 @@ const sessions = new Map();
 // Used to close old sessions when same user+character connects from different device
 const userCharacterSessions = new Map();
 
+// Persisted identity map: "userId:characterId" -> { bridgeToken, persistedAt }.
+// Loaded once at startup from the persistent-session store so that a browser which
+// reconnects DURING the restore window (before restorePersistentSessions runs) can
+// adopt the STABLE bridgeToken and RESUME the live bridge socket instead of doing a
+// fresh MUD login. Closes the restore-vs-reconnect race (G2/002) that booted
+// elminster on 2026-06-11. See docs/connection-issues/005 and
+// memory/bug_bridge_resume_miss_orphan_lockout.md.
+const persistedIdentity = new Map();
+let persistedIdentityReady = Promise.resolve();
+
 // Stale-write protection for aliases modified by the admin endpoint.
 //
 // Backed by the `alias_guard` DB table AND a hot in-memory mirror. DB
@@ -1148,6 +1158,13 @@ function connectToBridge() {
     // 2026-04-11.
     if (!bridgeRestoreDone) {
       bridgeRestoreDone = true;
+      // Test-only: deterministically delay restore so a repro can force the
+      // browser to auth/connect BEFORE restore runs (the restore-vs-reconnect
+      // race). Never set in prod. See tests/sandbox/test_bridge_resume_race.js.
+      const restoreDelayMs = parseInt(process.env.BRIDGE_RESTORE_DELAY_MS, 10);
+      if (restoreDelayMs > 0) {
+        await new Promise(r => setTimeout(r, restoreDelayMs));
+      }
       try {
         await restorePersistentSessions();
       } catch (e) {
@@ -2256,6 +2273,8 @@ async function removePersistentSession(token) {
  * across future restarts (guards against persist/restore race conditions).
  */
 async function clearAllPersistentSessions() {
+  // The post-deploy adoption window is over once the store is cleared.
+  persistedIdentity.clear();
   if (!ADMIN_KEY) return;
 
   try {
@@ -2503,6 +2522,57 @@ function autoLoginToMud(session, password) {
 /**
  * Restore persistent sessions on startup
  */
+// Load the persisted identity map (userId:characterId -> stable bridgeToken) from
+// the persistent-session store. Kicked once at startup so the auth path can adopt
+// the right bridgeToken for a browser that reconnects during the restore window —
+// closing the restore-vs-reconnect race (G2/002). Best-effort: on failure the map
+// stays empty and behavior degrades to the old fresh-login fallback.
+async function loadPersistedIdentity() {
+  try {
+    const list = await fetchPersistentSessions();
+    persistedIdentity.clear();
+    const now = Date.now();
+    let kept = 0;
+    for (const ps of (list || [])) {
+      if (!ps || !ps.userId || !ps.characterId || !ps.bridgeToken) continue;
+      // Same freshness window as RESTORE_SKIP_STALE — never adopt a stale token.
+      if (ps.persistedAt && (now - ps.persistedAt > 120000)) continue;
+      persistedIdentity.set(`${ps.userId}:${ps.characterId}`, { bridgeToken: ps.bridgeToken, persistedAt: ps.persistedAt || now });
+      kept++;
+    }
+    logSessionEvent('PERSISTED_IDENTITY_LOADED', { count: kept });
+  } catch (e) {
+    logSessionEvent('PERSISTED_IDENTITY_LOAD_FAIL', { error: e.message });
+  }
+}
+
+// If a freshly-created/rekeyed session is about to connect to the MUD but the bridge
+// socket for its character is actually held under a different (stable) bridgeToken
+// — because the browser reconnected before restore adopted it — switch this session
+// to that bridgeToken so connectToMud RESUMES the live socket instead of fresh-login.
+// One-shot per character; only fires inside the post-deploy freshness window.
+function adoptPersistedBridgeToken(session) {
+  if (!BRIDGE_URL || !session || !session.userId || !session.characterId) return false;
+  if (session._bridgeTokenPinned) return false;   // restored/already-adopted sessions carry the correct stable token
+  const key = `${session.userId}:${session.characterId}`;
+  const entry = persistedIdentity.get(key);
+  if (!entry || !entry.bridgeToken || entry.bridgeToken === session.bridgeToken) return false;
+  if (entry.persistedAt && (Date.now() - entry.persistedAt > 120000)) { persistedIdentity.delete(key); return false; }
+  const from = session.bridgeToken;
+  session.bridgeToken = entry.bridgeToken;
+  session._bridgeTokenPinned = true;
+  persistedIdentity.delete(key);   // one-shot — don't re-adopt a now-stale token on a later reconnect
+  logSessionEvent('ADOPT_PERSISTED_BRIDGETOKEN', {
+    token: (session.token || '').substring(0, 8),
+    user: session.userId,
+    char: effectiveCharName(session),
+    from: (from || '').substring(0, 8),
+    to: entry.bridgeToken.substring(0, 8),
+    note: 'browser reconnected before restore — resuming live socket by persisted bridgeToken'
+  });
+  return true;
+}
+
 async function restorePersistentSessions() {
   logSessionEvent('RESTORE_CHECK', { note: 'checking for sessions to restore' });
 
@@ -2693,6 +2763,7 @@ async function restorePersistentSessions() {
       // connectToMud()/autoLogin reuses the SAME bridge key (not the session
       // token, which may rekey when the browser reconnects).
       session.bridgeToken = bridgeResumeToken;
+      session._bridgeTokenPinned = true;   // restore set the correct stable token — don't let adopt override it
       session.mudSocket = new BridgeSocket(bridgeResumeToken);
 
       // Set up normal data handler
@@ -6584,6 +6655,10 @@ function processLine(session, line) {
  * Create and connect MUD socket for a session
  */
 function connectToMud(session) {
+  // If the browser reconnected during the post-deploy restore window, its session
+  // carries a fresh/drifted token; switch to the persisted stable bridgeToken so we
+  // RESUME the live socket here instead of fresh-logging-in. No-op outside that window.
+  adoptPersistedBridgeToken(session);
   // Thorough cleanup of any existing connection state
   if (session.mudSocket) {
     // Remove all listeners before destroying to prevent spurious events
@@ -6918,6 +6993,14 @@ wss.on('connection', (ws, req) => {
             }));
             ws.close();
             return;
+          }
+
+          // Wait (bounded) for the persisted-identity map so a reconnect during the
+          // post-deploy restore window adopts the stable bridgeToken (resume) rather
+          // than racing ahead into a fresh MUD login. Resolves instantly once loaded;
+          // the 2.5s cap means a slow/unreachable store can't block logins.
+          if (BRIDGE_URL) {
+            try { await Promise.race([persistedIdentityReady, new Promise(r => setTimeout(r, 2500))]); } catch (e) {}
           }
 
           // Check for existing session with same user+character but different token
@@ -10470,6 +10553,14 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}${BRIDGE_URL ? ' (bridge mode: ' + BRIDGE_URL + ')' : ' (direct mode)'}`);
+
+  // Load the persisted identity map immediately (in parallel with bridge connect /
+  // restore) so a browser that reconnects during the restore window can adopt the
+  // stable bridgeToken and resume. The auth path awaits this (bounded). Bridge mode
+  // only — direct mode has no bridge sockets to resume.
+  if (BRIDGE_URL) {
+    persistedIdentityReady = loadPersistedIdentity();
+  }
 
   // Connect to bridge if configured
   if (BRIDGE_URL) {
