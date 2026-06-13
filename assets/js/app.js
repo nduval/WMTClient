@@ -5164,7 +5164,7 @@ class WMTClient {
         this._ftpUpdateGutter();
     }
 
-    // Save-button state mirrors the settings panel: default "Save to MUD",
+    // Save-button state mirrors the settings panel: default "Save" (routes to MUD or disk),
     // amber "● Unsaved" while dirty, "Saving…" in flight, green "✓ Saved" on
     // success (then back). Replaces the easy-to-miss tiny status text up top.
     _ftpSetDirty(v) {
@@ -5183,7 +5183,7 @@ class WMTClient {
             return;
         }
         if (state === 'dirty') { btn.textContent = '● Unsaved'; btn.classList.add('ftp-dirty'); btn.classList.remove('ftp-saved'); return; }
-        btn.textContent = 'Save to MUD'; btn.classList.remove('ftp-dirty', 'ftp-saved');
+        btn.textContent = 'Save'; btn.classList.remove('ftp-dirty', 'ftp-saved');
     }
 
     _ftpSave() {
