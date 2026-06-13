@@ -4990,18 +4990,28 @@ class WMTClient {
         this._localRender();
     }
     async _localDelete() {
-        if (!this._local || !this._local.curHandle || !this._local.curName) { this._ftpFootMsg('Open a local file first to delete it.', '#caa300'); return; }
-        const parent = this._local.curParent || this._local.dir, nm = this._local.curName;
-        if (!window.confirm(`Delete local file ${nm}?\n\nThis permanently removes it from your disk and cannot be undone.`)) return;
-        try {
-            await parent.removeEntry(nm);
+        if (!this._local || !this._local.dir) { this._ftpFootMsg('Open a local folder first.', '#caa300'); return; }
+        const checked = (this._localRows || []).filter(r => r.cb.checked);
+        const names = checked.length ? checked.map(r => r.name) : (this._local.curName ? [this._local.curName] : []);
+        if (!names.length) { this._ftpFootMsg('Check files, or open one, to delete.', '#caa300'); return; }
+        const word = names.length > 1 ? names.length + ' local files' : 'local file ' + names[0];
+        if (!window.confirm(`Delete ${word}?\n\nThis permanently removes ${names.length > 1 ? 'them' : 'it'} from your disk and cannot be undone.`)) return;
+        // checked files live in the current dir; a lone open file may live in its own parent
+        const dirFor = (nm) => (checked.length ? this._local.dir : (this._local.curParent || this._local.dir));
+        let ok = 0;
+        for (const nm of names) {
+            try { await dirFor(nm).removeEntry(nm); ok++; }
+            catch (e) { this._ftpFootMsg('Delete failed: ' + nm, '#ff6666'); }
+        }
+        if (this._local.curName && names.includes(this._local.curName)) {   // clear the editor if its file was deleted
             this._local.curHandle = null; this._local.curName = null;
             document.getElementById('ftp-filename').textContent = '(no file open)';
             const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = '';
             if (this._ftpCM) this._ftpCM.setValue(''); else { const ta = document.getElementById('ftp-textarea'); if (ta) ta.value = ''; }
-            this._ftpSetDirty(false); this._localRender();
-            this._ftpFootMsg('Deleted ' + nm + '.');
-        } catch (e) { this._ftpFootMsg('Delete failed: ' + (e.message || e), '#ff6666'); }
+            this._ftpSetDirty(false);
+        }
+        this._localRender();
+        if (ok) this._ftpFootMsg('Deleted ' + ok + ' file(s).');
     }
     // Local go-to: walk down the handle tree relative to the opened root (no absolute paths — the browser can't).
     async _localGoto() {
@@ -5203,8 +5213,14 @@ class WMTClient {
     // Delete the currently-open file (with confirm). Files only (DELE), not dirs.
     _ftpDelete() {
         if (!this._ftp || !this._ftp.connected) return;
+        const checked = (this._ftpRows || []).filter(r => r.cb.checked);
+        if (checked.length) {   // delete all checked files
+            if (!window.confirm(`Delete ${checked.length} file(s) from the MUD?\n\nThis permanently removes them and cannot be undone.`)) return;
+            for (const r of checked) this.connection.send('ftp_delete', { path: r.path });
+            return;
+        }
         const path = this._ftp.curFile;
-        if (!path) { const f = document.getElementById('ftp-foot'); if (f) { f.textContent = 'Open a file first to delete it.'; f.style.color = '#caa300'; } return; }
+        if (!path) { this._ftpFootMsg('Check files, or open one, to delete.', '#caa300'); return; }
         if (!window.confirm(`Delete ${path}?\n\nThis permanently removes the file from the MUD and cannot be undone.`)) return;
         this.connection.send('ftp_delete', { path });
     }
@@ -5728,7 +5744,7 @@ class WMTClient {
                   <span class="ftp-tb-sep"></span>
                   <button class="ftp-tbtn" id="ftp-newfolder" title="New folder">📁</button>
                   <button class="ftp-tbtn" id="ftp-newfile" title="New file">📝</button>
-                  <button class="ftp-tbtn" id="ftp-delete" title="Delete the open file">🗑️</button>
+                  <button class="ftp-tbtn" id="ftp-delete" title="Delete checked files (or the open file) — Del key">🗑️</button>
                   <span class="ftp-tb-sep"></span>
                   <button class="ftp-tbtn" id="ftp-local-toggle" title="Toggle a local-drive pane (Chrome/Edge)" style="display:none">🖥️</button>
                   <button class="ftp-tbtn" id="ftp-goto" title="Go to a path (e.g. one you can't reach by clicking)">📍</button>
@@ -5831,6 +5847,15 @@ class WMTClient {
         overlay.querySelector('#ftp-local-pick').addEventListener('click', (e) => { e.stopPropagation(); this._localOpenFolder(); });
         overlay.querySelector('#ftp-local-xfer').addEventListener('click', () => this._xferLocalToFtp());
         overlay.querySelector('#ftp-tree-xfer').addEventListener('click', () => this._xferFtpToLocal());
+        document.addEventListener('keydown', (e) => {   // Delete / F5 shortcuts, only while the editor is open and not typing
+            const ov = document.getElementById('ftp-modal');
+            if (!ov || !ov.classList.contains('open')) return;
+            const t = e.target;
+            const typing = t && ((t.closest && t.closest('.CodeMirror')) || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(t.type)));
+            if (typing) return;
+            if (e.key === 'F5') { e.preventDefault(); this._activePane === 'local' ? this._localRender() : this._ftpRefresh(); }
+            else if (e.key === 'Delete') { e.preventDefault(); this._activePane === 'local' ? this._localDelete() : this._ftpDelete(); }
+        });
         overlay.querySelector('.ftp-tree').addEventListener('mousedown', () => this._ftpSetActivePane('ftp'));
         overlay.querySelector('#ftp-local').addEventListener('mousedown', () => this._ftpSetActivePane('local'));
         overlay.querySelector('#ftp-home').addEventListener('click', () => { if (this._activePane === 'local') this._localGoRoot(); else this._ftpOpenDir('.'); });
