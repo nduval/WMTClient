@@ -6875,7 +6875,9 @@ function connectToMud(session) {
           token: session.token ? session.token.substring(0, 8) : null,
           user: session.userId,
           char: session.characterName,
-          reason: 'auto-reconnect; no held socket (fresh/parked) — not resurrecting'
+          reason: 'auto-reconnect; no held socket (fresh/parked) — not resurrecting',
+          clientVersion: session.clientVersion,
+          connDiag: session._connDiag   // the prior-attempt close that flipped autoReconnect (2026-06-13 trace)
         });
         session._autoReconnect = false;
         if (session.mudSocket && !session.mudSocket.destroyed) {
@@ -7174,6 +7176,7 @@ wss.on('connection', (ws, req) => {
               oldSession.explicitDisconnect = false;
               oldSession._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
               oldSession.clientVersion = data.clientVersion || 'unknown';
+              oldSession._connDiag = data.connDiag || null;
               oldSession.isWizard = isWizard;
               oldSession.clientIp = clientIp;
               if (authPacketPatchMs !== null) oldSession.packetPatchMs = authPacketPatchMs;
@@ -7295,6 +7298,7 @@ wss.on('connection', (ws, req) => {
             session.explicitDisconnect = false;
             session._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
             session.clientVersion = data.clientVersion || 'unknown';
+            session._connDiag = data.connDiag || null;
             session.isWizard = isWizard;  // Update wizard status on reconnect
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
@@ -7398,6 +7402,7 @@ wss.on('connection', (ws, req) => {
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
             session._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
             session.clientVersion = data.clientVersion || 'unknown';  // which client build (stale-code detection)
+            session._connDiag = data.connDiag || null;                // connection-attempt diary (why autoReconnect set)
             sessions.set(token, session);
             // Defer the login audit until set_server fires. At this moment
             // session.targetHost is still the default MUD_HOST (3k.org), so
@@ -7414,7 +7419,8 @@ wss.on('connection', (ws, req) => {
               char: characterName || characterId,
               wizard: isWizard,
               ip: clientIp,
-              clientVersion: session.clientVersion
+              clientVersion: session.clientVersion,
+              connDiag: session._connDiag
             });
             writeSessionLog(session, 'session', { event: 'new', user: userId, char: characterName || characterId });
 

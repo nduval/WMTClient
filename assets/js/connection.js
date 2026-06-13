@@ -7,7 +7,7 @@
 // message so the server can log which client version each session is running — so
 // when someone hits a bug that's already fixed, we can immediately see if they're
 // on stale cached code rather than guessing (2026-06-13, Nathan's idea).
-const WMT_CLIENT_VERSION = '2026-06-13a';
+const WMT_CLIENT_VERSION = '2026-06-13b';
 
 class MudConnection {
     constructor(options = {}) {
@@ -40,6 +40,16 @@ class MudConnection {
         // passive reconnect (SC4 server-side defense-in-depth). Reset after each auth.
         this._nextConnectIsAuto = false;
 
+        // Connection-attempt diary (observability, 2026-06-13). Reported to the server
+        // in the auth message so a FAILED first WS attempt — which dies in the browser
+        // before the server ever sees it, and is otherwise invisible in logs — becomes
+        // visible: its close code/reason is what flips _nextConnectIsAuto=true and makes
+        // SC4 misfire on a fresh login. Lets us see WHY instead of inferring.
+        this._connAttempts = 0;
+        this._lastConnClose = null;        // {code, reason, wasClean, opened, ms} of the prior socket close
+        this._everOpenedThisSocket = false;
+        this._connectStartedAt = 0;
+
         // Callbacks
         this.onConnect = options.onConnect || (() => {});
         this.onDisconnect = options.onDisconnect || (() => {});
@@ -59,6 +69,9 @@ class MudConnection {
             return;
         }
 
+        this._connAttempts++;
+        this._connectStartedAt = Date.now();
+        this._everOpenedThisSocket = false;
         this.onStatusChange('connecting');
         this.intentionalDisconnect = false;
         this.authenticated = false;
@@ -74,6 +87,7 @@ class MudConnection {
 
         this.socket.onopen = () => {
             this.connected = true;
+            this._everOpenedThisSocket = true;
             this.reconnectAttempts = 0;
             this.onStatusChange('authenticating');
 
@@ -88,7 +102,8 @@ class MudConnection {
                     isWizard: this.isWizard,
                     packetPatch: this.packetPatch,
                     autoReconnect: this._nextConnectIsAuto,
-                    clientVersion: (typeof WMT_CLIENT_VERSION !== 'undefined' ? WMT_CLIENT_VERSION : 'unknown')
+                    clientVersion: (typeof WMT_CLIENT_VERSION !== 'undefined' ? WMT_CLIENT_VERSION : 'unknown'),
+                    connDiag: { attempts: this._connAttempts, auto: this._nextConnectIsAuto, last: this._lastConnClose }
                 }));
                 this._nextConnectIsAuto = false;  // consumed; subsequent connects are user-initiated unless re-flagged
             } else {
@@ -101,6 +116,16 @@ class MudConnection {
         this.socket.onclose = (event) => {
             this.connected = false;
             this.authenticated = false;
+            // Diary: record why this socket closed. If it never opened, this was a
+            // pre-upgrade failure (the invisible-to-server first attempt). The next
+            // connect reports this in its auth so we can see what flipped the auto flag.
+            this._lastConnClose = {
+                code: event.code,
+                reason: (event.reason || '').slice(0, 80),
+                wasClean: event.wasClean,
+                opened: this._everOpenedThisSocket,
+                ms: this._connectStartedAt ? (Date.now() - this._connectStartedAt) : null
+            };
             this.stopKeepAlive();
 
             // Do NOT auto-reconnect a character whose MUD link was already dead when the

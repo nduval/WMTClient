@@ -425,6 +425,24 @@ def run_test_suites():
     return total_passed, unexpected_failures, details
 
 
+def print_prod_db_health():
+    """Print the latest production DB health block (written daily by
+    /opt/wmt/db-stats.py via cron). Surfaced during the deploy test phase so DB
+    health is reviewed at every deploy. Best-effort: never blocks a deploy."""
+    ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
+    host = '3.14.128.194'
+    try:
+        result = subprocess.run(
+            f'ssh -i "{ssh_key}" -o ConnectTimeout=15 ubuntu@{host} "cat /opt/wmt/db-stats/latest.txt 2>/dev/null"',
+            shell=True, capture_output=True, text=True, timeout=30
+        )
+        out = (result.stdout or '').strip()
+        print("\n=== Production database health ===")
+        print(out if out else "  (no snapshot yet — db-stats cron has not run)")
+    except Exception as e:
+        print(f"\n=== Production database health ===\n  (unavailable: {e})")
+
+
 def deploy_ionos(only_files=None):
     """Deploy PHP/JS/CSS client files to IONOS via SFTP (skips unchanged files).
     If only_files is given (list of repo-relative paths), upload exactly those
@@ -712,6 +730,7 @@ def main():
             print("\n=== Test deploy failed ===")
             sys.exit(1)
         passed, failed, details = run_test_suites()
+        print_prod_db_health()
         if failed > 0:
             print(f"\n=== {failed} test(s) failed ===")
             sys.exit(1)
@@ -738,6 +757,7 @@ def main():
         test_ok = False
         if deploy_test_server():
             passed, failed, details = run_test_suites()
+            print_prod_db_health()
             if failed == 0:
                 test_ok = True
             else:
@@ -767,6 +787,7 @@ def main():
         # this code path because tests weren't run. Use --force to override.
         if deploy_test_server():
             passed, failed, details = run_test_suites()
+            print_prod_db_health()
             if failed > 0:
                 print(f"\nWARNING: {failed} test(s) failed on sandbox.")
                 if args.force:
