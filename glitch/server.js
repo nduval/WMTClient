@@ -1859,11 +1859,10 @@ function sessionStoreTransport(urlObj) {
   const isHttps = urlObj.protocol === 'https:';
   return { mod: isHttps ? https : http, port: urlObj.port ? Number(urlObj.port) : (isHttps ? 443 : 80) };
 }
-// Snapshot cadence. Local SQLite snapshots are cheap, so the default is 5s
-// (was 30s when every snapshot was an HTTPS round-trip to IONOS). The remote
-// mirror keeps the old ~30s cadence via SNAPSHOT_MIRROR_EVERY.
-const SNAPSHOT_INTERVAL_MS = Math.max(1000, parseInt(process.env.SNAPSHOT_INTERVAL_MS || '5000', 10) || 5000);
-const SNAPSHOT_MIRROR_EVERY = Math.max(1, Math.round(30000 / SNAPSHOT_INTERVAL_MS));
+// Snapshot cadence — 30s, network-only, async (the periodic snapshot must NOT
+// touch the local disk; see persistSnapshot for why, 2026-06-13 disk-thrash
+// incident). Crash/SIGTERM persistence does the local write, once, not per-tick.
+const SNAPSHOT_INTERVAL_MS = Math.max(5000, parseInt(process.env.SNAPSHOT_INTERVAL_MS || '30000', 10) || 30000);
 const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
 const PHP_DISCORD_PROXY_URL = 'https://client.wemudtogether.com/api/discord_proxy.php';
 const PHP_AUDIT_LOG_URL = 'https://client.wemudtogether.com/api/audit_log.php';
@@ -2167,26 +2166,26 @@ async function persistAllSessions() {
 }
 
 /**
- * Periodic session snapshot. PRIMARY: synchronous local SQLite write every
- * cycle (default 5s, SNAPSHOT_INTERVAL_MS), WITH chatBuffer — local writes
- * are cheap, and the snapshot is now also the crash-recovery floor.
- * MIRROR: the IONOS PHP store gets a chat-stripped copy roughly every 30s
- * (the old cadence), fire-and-forget as before.
+ * Periodic session snapshot — lightweight, ASYNC, network-only (the original
+ * pre-2026-06-13 behavior). Runs on SNAPSHOT_INTERVAL_MS (default 30s), posts a
+ * chat-stripped payload to the IONOS store, fire-and-forget.
+ *
+ * IMPORTANT (2026-06-13 incident): do NOT do a synchronous local SQLite write
+ * here. better-sqlite3 is synchronous, so on a disk-constrained box it blocks
+ * the event loop every cycle → seconds of command lag + bursty MUD output (it
+ * killed prod responsiveness all night). The crash recovery this was meant to
+ * improve is already covered WITHOUT periodic local writes: the crash handler
+ * (uncaughtException) and the SIGTERM persist each do a one-shot local write at
+ * the moment that matters. A SIGKILL/OOM falls back to this 30s remote snapshot,
+ * same as before. Net: no live-play cost for a rare-crash floor.
  */
-let _snapshotTick = 0;
 async function persistSnapshot() {
-  const activeSessions = serializeActiveSessions(true);
+  if (!ADMIN_KEY) return;
+  const activeSessions = serializeActiveSessions(false);  // no chatBuffer — lightweight
   if (activeSessions.length === 0) return;
 
-  localStoreSave(activeSessions);
-
-  _snapshotTick++;
-  if (!ADMIN_KEY) return;
-  if (_snapshotTick % SNAPSHOT_MIRROR_EVERY !== 0) return;
-
   try {
-    const mirrorSessions = activeSessions.map(s => ({ ...s, chatBuffer: [] }));
-    const payload = JSON.stringify({ sessions: mirrorSessions });
+    const payload = JSON.stringify({ sessions: activeSessions });
     const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
     const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
