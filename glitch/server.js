@@ -203,6 +203,11 @@ if (wmtDb) {
   dbStmts.pruneOldChat = wmtDb.prepare(`
     DELETE FROM chat_messages WHERE created_at < datetime('now', '-30 days')
   `);
+  // 30-day retention for change_log too (defense-in-depth; the bulk_replace
+  // blob-drop above is the real fix, this just bounds row count). 2026-06-13.
+  dbStmts.pruneOldChangeLog = wmtDb.prepare(`
+    DELETE FROM change_log WHERE created_at < datetime('now', '-30 days')
+  `);
   // Scripts
   dbStmts.upsertScript = wmtDb.prepare(`
     INSERT OR REPLACE INTO scripts (character_id, filename, content, size, updated_at)
@@ -325,6 +330,14 @@ function decodeHtmlEntitiesIterative(s) {
 
 function dbLogChange(characterId, tableName, action, oldData, newData, source) {
   if (!wmtDb) return;
+  // 2026-06-13: bulk_replace fires on every bot class load/kill AND every browser
+  // reconnect re-sync — hundreds of items, many times a day. Storing the full
+  // before/after set each time bloated change_log to 6.7 GB (which then made the
+  // nightly backup saturate the disk for hours). Drop the blobs for bulk replaces:
+  // keep a lightweight audit row (who/what/when) but no snapshot. Targeted edits
+  // (update/create/delete — e.g. admin_api) still store full data, so the undo that
+  // actually matters is unaffected. This is what keeps the table small for good.
+  if (action === 'bulk_replace') { oldData = null; newData = null; }
   try {
     wmtDb.prepare(`
       INSERT INTO change_log (character_id, table_name, action, old_data, new_data, source, created_at)
@@ -7160,6 +7173,7 @@ wss.on('connection', (ws, req) => {
               oldSession.disconnectedAt = null;
               oldSession.explicitDisconnect = false;
               oldSession._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
+              oldSession.clientVersion = data.clientVersion || 'unknown';
               oldSession.isWizard = isWizard;
               oldSession.clientIp = clientIp;
               if (authPacketPatchMs !== null) oldSession.packetPatchMs = authPacketPatchMs;
@@ -7280,6 +7294,7 @@ wss.on('connection', (ws, req) => {
             session.disconnectedAt = null;
             session.explicitDisconnect = false;
             session._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
+            session.clientVersion = data.clientVersion || 'unknown';
             session.isWizard = isWizard;  // Update wizard status on reconnect
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
@@ -7382,6 +7397,7 @@ wss.on('connection', (ws, req) => {
             session.clientIp = clientIp;
             if (authPacketPatchMs !== null) session.packetPatchMs = authPacketPatchMs;
             session._autoReconnect = !!data.autoReconnect;  // SC4: was this an automatic reconnect?
+            session.clientVersion = data.clientVersion || 'unknown';  // which client build (stale-code detection)
             sessions.set(token, session);
             // Defer the login audit until set_server fires. At this moment
             // session.targetHost is still the default MUD_HOST (3k.org), so
@@ -7397,7 +7413,8 @@ wss.on('connection', (ws, req) => {
               user: userId,
               char: characterName || characterId,
               wizard: isWizard,
-              ip: clientIp
+              ip: clientIp,
+              clientVersion: session.clientVersion
             });
             writeSessionLog(session, 'session', { event: 'new', user: userId, char: characterName || characterId });
 
@@ -10737,6 +10754,7 @@ server.listen(PORT, async () => {
   // Prune old chat messages once on startup (30-day retention)
   if (wmtDb) {
     try { dbStmts.pruneOldChat.run(); } catch (e) {}
+    try { dbStmts.pruneOldChangeLog.run(); } catch (e) {}
   }
 
   // Periodic session snapshot — local SQLite every SNAPSHOT_INTERVAL_MS

@@ -874,6 +874,16 @@ class WMTClient {
             const serverName = mudHost.includes('3scapes') ? '3Scapes' : '3K';
             if (charName) {
                 setTimeout(() => {
+                    // Single name-send guard (2026-06-13). On a fresh login BOTH this
+                    // (onConnect, 1500ms) and the pendingReconnect "Connected to" handler
+                    // (500ms) fire ~1s apart and send the char name twice → the 2nd lands
+                    // on the password prompt → "Incorrect password" on the first login
+                    // (mimic/elminster). Debounce: ignore a 2nd name send within 4s of the
+                    // first. Real re-logins are always many seconds apart (you're in-game
+                    // between them), so this only blocks the buggy rapid double-send — and
+                    // it needs no reset state, so it can never get stuck at the name prompt.
+                    if (Date.now() - (this._lastNameSentAt || 0) < 4000) return;
+                    this._lastNameSentAt = Date.now();
                     const nameLower = charName.toLowerCase();
                     if (window.WMT_CONFIG.newMudChar) {
                         this.appendOutput(`Sending character name to ${serverName} for registration...`, 'system');
@@ -1092,10 +1102,13 @@ class WMTClient {
                 // Handle reconnect - send credentials when MUD connection is restored
                 if (this.pendingReconnect && data.message && data.message.includes('Connected to')) {
                     this.pendingReconnect = false;
-                    // Send character name after short delay
+                    // Send character name after short delay (guarded — see onConnect:
+                    // only one path sends per connection, preventing the double-send).
                     setTimeout(() => {
+                        if (Date.now() - (this._lastNameSentAt || 0) < 4000) return;  // debounce double-send (see onConnect)
                         const charName = window.WMT_CONFIG.characterName;
                         if (charName) {
+                            this._lastNameSentAt = Date.now();
                             this.appendOutput('Sending character name...', 'system');
                             this.connection.sendCommand(charName.toLowerCase());
                         }

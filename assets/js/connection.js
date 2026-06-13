@@ -3,6 +3,12 @@
  * Supports session persistence - MUD connections survive browser disconnects
  */
 
+// Client build stamp. BUMP THIS on every client (IONOS) deploy. Sent in the auth
+// message so the server can log which client version each session is running — so
+// when someone hits a bug that's already fixed, we can immediately see if they're
+// on stale cached code rather than guessing (2026-06-13, Nathan's idea).
+const WMT_CLIENT_VERSION = '2026-06-13a';
+
 class MudConnection {
     constructor(options = {}) {
         this.wsUrl = options.wsUrl || `ws://${window.location.hostname}:8080`;
@@ -81,7 +87,8 @@ class MudConnection {
                     characterName: this.characterName,
                     isWizard: this.isWizard,
                     packetPatch: this.packetPatch,
-                    autoReconnect: this._nextConnectIsAuto
+                    autoReconnect: this._nextConnectIsAuto,
+                    clientVersion: (typeof WMT_CLIENT_VERSION !== 'undefined' ? WMT_CLIENT_VERSION : 'unknown')
                 }));
                 this._nextConnectIsAuto = false;  // consumed; subsequent connects are user-initiated unless re-flagged
             } else {
