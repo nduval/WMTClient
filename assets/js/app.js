@@ -4705,15 +4705,31 @@ class WMTClient {
             li.textContent = 'No favorites yet — open a folder and click ☆ Add current.';
             ul.appendChild(li); return;
         }
-        for (const p of favs) {
+        favs.forEach((p, idx) => {
             const li = document.createElement('li'); li.className = 'ftp-fav-item';
+            li.draggable = true; li.style.cursor = 'grab'; li.title = 'Drag to reorder';
             const name = document.createElement('span'); name.className = 'ftp-fav-path';
             name.textContent = (p === '.' || p === '') ? '~ (home)' : p; name.title = 'Go to ' + name.textContent;
             name.addEventListener('click', () => { document.getElementById('ftp-goto-pop').style.display = 'none'; this._ftpAddRecent(p); this._ftpOpenDir(p); });
             const rm = document.createElement('button'); rm.className = 'ftp-fav-rm'; rm.textContent = '×'; rm.title = 'Remove favorite';
             rm.addEventListener('click', (e) => { e.stopPropagation(); this._ftpSaveFavorites(this._ftpLoadFavorites().filter(x => x !== p)); this._ftpRenderFavorites(); });
+            // Drag to reorder — move the dragged item to the drop target's slot, persist the new order.
+            li.addEventListener('dragstart', (e) => { this._ftpFavDrag = idx; li.style.opacity = '0.5'; if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; });
+            li.addEventListener('dragend', () => { li.style.opacity = ''; });
+            li.addEventListener('dragover', (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; li.style.borderTop = '2px solid var(--primary-color)'; });
+            li.addEventListener('dragleave', () => { li.style.borderTop = ''; });
+            li.addEventListener('drop', (e) => {
+                e.preventDefault(); li.style.borderTop = '';
+                const from = this._ftpFavDrag; this._ftpFavDrag = null;
+                if (from == null || from === idx) return;
+                const arr = this._ftpLoadFavorites();
+                const [moved] = arr.splice(from, 1);
+                arr.splice(idx, 0, moved);
+                this._ftpSaveFavorites(arr);
+                this._ftpRenderFavorites();
+            });
             li.appendChild(name); li.appendChild(rm); ul.appendChild(li);
-        }
+        });
     }
     _ftpGotoSubmit() {
         const pop = document.getElementById('ftp-goto-pop'); if (pop) pop.style.display = 'none';   // always close on Go
