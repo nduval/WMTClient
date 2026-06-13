@@ -4831,12 +4831,12 @@ class WMTClient {
     // Additive — the only FTP-side hooks are _editSrc tagging + the _ftpSave route. ──
     async _ftpToggleLocalPane() {
         const pane = document.getElementById('ftp-local');
-        const grid = document.querySelector('#ftp-modal .ftp-grid');
+        const grid = document.querySelector('#ftp-win .ftp-grid');
         if (!pane || !grid) return;
-        if (pane.style.display !== 'none') { pane.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); document.querySelectorAll('#ftp-modal .ftp-pane-foot').forEach(f => f.style.display = 'none'); }
+        if (pane.style.display !== 'none') { pane.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); document.querySelectorAll('#ftp-win .ftp-pane-foot').forEach(f => f.style.display = 'none'); }
         else {
             pane.style.display = ''; grid.classList.add('local-on'); this._ftpSetActivePane('local');
-            document.querySelectorAll('#ftp-modal .ftp-pane-foot').forEach(f => f.style.display = 'flex');   // transfer bars need both panes
+            document.querySelectorAll('#ftp-win .ftp-pane-foot').forEach(f => f.style.display = 'flex');   // transfer bars need both panes
             if (!this._local || !this._local.dir) await this._localOpenLast();
             else this._localRender();
             this._ftpUpdateXfer();
@@ -4846,7 +4846,7 @@ class WMTClient {
     // The highlighted pane is what the shared toolbar (Home, Refresh, …) acts on.
     _ftpSetActivePane(which) {
         this._activePane = which;
-        const tree = document.querySelector('#ftp-modal .ftp-tree');
+        const tree = document.querySelector('#ftp-win .ftp-tree');
         const local = document.getElementById('ftp-local');
         if (tree) tree.classList.toggle('pane-active', which === 'ftp');
         if (local) local.classList.toggle('pane-active', which === 'local');
@@ -5344,7 +5344,7 @@ class WMTClient {
     // Light/dark editor theme, remembered per browser (localStorage). Applies a
     // class to the editor wrap; the CSS retunes CM background + token colors.
     _ftpApplyTheme() {
-        const wrap = document.querySelector('#ftp-modal .ftp-edit-wrap');
+        const wrap = document.querySelector('#ftp-win .ftp-edit-wrap');
         if (wrap) wrap.classList.toggle('ftp-light', !!this._ftpLight);
         const b = document.getElementById('ftp-theme');
         if (b) b.textContent = this._ftpLight ? '🌙 Dark' : '☀ Light';
@@ -5848,8 +5848,8 @@ class WMTClient {
         overlay.querySelector('#ftp-local-xfer').addEventListener('click', () => this._xferLocalToFtp());
         overlay.querySelector('#ftp-tree-xfer').addEventListener('click', () => this._xferFtpToLocal());
         document.addEventListener('keydown', (e) => {   // Delete / F5 shortcuts, only while the editor is open and not typing
-            const ov = document.getElementById('ftp-modal');
-            if (!ov || !ov.classList.contains('open')) return;
+            const ov = document.getElementById('ftp-modal'), win = document.getElementById('ftp-win');
+            if (!((ov && ov.classList.contains('open')) || (win && win.classList.contains('ftp-dock')))) return;   // float OR docked
             const t = e.target;
             const typing = t && ((t.closest && t.closest('.CodeMirror')) || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(t.type)));
             if (typing) return;
