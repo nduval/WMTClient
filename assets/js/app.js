@@ -4609,10 +4609,11 @@ class WMTClient {
         this._ftp.cwd = data.path;
         if (!this._ftp.mtimes) this._ftp.mtimes = {};
         this._ftpRenderBreadcrumb();
-        const ul = document.getElementById('ftp-filelist'); ul.innerHTML = '';
+        const ul = document.getElementById('ftp-filelist'); ul.innerHTML = ''; this._ftpRows = [];
         const parent = this._ftpParentPath(data.path);
         if (parent !== null) {   // up-row, parity with the local pane
             const up = document.createElement('li'); up.className = 'ftp-item ftp-dir';
+            up.appendChild(this._paneSpacer());
             const n = document.createElement('span'); n.className = 'ftp-name'; n.textContent = '📁 ..'; up.appendChild(n);
             up.addEventListener('click', () => this._ftpOpenDir(parent));
             ul.appendChild(up);
@@ -4624,10 +4625,17 @@ class WMTClient {
         for (const e of entries) {
             const li = document.createElement('li');
             li.className = 'ftp-item ' + (e.type === 'dir' ? 'ftp-dir' : 'ftp-file');
+            const full = this._ftpJoin(data.path, e.name);
+            if (e.type === 'file') {
+                const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'ftp-check';
+                cb.addEventListener('click', (ev) => ev.stopPropagation());
+                cb.addEventListener('change', () => this._ftpUpdateXfer());
+                li.appendChild(cb);
+                this._ftpRows.push({ name: e.name, path: full, cb });
+            } else { li.appendChild(this._paneSpacer()); }
             const nm = document.createElement('span'); nm.className = 'ftp-name';
             nm.textContent = (e.type === 'dir' ? '📁 ' : '📄 ') + e.name;
             li.appendChild(nm);
-            const full = this._ftpJoin(data.path, e.name);
             if (e.type === 'file') {
                 const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(e.size); li.appendChild(sz);
                 this._ftp.mtimes[full] = e.modifiedAt || null;   // remember the FTP last-modified for the editor header
@@ -4635,6 +4643,7 @@ class WMTClient {
             li.addEventListener('click', () => { e.type === 'dir' ? this._ftpOpenDir(full) : this._ftpOpenFile(full); });
             ul.appendChild(li);
         }
+        this._ftpUpdateXfer();
     }
 
     _ftpRenderBreadcrumb() {
@@ -4789,6 +4798,12 @@ class WMTClient {
     _ftpOpenFile(path) { if (!this._ftpConfirmDiscard()) return; document.getElementById('ftp-edit-status').textContent = 'Loading…'; this.connection.send('ftp_get', { path }); }
 
     _onFtpFile(data) {
+        if (this._ftpXfer && this._ftpXfer.toLocal) {   // this fetch is a transfer to the local pane, not an editor open
+            const x = this._ftpXfer; this._ftpXfer = null;
+            this._localWriteFile(x.dir, x.name, typeof data.content === 'string' ? data.content : '')
+                .then(() => { if (this._ftpDlQueue) { this._ftpDlQueue.shift(); this._ftpDlNext(); } });
+            return;
+        }
         if (!this._ftp) return;
         this._editSrc = 'ftp';   // the open file is now an FTP file (Save → ftp_put)
         this._ftp.curFile = data.path;
@@ -4818,11 +4833,13 @@ class WMTClient {
         const pane = document.getElementById('ftp-local');
         const grid = document.querySelector('#ftp-modal .ftp-grid');
         if (!pane || !grid) return;
-        if (pane.style.display !== 'none') { pane.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); }
+        if (pane.style.display !== 'none') { pane.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); document.querySelectorAll('#ftp-modal .ftp-pane-foot').forEach(f => f.style.display = 'none'); }
         else {
             pane.style.display = ''; grid.classList.add('local-on'); this._ftpSetActivePane('local');
+            document.querySelectorAll('#ftp-modal .ftp-pane-foot').forEach(f => f.style.display = 'flex');   // transfer bars need both panes
             if (!this._local || !this._local.dir) await this._localOpenLast();
             else this._localRender();
+            this._ftpUpdateXfer();
         }
         if (this._ftpCM) this._ftpCM.refresh();
     }
@@ -4890,28 +4907,36 @@ class WMTClient {
         try { for await (const [name, h] of this._local.dir.entries()) (h.kind === 'directory' ? dirs : files).push([name, h]); }
         catch (e) { ul.innerHTML = '<li class="ftp-item"><span class="ftp-name">Could not read folder.</span></li>'; return; }
         dirs.sort((a, b) => a[0].localeCompare(b[0])); files.sort((a, b) => a[0].localeCompare(b[0]));
-        ul.innerHTML = '';
+        ul.innerHTML = ''; this._localRows = [];
         if (this._local.stack.length) {   // up-row, like a file manager — keeps the toolbar uncluttered
             const li = document.createElement('li'); li.className = 'ftp-item ftp-dir';
+            li.appendChild(this._paneSpacer());
             const n = document.createElement('span'); n.className = 'ftp-name'; n.textContent = '📁 ..'; li.appendChild(n);
             li.addEventListener('click', () => { this._local.dir = this._local.stack.pop(); this._localRender(); });
             ul.appendChild(li);
         }
         for (const [name, h] of dirs) {
             const li = document.createElement('li'); li.className = 'ftp-item ftp-dir';
+            li.appendChild(this._paneSpacer());
             const n = document.createElement('span'); n.className = 'ftp-name'; n.textContent = '📁 ' + name; li.appendChild(n);
             li.addEventListener('click', () => { this._local.stack.push(this._local.dir); this._local.dir = h; this._localRender(); });
             ul.appendChild(li);
         }
         for (const [name, h] of files) {
             const li = document.createElement('li'); li.className = 'ftp-item ftp-file';
+            const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'ftp-check';
+            cb.addEventListener('click', (e) => e.stopPropagation());
+            cb.addEventListener('change', () => this._localUpdateXfer());
+            li.appendChild(cb);
             const n = document.createElement('span'); n.className = 'ftp-name'; n.textContent = '📄 ' + name; li.appendChild(n);
             let size = 0; try { size = (await h.getFile()).size; } catch (e) {}
             const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(size); li.appendChild(sz);
             li.addEventListener('click', () => this._localOpenFile(h));
             ul.appendChild(li);
+            this._localRows.push({ name, handle: h, cb });
         }
         if (!dirs.length && !files.length) ul.innerHTML = '<li class="ftp-item"><span class="ftp-name" style="color:var(--text-muted)">(empty)</span></li>';
+        this._localUpdateXfer();
     }
     async _localOpenFile(handle) {
         if (!this._ftpConfirmDiscard()) return;
@@ -4991,6 +5016,53 @@ class WMTClient {
         }
         this._local.dir = dir; this._local.stack = stack;
         this._ftpSetActivePane('local'); this._localRender();
+    }
+    // ── Transfer: checked files cross to the other pane's current folder ──
+    _paneSpacer() { const s = document.createElement('span'); s.className = 'ftp-check-spacer'; return s; }
+    _localUpdateXfer() {
+        const n = (this._localRows || []).filter(r => r.cb.checked).length;
+        const lbl = document.getElementById('ftp-local-selcount'); if (lbl) lbl.textContent = n + ' selected';
+        const btn = document.getElementById('ftp-local-xfer'); if (btn) btn.disabled = !n || !(this._ftp && this._ftp.connected);
+    }
+    _ftpUpdateXfer() {
+        const n = (this._ftpRows || []).filter(r => r.cb.checked).length;
+        const lbl = document.getElementById('ftp-tree-selcount'); if (lbl) lbl.textContent = n + ' selected';
+        const btn = document.getElementById('ftp-tree-xfer'); if (btn) btn.disabled = !n || !(this._local && this._local.dir);
+    }
+    async _xferLocalToFtp() {
+        if (!this._ftp || !this._ftp.connected) { this._ftpFootMsg('Connect FTP first.', '#caa300'); return; }
+        const sel = (this._localRows || []).filter(r => r.cb.checked);
+        if (!sel.length) return;
+        if (!window.confirm('Copy ' + sel.length + ' file(s) to the FTP folder ' + (this._ftp.cwd || '.') + '?')) return;
+        let sent = 0;
+        for (const r of sel) {
+            let content; try { content = await (await r.handle.getFile()).text(); }
+            catch (e) { this._ftpFootMsg('Read failed: ' + r.name, '#ff6666'); continue; }
+            this.connection.send('ftp_put', { path: this._ftpJoin(this._ftp.cwd || '.', r.name), content });
+            sent++;
+        }
+        this._ftpFootMsg('Copying ' + sent + ' file(s) to FTP …');   // _onFtpSaved re-lists FTP as each lands
+    }
+    _xferFtpToLocal() {
+        if (!this._local || !this._local.dir) { this._ftpFootMsg('Open a local folder first.', '#caa300'); return; }
+        const sel = (this._ftpRows || []).filter(r => r.cb.checked);
+        if (!sel.length) return;
+        if (!window.confirm('Copy ' + sel.length + ' file(s) to your local folder?')) return;
+        this._ftpDlQueue = sel.map(r => ({ path: r.path, name: r.name }));
+        this._ftpDlDir = this._local.dir;
+        this._ftpDlTotal = this._ftpDlQueue.length;
+        this._ftpDlNext();
+    }
+    _ftpDlNext() {   // download FTP files one at a time over the WS, writing each to disk
+        if (!this._ftpDlQueue || !this._ftpDlQueue.length) { this._ftpFootMsg('Copied ' + (this._ftpDlTotal || '') + ' file(s) to local.'); this._localRender(); return; }
+        const item = this._ftpDlQueue[0];
+        this._ftpXfer = { toLocal: true, name: item.name, dir: this._ftpDlDir };
+        this._ftpFootMsg('Downloading ' + item.name + ' …');
+        this.connection.send('ftp_get', { path: item.path });
+    }
+    async _localWriteFile(dir, name, content) {
+        try { const h = await dir.getFileHandle(name, { create: true }); const w = await h.createWritable(); await w.write(content); await w.close(); }
+        catch (e) { this._ftpFootMsg('Local write failed: ' + name + ' (' + (e.message || e) + ')', '#ff6666'); }
     }
 
     _ftpUpdateGutter() {
@@ -5543,7 +5615,13 @@ class WMTClient {
         .ftp-fav-empty { list-style:none; font-size:.8em; color:var(--text-muted); padding:4px 6px; }
         .ftp-crumb { color:var(--primary-color); cursor:pointer; } .ftp-crumb:hover { text-decoration:underline; }
         .ftp-list { list-style:none; margin:0; padding:4px; }
-        .ftp-item { display:flex; align-items:baseline; gap:8px; padding:3px 6px; border-radius:4px; cursor:pointer; font-size:.85em; }
+        .ftp-item { display:flex; align-items:center; gap:8px; padding:3px 6px; border-radius:4px; cursor:pointer; font-size:.85em; }
+        .ftp-check { flex:0 0 auto; margin:0; cursor:pointer; }
+        .ftp-check-spacer { flex:0 0 auto; width:13px; }
+        .ftp-pane-foot { display:flex; align-items:center; gap:8px; padding:4px 8px; border-top:1px solid var(--border-color); font-size:.72em; color:var(--text-muted); }
+        .ftp-xfer-btn { background:var(--bg-darker); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; padding:1px 12px; font-size:1.05em; line-height:1.3; color:var(--primary-color); }
+        .ftp-xfer-btn:disabled { opacity:.35; cursor:default; }
+        .ftp-xfer-btn:not(:disabled):hover { border-color:var(--primary-color); }
         .ftp-item:hover { background:rgba(255,255,255,.06); } .ftp-dir { color:var(--primary-color); }
         .ftp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .ftp-size { flex:0 0 auto; color:var(--text-muted); font-size:.82em; font-variant-numeric:tabular-nums; }
@@ -5660,10 +5738,12 @@ class WMTClient {
                   <div class="ftp-local" id="ftp-local" style="display:none">
                     <div class="ftp-pane-head" id="ftp-local-head" title="Local files — click to make this pane active">🖥️ <span id="ftp-local-path" class="ftp-pane-path">Open a local folder…</span><button class="ftp-pick-btn" id="ftp-local-pick" title="Choose a different folder">📂</button></div>
                     <ul class="ftp-list" id="ftp-local-list"></ul>
+                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-local-xfer" title="Copy the checked files to the FTP folder" disabled>→</button><span class="ftp-sel-count" id="ftp-local-selcount">0 selected</span></div>
                   </div>
                   <div class="ftp-tree">
                     <div class="ftp-pane-head" id="ftp-tree-head" title="FTP files — click to make this pane active">☁ FTP</div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
+                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-tree-xfer" title="Copy the checked files to your local folder" disabled>←</button><span class="ftp-sel-count" id="ftp-tree-selcount">0 selected</span></div>
                   </div>
                   <div class="ftp-divider" id="ftp-divider" title="Drag to resize the file pane"></div>
                   <div id="ftp-goto-pop" class="ftp-pop" style="display:none">
@@ -5749,6 +5829,8 @@ class WMTClient {
         if ('showDirectoryPicker' in window) { const lt = overlay.querySelector('#ftp-local-toggle'); if (lt) lt.style.display = ''; }  // Chrome/Edge only
         overlay.querySelector('#ftp-local-toggle').addEventListener('click', () => this._ftpToggleLocalPane());
         overlay.querySelector('#ftp-local-pick').addEventListener('click', (e) => { e.stopPropagation(); this._localOpenFolder(); });
+        overlay.querySelector('#ftp-local-xfer').addEventListener('click', () => this._xferLocalToFtp());
+        overlay.querySelector('#ftp-tree-xfer').addEventListener('click', () => this._xferFtpToLocal());
         overlay.querySelector('.ftp-tree').addEventListener('mousedown', () => this._ftpSetActivePane('ftp'));
         overlay.querySelector('#ftp-local').addEventListener('mousedown', () => this._ftpSetActivePane('local'));
         overlay.querySelector('#ftp-home').addEventListener('click', () => { if (this._activePane === 'local') this._localGoRoot(); else this._ftpOpenDir('.'); });
