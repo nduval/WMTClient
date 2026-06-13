@@ -4806,7 +4806,7 @@ class WMTClient {
         if (pane.style.display !== 'none') { pane.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); }
         else {
             pane.style.display = ''; grid.classList.add('local-on'); this._ftpSetActivePane('local');
-            if (!this._local || !this._local.dir) await this._localOpenFolder();
+            if (!this._local || !this._local.dir) await this._localOpenLast();
             else this._localRender();
         }
         if (this._ftpCM) this._ftpCM.refresh();
@@ -4822,11 +4822,49 @@ class WMTClient {
     _localGoRoot() { if (this._local && this._local.root) { this._local.dir = this._local.root; this._local.stack = []; this._localRender(); } }
     async _localOpenFolder() {
         if (!('showDirectoryPicker' in window)) return;
-        let dir; try { dir = await window.showDirectoryPicker(); } catch (e) { return; }   // user cancelled the picker
+        let dir; try { dir = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' }); } catch (e) { return; }   // user cancelled the picker
         this._local = { root: dir, dir, stack: [], curHandle: null, curName: null };
+        try { await this._localSaveHandle(dir); } catch (e) {}   // remember it for next time
         this._ftpSetActivePane('local');
         this._localRender();
     }
+    // Reopen the last-used local folder across sessions; the handle lives in IndexedDB.
+    async _localOpenLast() {
+        let handle = null;
+        try { handle = await this._localRestoreHandle(); } catch (e) {}
+        if (handle) {
+            try {
+                if (await this._localVerifyPermission(handle)) {
+                    this._local = { root: handle, dir: handle, stack: [], curHandle: null, curName: null };
+                    this._ftpSetActivePane('local');
+                    this._localRender();
+                    return;
+                }
+            } catch (e) {}
+        }
+        await this._localOpenFolder();   // first time, or permission/folder gone → show the picker
+    }
+    async _localVerifyPermission(handle) {
+        const opts = { mode: 'readwrite' };
+        if ((await handle.queryPermission(opts)) === 'granted') return true;   // often silent in current Chrome
+        return (await handle.requestPermission(opts)) === 'granted';            // else one "allow" click
+    }
+    _idbHandle(op, value) {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('wmt-ftp', 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('handles');
+            req.onerror = () => reject(req.error);
+            req.onsuccess = () => {
+                const tx = req.result.transaction('handles', op === 'get' ? 'readonly' : 'readwrite');
+                const store = tx.objectStore('handles');
+                const r = op === 'get' ? store.get('localDir') : store.put(value, 'localDir');
+                r.onsuccess = () => resolve(r.result);
+                r.onerror = () => reject(r.error);
+            };
+        });
+    }
+    _localSaveHandle(handle) { return this._idbHandle('put', handle); }
+    _localRestoreHandle() { return this._idbHandle('get'); }
     async _localRender() {
         const ul = document.getElementById('ftp-local-list');
         if (!ul || !this._local || !this._local.dir) return;
