@@ -1,5 +1,18 @@
 # 005 — Session-resilience identity model & the deploy lockout (2026-06-02)
 
+> **ADDENDUM (2026-06-13, commit a7f0573):** the persist TRANSPORT was rebuilt.
+> The PHP store (`api/persistent_sessions.php`) is no longer primary — session
+> state now persists synchronously to a local SQLite table (`persisted_sessions`
+> in wmt.db); IONOS is a best-effort mirror + restore fallback. This unlocked a
+> crash handler (review C2): uncaughtException → synchronous local persist →
+> exit(1) → systemd restart → bridge resume, so a server CRASH (not just a clean
+> deploy) is now a blip. Snapshots 5s. Identity model below is UNCHANGED — the
+> bridgeToken invariant still governs resume; only the storage layer moved.
+> Gated by `test_crash_persist.js`. NOTE: the name-echo on resume (the mimic/
+> elminster "There is no reason to 'X' here." class) is a SEPARATE, still-open
+> cosmetic issue — see [[bug_resume_name_prompt_autologin_suppressed]] (elminster
+> restore-path sub-case recurred on this deploy; not a regression from it).
+
 > **ADDENDUM (2026-06-12, commit 0963dfa):** the browser-wins adopt path
 > (`adoptPersistedBridgeToken`, added for G2/002) now carries the persisted
 > `actualMudChar` along with the bridgeToken. Without it, a browser that

@@ -1511,6 +1511,24 @@ function detectMudEvents(session, rawLine) {
       // password_fail (retry) or a new session.
       if (p.atNamePrompt === true && !session._nameCaptured) {
         session._atNamePrompt = true;
+
+        // Deferred relink (the evidence-based name send). A bridge-resumed
+        // socket was resumed SILENTLY and armed; now the MUD is ACTUALLY showing
+        // its name prompt → the player really is parked at the prompt (genuinely
+        // dropped during a deploy/blip), so NOW it's correct to let the browser
+        // type the char name. One-shot, within the armed window. This is the
+        // ONLY path that types a name on a resume — so an in-game char (which
+        // never shows this prompt) never gets its name typed into the game.
+        if (session._relinkOnNamePrompt && session._relinkArmedUntil && Date.now() < session._relinkArmedUntil) {
+          session._relinkOnNamePrompt = false;
+          logSessionEvent('AUTOLOGIN_RELINK', {
+            token: session.token ? session.token.substring(0, 8) : null,
+            user: session.userId,
+            char: session.characterName,
+            reason: 'real MUD name prompt seen after silent resume — relinking'
+          });
+          dispatchRelinkSessionNew(session);
+        }
       }
       if (p.atNamePrompt === false) session._atNamePrompt = false;
 
@@ -6733,6 +6751,24 @@ function processLine(session, line) {
 }
 
 /**
+ * Drive the relink: tell the browser to run its onConnect (type char name +
+ * password) and replay chat. Used for a genuine NEW login, and for the deferred
+ * relink when a bridge-resumed socket actually presents the MUD name prompt.
+ * Never call this on a resume unless the MUD really showed a name prompt — that
+ * is what prevents typing the char name into a live game (the "There is no
+ * reason to 'X' here." echo).
+ */
+function dispatchRelinkSessionNew(session) {
+  session._bridgeModeInit = false;
+  session._relinkOnNamePrompt = false;
+  sendToClient(session, { type: 'session_new' });
+  if (session.chatBuffer && session.chatBuffer.length > 0) {
+    broadcastChatReplay(session, { type: 'chat_clear' });
+    for (const msg of session.chatBuffer) broadcastChatReplay(session, msg);
+  }
+}
+
+/**
  * Create and connect MUD socket for a session
  */
 function connectToMud(session) {
@@ -6835,45 +6871,48 @@ function connectToMud(session) {
         }
         return;
       }
-      if (session._autoReconnect && !mudLoggedIn) {
-        // bridgeResumed && !mudLoggedIn: a held socket dropped to the name prompt
-        // (deploy/blip). Relink the player — the session_new dispatch below sends
-        // the char name/password instead of abandoning the connection.
-        logSessionEvent('AUTOLOGIN_RELINK', {
+      // bridgeResumed && !mudLoggedIn: the bridge HELD a live socket, so the
+      // player is mid-session. A false mudLoggedIn here is almost always stale
+      // login-state tracking across a rekey/restore race — NOT the char actually
+      // sitting at a name prompt. We must NOT type the char name on that guess:
+      // doing so types it into the running game ("There is no reason to 'X'
+      // here." — mimic 2026-06-12, elminster 2026-06-13). Instead RESUME
+      // SILENTLY and ARM a name-prompt watcher (detectMudEvents). We relink —
+      // i.e. let the browser type the name — ONLY if the MUD actually presents
+      // its name prompt, which an in-game char never does. The genuinely-parked
+      // case (mimic 2026-06-08) still relinks, now driven by the real prompt
+      // instead of a guess. This is the evidence-based fix for the whole class.
+      if (bridgeResumed) {
+        session._bridgeModeInit = false;
+        session._relinkOnNamePrompt = true;
+        session._relinkArmedUntil = Date.now() + 20000;
+        if (session.characterName) {
+          session._suppressAutoLogin = session.characterName.toLowerCase();
+          session._suppressAutoLoginUntil = Date.now() + 8000;
+        }
+        logSessionEvent('RESUME_SILENT_ARMED', {
           token: session.token ? session.token.substring(0, 8) : null,
           user: session.userId,
           char: session.characterName,
-          reason: 'auto-reconnect; bridge held the socket — relinking after deploy/blip'
+          note: 'bridge held socket; resumed silently — will relink only on a real name prompt'
         });
+        sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });
+        if (session.chatBuffer.length > 0) {
+          broadcastChatReplay(session, { type: 'chat_clear' });
+          for (const msg of session.chatBuffer) broadcastChatReplay(session, msg);
+        }
+        return;   // resumed path complete — never fall through to a name send
       }
-      // New connection — notify client
+      // Genuinely fresh connection — no socket was held. Notify + log in.
       sendToClient(session, {
         type: 'system',
         message: `Connected to ${session.targetHost}:${session.targetPort}!`
       });
-      // Bridge mode: dispatch session_new in two cases —
-      //   1. Fresh bridgeMode auth (session._bridgeModeInit). The browser
-      //      ran the silent bridgeMode init, expects session_new for the
-      //      onConnect (char name + password) flow.
-      //   2. Bridge had a TCP socket but MUD was at name prompt (bridgeResumed
-      //      && !mudLoggedIn). The browser is waiting for session_new or
-      //      session_resumed; we route it through the auto-login path so the
-      //      char name actually gets typed instead of MIP handshake hitting
-      //      the name prompt as junk (the original beowulf bug, 2026-05-06).
-      // Suppression: comment elsewhere warned about double-send if a client
-      // already ran onConnect — that scenario is gated by _bridgeModeInit
-      // being true on the FIRST connect, false after. For (2), the browser
-      // never ran onConnect for this session yet (silent bridgeMode init).
-      if (BRIDGE_URL && (session._bridgeModeInit || (bridgeResumed && !mudLoggedIn))) {
-        session._bridgeModeInit = false;
-        sendToClient(session, { type: 'session_new' });
-        // Replay chat history from DB so ChatMon has previous messages
-        if (session.chatBuffer.length > 0) {
-          broadcastChatReplay(session, { type: 'chat_clear' });
-          for (const msg of session.chatBuffer) {
-            broadcastChatReplay(session, msg);
-          }
-        }
+      // Fresh bridgeMode auth: the browser ran the silent init and expects
+      // session_new to drive onConnect (char name + password). This is a real
+      // new login (no socket held), so typing the name is correct here.
+      if (BRIDGE_URL && session._bridgeModeInit) {
+        dispatchRelinkSessionNew(session);
       }
     } else {
       // Bridge resume succeeded — existing MUD connection restored.
@@ -6883,6 +6922,12 @@ function connectToMud(session) {
         session._suppressAutoLogin = session.characterName.toLowerCase();
         session._suppressAutoLoginUntil = Date.now() + 5000;
       }
+      // Uniform safety: even on a confident in-game resume, arm the name-prompt
+      // watcher. If the MUD ever DOES present a name prompt after this (the
+      // confidence was wrong), the watcher relinks instead of leaving the player
+      // stuck. Harmless when in-game — an in-game char never shows the prompt.
+      session._relinkOnNamePrompt = true;
+      session._relinkArmedUntil = Date.now() + 20000;
       // New clients were silent (bridgeMode). Send session_resumed so they
       // show "Session resumed" message, enable MIP, run startup script.
       sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });

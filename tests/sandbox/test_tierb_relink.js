@@ -1,23 +1,24 @@
 /**
- * Tier B relink test (2026-06-08) — the mimic deploy-boot fix.
+ * Resume name-send discipline test (2026-06-13 rewrite; was the Tier B relink test).
  * See memory: bug_resume_name_prompt_autologin_suppressed, docs/connection-issues/005.
  *
- * Faithful deploy scenario: a session has a live bridge socket; wmt-server restarts;
- * the browser AUTO-reconnects (autoReconnect:true) and the bridge-resumed socket is
- * NOT logged in (the char dropped to a name prompt / never re-resolved). The old SC4
- * code destroyed the socket here → booted the player (mimic). The fix RELINKS because
- * the bridge was holding the socket (bridgeResumed=true).
+ * THE RULE: a bridge-resumed socket must NEVER make the browser type the char
+ * name into the running game. We relink (send the name) ONLY when the MUD
+ * actually shows its name prompt. This kills the "There is no reason to 'X'
+ * here." echo (mimic 06-12, elminster 06-13) while keeping the genuinely-parked
+ * relink (mimic 06-08) working — now driven by the REAL prompt, not a guess.
  *
- * The char is deliberately NOT logged into the mock MUD, so _actualMudChar stays null
- * regardless of the restore-vs-browser race → mudLoggedIn=false deterministically; and
- * the bridge holds the socket across the restart → bridgeResumed=true. That's exactly
- * the SC4 decision point.
+ * Scenario: live bridge socket, char NOT logged in (mudLoggedIn=false), server
+ * restarts, browser AUTO-reconnects → bridge-resumed, not logged in. The OLD
+ * code immediately dispatched session_new → browser typed the name → the echo.
  *
- *   T1  server logs AUTOLOGIN_RELINK (not AUTOLOGIN_SUPPRESSED)
- *   T2  the bridge does NOT close the MUD socket (player NOT booted)
- *   T3  the browser receives session_new (the relink prompt)
+ *   T1  resume is SILENT: RESUME_SILENT_ARMED logged, NO AUTOLOGIN_RELINK yet,
+ *       browser got session_resumed and NOT a login-flow session_new (no name typed)
+ *   T2  the bridge did NOT close the MUD socket (player not booted)
+ *   --- then the MUD actually presents a name prompt (mock __nameprompt) ---
+ *   T3  NOW the server relinks: AUTOLOGIN_RELINK logged + browser gets session_new
  *
- * On the OLD server.js all three fail (SUPPRESSED + socket destroyed + no session_new).
+ * On the pre-2026-06-13 server.js T1 fails (it relinks immediately → name typed).
  * Run: sudo -n node test_tierb_relink.js
  */
 const http = require('http');
@@ -86,6 +87,13 @@ async function main() {
     // Live bridge socket, NOT logged in (so _actualMudChar stays null deterministically).
     cA = await connect(); await authMud(cA, A);
     if (!await waitFor(() => new RegExp(`MUD connected:.*\\(${Ashort}\\)`).test(blob()), 9000)) return bad('setup: MUD connected'), done();
+    // Log into the mock MUD so its held socket is in the logged-in state — needed
+    // so the post-resume __nameprompt is parsed as a TEST COMMAND, not as a name
+    // typed at the mock's own login prompt. _actualMudChar is NOT persisted (the
+    // SIGKILL below skips graceful persist), so the resumed session still has
+    // mudLoggedIn=false — exactly the elminster "in-game but untracked" case.
+    cA.send('command', { command: 'TierBRunner' }); await sleep(600);
+    cA.send('command', { command: 'password' }); await sleep(1500);
     try { cA.ws.close(); } catch (e) {}
 
     // Restart wmt-server. Kill it HARD (no graceful persist) so restore can't
@@ -100,21 +108,32 @@ async function main() {
     const slMark = slob().length, blMark = blob().length;
 
     // Browser AUTO-reconnects (autoReconnect:true) → bridge-resumed socket, not
-    // logged in → the SC4 decision point.
+    // logged in → the resume decision point. Only a session_new WITHOUT
+    // bridgeMode types the name (the auth handshake sends a silent bridgeMode one).
+    const loginNew = (m) => m.type === 'session_new' && !m.bridgeMode;
     cC = await connect(); await authMud(cC, A, { autoReconnect: true });
-    await sleep(2500);
+    await sleep(2800);
 
-    const stail = slob().slice(slMark);
+    const stail1 = slob().slice(slMark);
     const btail = blob().slice(blMark);
 
-    if (/AUTOLOGIN_RELINK/.test(stail) && !/AUTOLOGIN_SUPPRESSED/.test(stail)) ok('T1: server RELINKED the bridge-held socket (no SUPPRESSED)');
-    else bad('T1: relink not suppress', `RELINK=${/AUTOLOGIN_RELINK/.test(stail)} SUPPRESSED=${/AUTOLOGIN_SUPPRESSED/.test(stail)}\n${stail.slice(0, 500)}`);
+    // T1: SILENT resume — name NOT typed (no login-flow session_new), armed for a real prompt.
+    if (/RESUME_SILENT_ARMED/.test(stail1) && !/AUTOLOGIN_RELINK/.test(stail1) &&
+        cC.msgs.some(m => m.type === 'session_resumed') && !cC.msgs.some(loginNew)) {
+      ok('T1: bridge-resumed socket resumed SILENTLY — name NOT typed into the game');
+    } else {
+      bad('T1: silent resume', `armed=${/RESUME_SILENT_ARMED/.test(stail1)} relink=${/AUTOLOGIN_RELINK/.test(stail1)} resumedMsg=${cC.msgs.some(m=>m.type==='session_resumed')} loginNew=${cC.msgs.some(loginNew)}`);
+    }
 
     if (!new RegExp(`MUD (end|closed) \\(${Ashort}\\)`).test(btail)) ok('T2: bridge did NOT close the MUD socket — player not booted');
     else bad('T2: socket survives', `bridge closed the socket:\n${btail.slice(0, 400)}`);
 
-    if (cC.msgs.some(m => m.type === 'session_new')) ok('T3: browser received session_new (relink prompt)');
-    else bad('T3: session_new sent', `client msgs: ${JSON.stringify(cC.msgs.map(m => m.type))}`);
+    // Now the MUD ACTUALLY shows a name prompt (genuinely parked). NOW relink.
+    const slMark2 = slob().length;
+    cC.send('command', { command: '__nameprompt' });
+    const relinked = await waitFor(() => /AUTOLOGIN_RELINK/.test(slob().slice(slMark2)) && cC.msgs.some(loginNew), 6000);
+    if (relinked) ok('T3: a REAL name prompt drove the relink — AUTOLOGIN_RELINK + session_new');
+    else bad('T3: prompt-driven relink', `relink=${/AUTOLOGIN_RELINK/.test(slob().slice(slMark2))} loginNew=${cC.msgs.some(loginNew)}`);
 
   } finally { done(); }
 
