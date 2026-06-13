@@ -2161,6 +2161,11 @@ class WMTClient {
         this._ensureChatResizeHandle();
 
         if (mode === 'docked') {
+            // Top-dock chat and a side-docked FTP editor can't share this flat flexbox
+            // (one wants a column, the other a row). They're mutually exclusive: choosing
+            // chat-top floats the FTP so the layout never breaks (2026-06-13).
+            const fw = document.getElementById('ftp-win');
+            if (fw && fw.classList.contains('ftp-dock')) this._ftpSetDock('float');
             chatWindow.classList.add('docked');
             terminalArea?.classList.add('chat-docked');
             chatWindow.style.top = '';
@@ -5123,6 +5128,9 @@ class WMTClient {
         try { localStorage.setItem('wmt_ftp_dock', mode); } catch (e) {}
 
         if (mode === 'docked-right') {
+            // Mirror guard: FTP-side and chat-top conflict. Choosing FTP-dock here
+            // floats ChatMon if it was top-docked, so the layout never breaks.
+            if (this.chatWindowMode === 'docked') this.setChatMode('floating');
             win.style.left = win.style.top = win.style.height = '';   // drop floating geometry
             win.classList.remove('modal');                            // shed base .modal styling
             win.classList.add('ftp-dock', 'dock-right');
