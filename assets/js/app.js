@@ -4978,6 +4978,20 @@ class WMTClient {
             this._ftpFootMsg('Deleted ' + nm + '.');
         } catch (e) { this._ftpFootMsg('Delete failed: ' + (e.message || e), '#ff6666'); }
     }
+    // Local go-to: walk down the handle tree relative to the opened root (no absolute paths — the browser can't).
+    async _localGoto() {
+        if (!this._local || !this._local.root) { this._localOpenFolder(); return; }
+        const rel = (window.prompt('Go to a subfolder relative to "' + this._local.root.name + '" (e.g. workroom/obj):') || '').trim();
+        if (!rel) return;
+        let dir = this._local.root; const stack = [];
+        for (const seg of rel.split('/').filter(Boolean)) {
+            if (seg === '..') { if (stack.length) dir = stack.pop(); continue; }
+            try { stack.push(dir); dir = await dir.getDirectoryHandle(seg); }
+            catch (e) { this._ftpFootMsg('No such local folder: ' + rel, '#ff6666'); return; }
+        }
+        this._local.dir = dir; this._local.stack = stack;
+        this._ftpSetActivePane('local'); this._localRender();
+    }
 
     _ftpUpdateGutter() {
         const ta = document.getElementById('ftp-textarea'), g = document.getElementById('ftp-gutter');
@@ -5717,7 +5731,7 @@ class WMTClient {
               <span class="ftp-status" id="ftp-foot" style="margin-right:auto"></span>
               <button class="btn" id="ftp-disconnect" style="display:none">Disconnect</button>
               <button class="btn" id="ftp-cancel">Close</button>
-              <button class="btn btn-primary" id="ftp-save" style="display:none">Save to MUD</button>
+              <button class="btn btn-primary" id="ftp-save" style="display:none">Save</button>
             </div>
           </div>`;
         document.body.appendChild(overlay);
@@ -5744,7 +5758,7 @@ class WMTClient {
         overlay.querySelector('#ftp-newfile').addEventListener('click', () => this._activePane === 'local' ? this._localNewFile() : this._ftpNewFile());
         overlay.querySelector('#ftp-delete').addEventListener('click', () => this._activePane === 'local' ? this._localDelete() : this._ftpDelete());
         const gotoBtn = overlay.querySelector('#ftp-goto'), gotoPop = overlay.querySelector('#ftp-goto-pop');
-        gotoBtn.addEventListener('click', (e) => { e.stopPropagation(); this._ftpShowGoto(); });
+        gotoBtn.addEventListener('click', (e) => { e.stopPropagation(); this._activePane === 'local' ? this._localGoto() : this._ftpShowGoto(); });
         overlay.querySelector('#ftp-goto-go').addEventListener('click', () => this._ftpGotoSubmit());
         overlay.querySelector('#ftp-fav-add').addEventListener('click', () => this._ftpAddFavorite());
         overlay.querySelector('#ftp-goto-cancel').addEventListener('click', () => { gotoPop.style.display = 'none'; });
