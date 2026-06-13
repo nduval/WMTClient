@@ -2157,26 +2157,29 @@ class WMTClient {
 
         this.chatWindowMode = mode;
 
+        // One resize handle, positioned by CSS per dock class (see initChatResize).
+        this._ensureChatResizeHandle();
+
         if (mode === 'docked') {
             chatWindow.classList.add('docked');
             terminalArea?.classList.add('chat-docked');
             chatWindow.style.top = '';
             chatWindow.style.left = '';
             chatWindow.style.width = '';
-        } else if (mode === 'docked-left') {
-            chatWindow.classList.add('docked-left');
-            terminalArea?.classList.add('chat-docked-left');
+            const h = parseInt(localStorage.getItem('wmt_chat_dock_h') || '', 10);  // top-dock: restore saved height
+            chatWindow.style.height = (h > 0) ? h + 'px' : '';
+        } else if (mode === 'docked-left' || mode === 'docked-right') {
+            chatWindow.classList.add(mode);
+            terminalArea?.classList.add(mode === 'docked-left' ? 'chat-docked-left' : 'chat-docked-right');
             chatWindow.style.top = '';
             chatWindow.style.left = '';
             chatWindow.style.height = '';
-        } else if (mode === 'docked-right') {
-            chatWindow.classList.add('docked-right');
-            terminalArea?.classList.add('chat-docked-right');
-            chatWindow.style.top = '';
-            chatWindow.style.left = '';
-            chatWindow.style.height = '';
+            const w = parseInt(localStorage.getItem('wmt_chat_dock_w') || '', 10);   // side-dock: restore saved width
+            chatWindow.style.width = (w > 0) ? w + 'px' : '';
         } else if (mode === 'floating') {
             chatWindow.classList.add('floating');
+            chatWindow.style.width = '';    // drop dock sizes; CSS + native resize:both take over
+            chatWindow.style.height = '';
         }
 
         // Highlight the active position in the overflow menu's position picker
@@ -5762,6 +5765,53 @@ class WMTClient {
                 document.body.style.cursor = '';
                 document.body.style.userSelect = '';
             }
+        });
+    }
+
+    // Real, visible resize divider for docked ChatMon (replaces the invisible
+    // native resize grip). One handle; CSS positions it on the inner edge per
+    // dock class. Width for side-dock, height for top-dock; persisted in
+    // localStorage (per-browser, like the FTP editor geometry). 2026-06-13.
+    _ensureChatResizeHandle() {
+        const chatWindow = document.getElementById('chat-window');
+        if (!chatWindow || chatWindow.querySelector('.chat-resize-handle')) return;
+        const handle = document.createElement('div');
+        handle.className = 'chat-resize-handle';
+        chatWindow.appendChild(handle);
+
+        let resizing = false, axis = 'x', start = 0, startW = 0, startH = 0;
+        handle.addEventListener('mousedown', (e) => {
+            axis = (this.chatWindowMode === 'docked') ? 'y' : 'x';   // top-dock=height, side-dock=width
+            resizing = true;
+            start = (axis === 'x') ? e.clientX : e.clientY;
+            startW = chatWindow.offsetWidth;
+            startH = chatWindow.offsetHeight;
+            handle.classList.add('dragging');
+            document.body.style.cursor = (axis === 'x') ? 'ew-resize' : 'ns-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!resizing) return;
+            if (axis === 'x') {
+                // docked-right: handle on LEFT edge → drag left widens (dir -1).
+                // docked-left: handle on RIGHT edge → drag right widens (dir +1).
+                const dir = (this.chatWindowMode === 'docked-right') ? -1 : 1;
+                const w = Math.min(Math.max(startW + dir * (e.clientX - start), 250), Math.round(window.innerWidth * 0.7));
+                chatWindow.style.width = w + 'px';
+            } else {
+                const h = Math.min(Math.max(startH + (e.clientY - start), 100), Math.round(window.innerHeight * 0.7));
+                chatWindow.style.height = h + 'px';
+            }
+        });
+        document.addEventListener('mouseup', () => {
+            if (!resizing) return;
+            resizing = false;
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            if (axis === 'x') localStorage.setItem('wmt_chat_dock_w', String(chatWindow.offsetWidth));
+            else localStorage.setItem('wmt_chat_dock_h', String(chatWindow.offsetHeight));
         });
     }
 

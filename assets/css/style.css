@@ -3029,6 +3029,25 @@ body {
     cursor: default;
 }
 
+/* Visible, draggable resize divider for DOCKED chat (2026-06-13). Replaces the
+   browser's native resize grip, which rendered only a tiny unstyled corner with
+   no affordance — users couldn't find it ("no way to resize"). Mirrors the
+   working .scripts-resize-handle pattern; JS drives the size (initChatResize). */
+.chat-window.docked,
+.chat-window.docked-left,
+.chat-window.docked-right { resize: none; }              /* native grip off — we provide a real one */
+.chat-window.docked-left,
+.chat-window.docked-right { max-width: none; }            /* let the drag go past the old 500px cap */
+.chat-window.docked { max-height: none; }
+
+.chat-resize-handle { position: absolute; z-index: 60; }
+.chat-window.floating .chat-resize-handle { display: none; }   /* floating already has native resize:both */
+.chat-window.docked-right .chat-resize-handle { left: 0;  top: 0; bottom: 0; width: 8px;  cursor: ew-resize; }
+.chat-window.docked-left  .chat-resize-handle { right: 0; top: 0; bottom: 0; width: 8px;  cursor: ew-resize; }
+.chat-window.docked       .chat-resize-handle { left: 0; right: 0; bottom: 0; height: 8px; cursor: ns-resize; }
+.chat-resize-handle:hover,
+.chat-resize-handle.dragging { background: var(--primary-color); opacity: 0.35; }
+
 /* Chat button notification indicator */
 #chat-toggle-btn.has-new {
     position: relative;
