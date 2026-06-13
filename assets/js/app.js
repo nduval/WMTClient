@@ -5774,9 +5774,9 @@ class WMTClient {
     // localStorage (per-browser, like the FTP editor geometry). 2026-06-13.
     _ensureChatResizeHandle() {
         const chatWindow = document.getElementById('chat-window');
-        if (!chatWindow || chatWindow.querySelector('.chat-resize-handle')) return;
+        if (!chatWindow || chatWindow.querySelector('.chat-dock-resize')) return;
         const handle = document.createElement('div');
-        handle.className = 'chat-resize-handle';
+        handle.className = 'chat-dock-resize';
         chatWindow.appendChild(handle);
 
         let resizing = false, axis = 'x', start = 0, startW = 0, startH = 0;
