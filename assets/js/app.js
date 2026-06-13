@@ -5142,6 +5142,12 @@ class WMTClient {
             overlay.classList.add('open');
             this._ftpApplyGeom();
         }
+        const tgl = document.getElementById('ftp-dock-toggle');
+        if (tgl) {
+            const docked = (mode === 'docked-right');
+            tgl.innerHTML = docked ? '&#10697;' : '&#8594;';   // docked → "float" panes icon; floating → "dock right" arrow
+            tgl.title = docked ? 'Float the editor' : 'Dock to the right';
+        }
         if (this._ftpCM) setTimeout(() => this._ftpCM.refresh(), 0);  // re-render after the relayout
     }
 
@@ -5384,8 +5390,7 @@ class WMTClient {
             <div class="modal-header">
               <h3>Wizard File Editor (FTP)</h3>
               <div class="ftp-dock-btns">
-                <button class="ftp-tbtn" id="ftp-dock-float" title="Floating window">&#10697;</button>
-                <button class="ftp-tbtn" id="ftp-dock-right" title="Dock to the right">&#10984;</button>
+                <button class="ftp-tbtn" id="ftp-dock-toggle" title="Dock to the right">&#8594;</button>
               </div>
               <button class="panel-close" id="ftp-close">&times;</button>
             </div>
@@ -5486,8 +5491,10 @@ class WMTClient {
         overlay.querySelector('#ftp-connect-btn').addEventListener('click', () => this._ftpDoConnect());
         overlay.querySelector('#ftp-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpDoConnect(); });
         overlay.querySelector('#ftp-close').addEventListener('click', () => this._ftpCloseModal());
-        overlay.querySelector('#ftp-dock-float').addEventListener('click', () => this._ftpSetDock('float'));
-        overlay.querySelector('#ftp-dock-right').addEventListener('click', () => this._ftpSetDock('docked-right'));
+        overlay.querySelector('#ftp-dock-toggle').addEventListener('click', () => {
+            const w = document.getElementById('ftp-win');
+            this._ftpSetDock(w && w.classList.contains('ftp-dock') ? 'float' : 'docked-right');
+        });
         overlay.querySelector('#ftp-cancel').addEventListener('click', () => this._ftpCloseModal());
         overlay.querySelector('#ftp-disconnect').addEventListener('click', () => this._ftpDisconnect());
         overlay.querySelector('#ftp-save').addEventListener('click', () => this._ftpSave());
