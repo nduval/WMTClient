@@ -4520,6 +4520,11 @@ class WMTClient {
         if (this._ftp && this._ftp.connected) this._ftpShowWorkspace();
         else this._ftpShowAccount();
         document.getElementById('ftp-modal').classList.add('open');
+        // Restore docked mode (desktop) if the wizard previously docked the editor.
+        if (this._ftp && this._ftp.connected && window.matchMedia('(min-width:761px)').matches
+            && localStorage.getItem('wmt_ftp_dock') === 'docked-right') {
+            this._ftpSetDock('docked-right');
+        }
     }
 
     _ftpJoin(base, name) { return (base === '.' || base === '') ? name : base.replace(/\/+$/, '') + '/' + name; }
@@ -4928,7 +4933,19 @@ class WMTClient {
         // Just hide — keep the FTP connection + creds alive for the browser session,
         // so reopening goes straight back to the files (no re-login). The editor
         // content is preserved (modal stays in the DOM). Use Disconnect to drop it.
-        const m = document.getElementById('ftp-modal'); if (m) m.classList.remove('open');
+        const overlay = document.getElementById('ftp-modal');
+        const win = document.getElementById('ftp-win');
+        const ta = document.querySelector('.terminal-area');
+        // If docked, return the window to the overlay first so hiding actually hides it.
+        // Keep the saved dock preference (wmt_ftp_dock) so reopening re-docks.
+        if (win && win.classList.contains('ftp-dock')) {
+            win.classList.remove('ftp-dock', 'dock-right');
+            win.classList.add('modal');
+            win.style.width = '';
+            ta && ta.classList.remove('ftp-docked-right');
+            overlay && overlay.appendChild(win);
+        }
+        if (overlay) overlay.classList.remove('open');
     }
 
     _ftpDisconnect() {
@@ -5090,6 +5107,64 @@ class WMTClient {
         const r = m.getBoundingClientRect();
         if (r.width < 200 || r.height < 150) return;   // ignore degenerate sizes
         try { localStorage.setItem('wmt_ftp_geom3', JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) })); } catch (e) {}
+    }
+
+    // Dock the FTP editor into the terminal flexbox (in-flow panel, like docked
+    // chat) or float it. Relocates the SAME window element (id=ftp-win) between the
+    // overlay and .terminal-area; CodeMirror survives via .refresh(). The float-only
+    // geometry/drag code is gated on the floating state, so it no-ops when docked.
+    // dock-right slice (2026-06-13); left/top to follow once verified.
+    _ftpSetDock(mode) {
+        const overlay = document.getElementById('ftp-modal');
+        const win = document.getElementById('ftp-win');
+        const ta = document.querySelector('.terminal-area');
+        if (!overlay || !win || !ta) return;
+        this._ftpDockMode = mode;
+        try { localStorage.setItem('wmt_ftp_dock', mode); } catch (e) {}
+
+        if (mode === 'docked-right') {
+            win.style.left = win.style.top = win.style.height = '';   // drop floating geometry
+            win.classList.remove('modal');                            // shed base .modal styling
+            win.classList.add('ftp-dock', 'dock-right');
+            const w = parseInt(localStorage.getItem('wmt_ftp_dock_w') || '', 10);
+            win.style.width = (w >= 360) ? w + 'px' : '';
+            ta.classList.add('ftp-docked-right');
+            ta.appendChild(win);                                      // relocate into the terminal flexbox
+            overlay.classList.remove('ftp-floating', 'open');         // overlay no longer hosts the window
+            this._ftpEnsureDockResize();
+        } else { // float
+            win.classList.remove('ftp-dock', 'dock-right');
+            win.classList.add('modal');
+            win.style.width = '';
+            ta.classList.remove('ftp-docked-right');
+            overlay.appendChild(win);                                 // move back into the overlay
+            if (window.matchMedia('(min-width:761px)').matches) overlay.classList.add('ftp-floating');
+            overlay.classList.add('open');
+            this._ftpApplyGeom();
+        }
+        if (this._ftpCM) setTimeout(() => this._ftpCM.refresh(), 0);  // re-render after the relayout
+    }
+
+    // Width-resize handle on the docked panel's inner edge. Persisted per browser.
+    _ftpEnsureDockResize() {
+        const win = document.getElementById('ftp-win');
+        if (!win || win.querySelector('.ftp-dock-resize')) return;
+        const h = document.createElement('div');
+        h.className = 'ftp-dock-resize';
+        win.appendChild(h);
+        let on = false, sx = 0, sw = 0;
+        h.addEventListener('mousedown', (e) => { on = true; sx = e.clientX; sw = win.offsetWidth; h.classList.add('dragging'); document.body.style.userSelect = 'none'; e.preventDefault(); });
+        document.addEventListener('mousemove', (e) => {
+            if (!on) return;
+            const w = Math.min(Math.max(sw + (sx - e.clientX), 360), Math.round(window.innerWidth * 0.75));  // dock-right: drag left to widen
+            win.style.width = w + 'px';
+        });
+        document.addEventListener('mouseup', () => {
+            if (!on) return;
+            on = false; h.classList.remove('dragging'); document.body.style.userSelect = '';
+            try { localStorage.setItem('wmt_ftp_dock_w', String(win.offsetWidth)); } catch (e) {}
+            if (this._ftpCM) this._ftpCM.refresh();
+        });
     }
 
     // Draggable divider between the file pane and the editor; width persisted.
@@ -5304,10 +5379,14 @@ class WMTClient {
         const overlay = document.createElement('div');
         overlay.id = 'ftp-modal'; overlay.className = 'modal-overlay ftp-modal';
         overlay.innerHTML = `
-          <div class="modal">
+          <div class="modal" id="ftp-win">
             <div class="ftp-resize-tl" title="Resize"></div>
             <div class="modal-header">
               <h3>Wizard File Editor (FTP)</h3>
+              <div class="ftp-dock-btns">
+                <button class="ftp-tbtn" id="ftp-dock-float" title="Floating window">&#10697;</button>
+                <button class="ftp-tbtn" id="ftp-dock-right" title="Dock to the right">&#10984;</button>
+              </div>
               <button class="panel-close" id="ftp-close">&times;</button>
             </div>
             <div class="modal-body">
@@ -5407,6 +5486,8 @@ class WMTClient {
         overlay.querySelector('#ftp-connect-btn').addEventListener('click', () => this._ftpDoConnect());
         overlay.querySelector('#ftp-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpDoConnect(); });
         overlay.querySelector('#ftp-close').addEventListener('click', () => this._ftpCloseModal());
+        overlay.querySelector('#ftp-dock-float').addEventListener('click', () => this._ftpSetDock('float'));
+        overlay.querySelector('#ftp-dock-right').addEventListener('click', () => this._ftpSetDock('docked-right'));
         overlay.querySelector('#ftp-cancel').addEventListener('click', () => this._ftpCloseModal());
         overlay.querySelector('#ftp-disconnect').addEventListener('click', () => this._ftpDisconnect());
         overlay.querySelector('#ftp-save').addEventListener('click', () => this._ftpSave());

@@ -3051,6 +3051,24 @@ body {
 .chat-dock-resize:hover,
 .chat-dock-resize.dragging { background: var(--primary-color); opacity: 0.35; }
 
+/* FTP docked window — in-flow flex child of .terminal-area, mirroring docked chat.
+   ChatMon stays OUTERMOST (higher order); the FTP panel docks just inside it. The
+   FTP window keeps id=ftp-win; on dock its 'modal' class is swapped for 'ftp-dock'
+   and it's relocated into .terminal-area. 2026-06-13 (dock-right slice). */
+.chat-window.docked-right { order: 2; }   /* keep ChatMon outermost on the right (FTP = order 1, inside it) */
+.terminal-area.ftp-docked-right { flex-direction: row; align-items: stretch; }
+.terminal-area.ftp-docked-right .output-container { flex: 1; min-width: 0; height: auto; }
+.ftp-dock { position: relative; height: 100%; flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-panel); overflow: hidden; }
+.ftp-dock.dock-right { order: 1; width: 42%; min-width: 360px; max-width: 75vw; border-left: 1px solid var(--border-color); }
+/* Replicate the wide-editor flex layout (those rules are scoped to .ftp-modal, which the docked window leaves). */
+.ftp-dock .modal-body { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.ftp-dock #ftp-workspace { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ftp-dock .modal-footer { flex: 0 0 auto; }
+.ftp-dock .ftp-resize-tl { display: none; }   /* floating-only corner grip */
+.ftp-dock-resize { position: absolute; top: 0; bottom: 0; left: 0; width: 8px; z-index: 60; cursor: ew-resize; }
+.ftp-dock-resize:hover, .ftp-dock-resize.dragging { background: var(--primary-color); opacity: 0.35; }
+.ftp-dock-btns { display: flex; gap: 4px; margin-left: auto; margin-right: 8px; }
+
 /* Chat button notification indicator */
 #chat-toggle-btn.has-new {
     position: relative;
