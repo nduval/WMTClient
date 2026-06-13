@@ -4869,7 +4869,7 @@ class WMTClient {
         const ul = document.getElementById('ftp-local-list');
         if (!ul || !this._local || !this._local.dir) return;
         const pathEl = document.getElementById('ftp-local-path');
-        if (pathEl) pathEl.textContent = (this._local.root ? this._local.root.name : 'local') + (this._local.stack.length ? ' / …' : '');
+        if (pathEl) { const p = [...this._local.stack, this._local.dir].filter(Boolean).map(d => d.name).join(' / '); pathEl.textContent = p; pathEl.title = p; }
         ul.innerHTML = '<li class="ftp-item"><span class="ftp-name">Reading…</span></li>';
         const dirs = [], files = [];
         try { for await (const [name, h] of this._local.dir.entries()) (h.kind === 'directory' ? dirs : files).push([name, h]); }
@@ -4900,15 +4900,16 @@ class WMTClient {
     }
     async _localOpenFile(handle) {
         if (!this._ftpConfirmDiscard()) return;
-        let text = '';
-        try { const f = await handle.getFile(); text = await f.text(); }
+        let text = '', lastMod = null;
+        try { const f = await handle.getFile(); text = await f.text(); lastMod = f.lastModified; }
         catch (e) { document.getElementById('ftp-edit-status').textContent = 'open failed'; return; }
         this._editSrc = 'local';
         this._ftpSetActivePane('local');
         if (!this._local) this._local = { stack: [] };
         this._local.curHandle = handle; this._local.curName = handle.name;
-        document.getElementById('ftp-filename').textContent = '[local] ' + handle.name;
-        const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = '';
+        const folder = [...(this._local.stack || []), this._local.dir].filter(Boolean).map(d => d.name).join('/');
+        document.getElementById('ftp-filename').textContent = '[local] ' + (folder ? folder + '/' : '') + handle.name;
+        const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = lastMod ? 'modified ' + this._ftpFmtDate(lastMod) : '';
         if (this._ftpCM) { this._ftpCM.setValue(text); this._ftpCM.scrollTo(0, 0); this._ftpSetDirty(false); this._ftpMarkLongLines(); this._ftpCM.refresh(); }
         else { const ta = document.getElementById('ftp-textarea'); if (ta) { ta.value = text; this._ftpSetDirty(false); } }
         document.getElementById('ftp-edit-status').textContent = '';
@@ -5338,7 +5339,8 @@ class WMTClient {
         window.addEventListener('mousemove', (e) => {
             if (!dragging) return;
             const rect = grid.getBoundingClientRect();
-            const w = Math.max(140, Math.min(rect.width - 320, e.clientX - rect.left));
+            const off = grid.classList.contains('local-on') ? (document.getElementById('ftp-local')?.offsetWidth || 0) : 0;   // tree starts after the local pane
+            const w = Math.max(140, Math.min(rect.width - 320 - off, e.clientX - rect.left - off));
             grid.style.setProperty('--ftp-tree-w', w + 'px');
         });
         window.addEventListener('mouseup', () => {
@@ -5450,13 +5452,15 @@ class WMTClient {
         .ftp-grid { display:grid; grid-template-columns: var(--ftp-tree-w, 260px) 6px minmax(0,1fr); grid-template-rows: minmax(0, 1fr); gap:0; flex:1 1 auto; min-height:0; position:relative; }
         .ftp-divider { background:var(--border-color); cursor:col-resize; border-radius:3px; }
         .ftp-divider:hover { background:var(--primary-color); }
-        .ftp-grid.local-on { grid-template-columns: var(--ftp-tree-w,260px) 6px var(--ftp-local-w,240px) minmax(0,1fr); }
-        .ftp-local { display:flex; flex-direction:column; min-width:0; min-height:0; border-left:1px solid var(--border-color); }
-        .ftp-local .ftp-list { flex:1 1 auto; min-height:0; overflow:auto; margin:0; }   /* items reuse .ftp-item styling for continuity with the FTP tree */
-        .ftp-local-head { font-size:.78em; padding:5px 8px; cursor:pointer; border-bottom:1px solid var(--border-color); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .ftp-local-head:hover { background:var(--bg-darker); }
-        .ftp-tree.pane-active, .ftp-local.pane-active { box-shadow: inset 0 0 0 2px var(--primary-color); border-radius:4px; }
-        .ftp-tree { border:1px solid var(--border-color); border-radius:6px; overflow:auto; min-height:0; background:#0b0b14; }
+        .ftp-grid.local-on { grid-template-columns: var(--ftp-local-w,240px) var(--ftp-tree-w,260px) 6px minmax(0,1fr); }   /* local pane on the LEFT */
+        .ftp-tree, .ftp-local { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:#0b0b14; border:1px solid var(--border-color); border-radius:6px; }
+        .ftp-tree .ftp-list, .ftp-local .ftp-list { flex:1 1 auto; min-height:0; overflow:auto; }   /* header stays fixed; only the list scrolls */
+        .ftp-pane-head { display:flex; align-items:center; gap:6px; font-size:.74em; font-weight:600; letter-spacing:.03em; padding:5px 8px; cursor:pointer; border-bottom:1px solid var(--border-color); color:var(--text-muted); white-space:nowrap; }
+        .ftp-pane-head:hover { background:rgba(255,255,255,.04); }
+        .pane-active > .ftp-pane-head { color:var(--primary-color); }
+        .ftp-pane-path { flex:1; min-width:0; font-weight:400; overflow:hidden; text-overflow:ellipsis; }
+        .ftp-pick-btn { flex:0 0 auto; background:none; border:none; cursor:pointer; font-size:1em; padding:0 2px; }
+        .ftp-tree.pane-active, .ftp-local.pane-active { box-shadow: inset 0 0 0 2px var(--primary-color); }
         #ftp-goto-pop { top:6px; left:6px; right:auto; width:320px; }
         #ftp-goto-input { width:100%; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 8px; font-size:.9em; }
         .ftp-fav-head { display:flex; align-items:center; justify-content:space-between; margin:12px 0 6px; font-size:.85em; color:var(--text-muted); }
@@ -5478,6 +5482,11 @@ class WMTClient {
         .ftp-editor-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; position:relative; }
         .ftp-editor-head .ef-btn { padding:5px 12px; font-size:.85em; white-space:nowrap; border-radius:4px; line-height:1.2; min-width:96px; display:inline-flex; align-items:center; justify-content:center; gap:5px; }
         .ftp-editor-head .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
+        .ftp-foot-settings { position:relative; display:inline-flex; }
+        .ftp-foot-settings .ftp-pop { top:auto; bottom:42px; right:auto; left:0; }   /* settings opens upward from the footer */
+        .ftp-modal .modal-footer { position:relative; overflow:visible; gap:8px; flex-wrap:wrap; }
+        .ftp-modal .modal-footer .ef-btn { padding:6px 12px; font-size:.85em; border-radius:4px; line-height:1.2; display:inline-flex; align-items:center; gap:5px; }
+        .ftp-modal .modal-footer .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
         .ftp-pop { position:absolute; top:34px; right:0; z-index:20; width:290px; background:var(--bg-dark,#0e0e18); border:1px solid var(--border-color); border-radius:8px; padding:16px; box-shadow:0 12px 34px rgba(0,0,0,.55); }
         .ftp-pop h4 { margin:0 0 14px; font-size:1.05em; }
         .ftp-pop .form-group { margin-bottom:16px; }
@@ -5573,12 +5582,17 @@ class WMTClient {
                   <button class="ftp-tbtn" id="ftp-newfile" title="New file">📝</button>
                   <button class="ftp-tbtn" id="ftp-delete" title="Delete the open file">🗑️</button>
                   <span class="ftp-tb-sep"></span>
-                  <button class="ftp-tbtn" id="ftp-local-toggle" title="Toggle a local-drive pane (Chrome/Edge)" style="display:none">💾</button>
+                  <button class="ftp-tbtn" id="ftp-local-toggle" title="Toggle a local-drive pane (Chrome/Edge)" style="display:none">🖥️</button>
                   <button class="ftp-tbtn" id="ftp-goto" title="Go to a path (e.g. one you can't reach by clicking)">📍</button>
                   <div class="ftp-breadcrumb" id="ftp-breadcrumb"></div>
                 </div>
                 <div class="ftp-grid">
+                  <div class="ftp-local" id="ftp-local" style="display:none">
+                    <div class="ftp-pane-head" id="ftp-local-head" title="Local files — click to make this pane active">🖥️ <span id="ftp-local-path" class="ftp-pane-path">Open a local folder…</span><button class="ftp-pick-btn" id="ftp-local-pick" title="Choose a different folder">📂</button></div>
+                    <ul class="ftp-list" id="ftp-local-list"></ul>
+                  </div>
                   <div class="ftp-tree">
+                    <div class="ftp-pane-head" id="ftp-tree-head" title="FTP files — click to make this pane active">☁ FTP</div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
                   </div>
                   <div class="ftp-divider" id="ftp-divider" title="Drag to resize the file pane"></div>
@@ -5598,35 +5612,12 @@ class WMTClient {
                       <button class="btn btn-primary" id="ftp-goto-go">Go</button>
                     </div>
                   </div>
-                  <div class="ftp-local" id="ftp-local" style="display:none">
-                    <div class="ftp-local-head" id="ftp-local-head" title="Click to choose a local folder">📂 <span id="ftp-local-path">Open a local folder…</span></div>
-                    <ul class="ftp-list" id="ftp-local-list"></ul>
-                  </div>
                   <div class="ftp-editor">
                     <div class="ftp-editor-head">
                       <span id="ftp-filename">(no file open)</span>
                       <span class="ftp-status" id="ftp-filemeta"></span>
                       <span class="ftp-status" id="ftp-edit-status" style="margin-left:8px"></span>
                       <span class="ftp-status" id="ftp-longwarn" style="margin-left:auto" title="jump to next line over 80 chars"></span>
-                      <button class="ef-btn" id="ftp-wrap-btn" title="Toggle word wrap">⮐ Wrap</button>
-                      <button class="ef-btn" id="ftp-theme" title="Toggle light/dark editor">☀ Light</button>
-                      <button class="ef-btn" id="ftp-settings-btn" title="Editor settings">⚙ Settings</button>
-                      <div id="ftp-settings-pop" class="ftp-pop" style="display:none">
-                        <h4>Editor Settings</h4>
-                        <div class="form-group">
-                          <label>Font size: <span id="ftp-fontsize-val">13px</span></label>
-                          <input type="range" id="ftp-fontsize" min="9" max="24" value="13">
-                        </div>
-                        <div class="settings-toggle">
-                          <span class="settings-toggle-label">Word wrap</span>
-                          <label class="settings-toggle-switch"><input type="checkbox" id="ftp-wrap"><span class="settings-toggle-slider"></span></label>
-                        </div>
-                        <div class="ftp-pop-foot">
-                          <span class="ftp-pop-saved" id="ftp-pop-saved">Saved ✓</span>
-                          <button class="btn" id="ftp-settings-close">Close</button>
-                          <button class="btn btn-primary" id="ftp-settings-save">Save</button>
-                        </div>
-                      </div>
                     </div>
                     <div class="ftp-findbar">
                       <input id="ftp-find" placeholder="find" spellcheck="false">
@@ -5644,6 +5635,27 @@ class WMTClient {
               </div>
             </div>
             <div class="modal-footer">
+              <button class="ef-btn" id="ftp-wrap-btn" title="Toggle word wrap">⮐ Wrap</button>
+              <button class="ef-btn" id="ftp-theme" title="Toggle light/dark editor">☀ Light</button>
+              <div class="ftp-foot-settings">
+                <button class="ef-btn" id="ftp-settings-btn" title="Editor settings">⚙ Settings</button>
+                <div id="ftp-settings-pop" class="ftp-pop" style="display:none">
+                  <h4>Editor Settings</h4>
+                  <div class="form-group">
+                    <label>Font size: <span id="ftp-fontsize-val">13px</span></label>
+                    <input type="range" id="ftp-fontsize" min="9" max="24" value="13">
+                  </div>
+                  <div class="settings-toggle">
+                    <span class="settings-toggle-label">Word wrap</span>
+                    <label class="settings-toggle-switch"><input type="checkbox" id="ftp-wrap"><span class="settings-toggle-slider"></span></label>
+                  </div>
+                  <div class="ftp-pop-foot">
+                    <span class="ftp-pop-saved" id="ftp-pop-saved">Saved ✓</span>
+                    <button class="btn" id="ftp-settings-close">Close</button>
+                    <button class="btn btn-primary" id="ftp-settings-save">Save</button>
+                  </div>
+                </div>
+              </div>
               <span class="ftp-status" id="ftp-foot" style="margin-right:auto"></span>
               <button class="btn" id="ftp-disconnect" style="display:none">Disconnect</button>
               <button class="btn" id="ftp-cancel">Close</button>
@@ -5664,7 +5676,7 @@ class WMTClient {
         overlay.querySelector('#ftp-save').addEventListener('click', () => this._ftpSave());
         if ('showDirectoryPicker' in window) { const lt = overlay.querySelector('#ftp-local-toggle'); if (lt) lt.style.display = ''; }  // Chrome/Edge only
         overlay.querySelector('#ftp-local-toggle').addEventListener('click', () => this._ftpToggleLocalPane());
-        overlay.querySelector('#ftp-local-head').addEventListener('click', () => this._localOpenFolder());
+        overlay.querySelector('#ftp-local-pick').addEventListener('click', (e) => { e.stopPropagation(); this._localOpenFolder(); });
         overlay.querySelector('.ftp-tree').addEventListener('mousedown', () => this._ftpSetActivePane('ftp'));
         overlay.querySelector('#ftp-local').addEventListener('mousedown', () => this._ftpSetActivePane('local'));
         overlay.querySelector('#ftp-home').addEventListener('click', () => { if (this._activePane === 'local') this._localGoRoot(); else this._ftpOpenDir('.'); });
