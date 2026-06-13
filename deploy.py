@@ -361,6 +361,11 @@ def run_test_suites():
         # mimic deploy-boot. Suppression still holds when no socket was held
         # (AutoLoginGate). See bug_resume_name_prompt_autologin_suppressed.
         ('TierBRelink', 'test_tierb_relink.js'),
+        # Crash resilience (review C2 + local SQLite persist store): an induced
+        # uncaughtException must persist live state SYNCHRONOUSLY to the local
+        # store (snapshot disabled, remote untouched) and a fresh instance must
+        # restore from local + resume the live bridge socket — a crash is a blip.
+        ('CrashPersist', 'test_crash_persist.js'),
     ]
 
     total_passed = 0

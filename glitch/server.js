@@ -108,6 +108,21 @@ try {
   } catch (e) {
     console.error('block_trigger column migration failed:', e.message);
   }
+  // Local persisted-session store (2026-06-12). PRIMARY store for session
+  // continuity: synchronous writes that can't be lost to an IONOS HTTP hiccup
+  // at the worst moment (SIGTERM, crash). The PHP store stays as a best-effort
+  // off-site mirror + restore fallback — which also covers the deploy that
+  // ships this feature (persisted by old code to IONOS only). payload is the
+  // full session record JSON, same shape as the PHP store entries.
+  wmtDb.exec(`
+    CREATE TABLE IF NOT EXISTS persisted_sessions (
+      token        TEXT PRIMARY KEY,
+      user_id      TEXT,
+      character_id TEXT,
+      payload      TEXT NOT NULL,
+      persisted_at INTEGER NOT NULL
+    )
+  `);
   console.log('SQLite database connected:', DB_PATH);
 } catch (e) {
   console.error('SQLite database failed to open:', e.message);
@@ -1826,6 +1841,11 @@ function sessionStoreTransport(urlObj) {
   const isHttps = urlObj.protocol === 'https:';
   return { mod: isHttps ? https : http, port: urlObj.port ? Number(urlObj.port) : (isHttps ? 443 : 80) };
 }
+// Snapshot cadence. Local SQLite snapshots are cheap, so the default is 5s
+// (was 30s when every snapshot was an HTTPS round-trip to IONOS). The remote
+// mirror keeps the old ~30s cadence via SNAPSHOT_MIRROR_EVERY.
+const SNAPSHOT_INTERVAL_MS = Math.max(1000, parseInt(process.env.SNAPSHOT_INTERVAL_MS || '5000', 10) || 5000);
+const SNAPSHOT_MIRROR_EVERY = Math.max(1, Math.round(30000 / SNAPSHOT_INTERVAL_MS));
 const PHP_CHARACTERS_URL = 'https://client.wemudtogether.com/api/characters.php';
 const PHP_DISCORD_PROXY_URL = 'https://client.wemudtogether.com/api/discord_proxy.php';
 const PHP_AUDIT_LOG_URL = 'https://client.wemudtogether.com/api/audit_log.php';
@@ -1951,23 +1971,15 @@ async function fetchDiscordPrefsFromPHP(userId, characterId, session) {
 }
 
 /**
- * Persist all active sessions to PHP backend
- * Called on SIGTERM before server shutdown
+ * Serialize every session with a live MUD connection into a persistable
+ * record. Shared by the SIGTERM persist, the periodic snapshot, and the
+ * crash handler. Serializes pending #delay timers with their remaining
+ * time so restore can recreate the setTimeout with the correct duration.
  */
-async function persistAllSessions() {
-  if (!ADMIN_KEY) {
-    logSessionEvent('PERSIST_SKIP', { reason: 'no admin key' });
-    return;
-  }
-
+function serializeActiveSessions(includeChat) {
   const activeSessions = [];
-
   for (const [token, session] of sessions) {
-    // Persist ALL sessions with active MUD connections
     if (session.mudSocket && !session.mudSocket.destroyed) {
-      // Serialize pending #delay timers so they survive restart.
-      // Store the remaining time so we can recreate the setTimeout on
-      // restore with the correct remaining duration.
       const serializedDelays = [];
       if (session._delays) {
         const now = Date.now();
@@ -1975,16 +1987,14 @@ async function persistAllSessions() {
           // Node's setTimeout doesn't expose remaining time directly.
           // We stored the fire time when creating the delay.
           if (timer._wmt_fireAt && timer._wmt_command) {
-            const remainingMs = Math.max(0, timer._wmt_fireAt - now);
             serializedDelays.push({
               name,
               command: timer._wmt_command,
-              remainingMs
+              remainingMs: Math.max(0, timer._wmt_fireAt - now)
             });
           }
         }
       }
-
       activeSessions.push({
         userId: session.userId,
         characterId: session.characterId,
@@ -1994,14 +2004,69 @@ async function persistAllSessions() {
         bridgeToken: session.bridgeToken || ((session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined),
         isWizard: session.isWizard || false,
         persistedAt: Date.now(),
-        chatBuffer: session.chatBuffer || [],
-        // Phase 1: persist session state for seamless restart
+        chatBuffer: includeChat ? (session.chatBuffer || []) : [],
         variables: session.variables || {},
         delays: serializedDelays,
         actualMudChar: session._actualMudChar || null
       });
     }
   }
+  return activeSessions;
+}
+
+// ── Local persisted-session store (PRIMARY; synchronous SQLite) ─────────────
+// Whole-store replace semantics, matching the PHP store. All helpers are
+// no-throw: a broken DB degrades to the remote store, never crashes a persist.
+function localStoreSave(activeSessions) {
+  if (!wmtDb) return false;
+  try {
+    const del = wmtDb.prepare('DELETE FROM persisted_sessions');
+    const ins = wmtDb.prepare(
+      'INSERT INTO persisted_sessions (token, user_id, character_id, payload, persisted_at) VALUES (?, ?, ?, ?, ?)');
+    wmtDb.transaction(() => {
+      del.run();
+      for (const s of activeSessions) {
+        ins.run(s.token, s.userId, s.characterId, JSON.stringify(s), s.persistedAt || Date.now());
+      }
+    })();
+    return true;
+  } catch (e) {
+    console.error('Local session store save failed:', e.message);
+    return false;
+  }
+}
+
+function localStoreList() {
+  if (!wmtDb) return [];
+  try {
+    return wmtDb.prepare('SELECT payload FROM persisted_sessions').all()
+      .map(r => { try { return JSON.parse(r.payload); } catch (e) { return null; } })
+      .filter(Boolean);
+  } catch (e) {
+    console.error('Local session store list failed:', e.message);
+    return [];
+  }
+}
+
+function localStoreRemove(token) {
+  if (!wmtDb) return;
+  try { wmtDb.prepare('DELETE FROM persisted_sessions WHERE token = ?').run(token); } catch (e) {}
+}
+
+function localStoreClear() {
+  if (!wmtDb) return;
+  try { wmtDb.prepare('DELETE FROM persisted_sessions').run(); } catch (e) {}
+}
+
+/**
+ * Persist all active sessions. Called on SIGTERM before server shutdown.
+ * PRIMARY: synchronous local SQLite write (cannot be lost to network state).
+ * MIRROR: awaited best-effort POST to the IONOS PHP store (off-site copy +
+ * restore fallback for a lost/replaced local DB). If the local write fails,
+ * the remote becomes primary again and keeps its original retry semantics.
+ */
+async function persistAllSessions() {
+  const activeSessions = serializeActiveSessions(true);
 
   if (activeSessions.length === 0) {
     logSessionEvent('PERSIST_SKIP', { reason: 'no active sessions' });
@@ -2013,14 +2078,27 @@ async function persistAllSessions() {
     chars: activeSessions.map(s => s.characterName).join(',')
   });
 
+  const localOk = localStoreSave(activeSessions);
+  if (localOk) {
+    logSessionEvent('PERSIST_SUCCESS', { count: activeSessions.length, attempt: 1, store: 'local' });
+  } else {
+    logSessionEvent('PERSIST_LOCAL_FAIL', { note: 'local store unavailable — remote store is primary for this persist' });
+  }
+
+  if (!ADMIN_KEY) {
+    if (!localOk) logSessionEvent('PERSIST_ERROR', { error: 'no local store and no admin key for remote' });
+    return;
+  }
+
   const payload = JSON.stringify({ sessions: activeSessions });
   const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
   const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
-  // Retry once on failure. Session persistence is the most critical
-  // operation during shutdown — a transient HTTP error or PHP hiccup
-  // must not silently drop every user's MUD connection.
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // Mirror to IONOS. When the local write succeeded this is best-effort
+  // (single attempt, soft-logged); when it failed, keep the original
+  // retry-once semantics — the remote is then the only copy.
+  const maxAttempts = localOk ? 1 : 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await new Promise((resolve, reject) => {
         const req = reqMod.request({
@@ -2039,7 +2117,8 @@ async function persistAllSessions() {
           res.on('data', chunk => data += chunk);
           res.on('end', () => {
             if (res.statusCode === 200) {
-              logSessionEvent('PERSIST_SUCCESS', { count: activeSessions.length, attempt });
+              logSessionEvent(localOk ? 'PERSIST_MIRROR_OK' : 'PERSIST_SUCCESS',
+                { count: activeSessions.length, attempt, store: 'remote' });
               resolve(JSON.parse(data));
             } else {
               reject(new Error(`HTTP ${res.statusCode}: ${data}`));
@@ -2058,64 +2137,38 @@ async function persistAllSessions() {
       });
       break; // success — exit retry loop
     } catch (e) {
-      if (attempt < 2) {
+      if (attempt < maxAttempts) {
         logSessionEvent('PERSIST_RETRY', { error: e.message, attempt });
         await new Promise(r => setTimeout(r, 1000)); // 1s pause before retry
       } else {
-        logSessionEvent('PERSIST_ERROR', { error: e.message, attempts: attempt });
+        logSessionEvent(localOk ? 'PERSIST_MIRROR_ERROR' : 'PERSIST_ERROR',
+          { error: e.message, attempts: attempt });
       }
     }
   }
 }
 
 /**
- * Periodic session snapshot — lightweight persist that runs every 30s.
- * Saves variables, delays, and session identity so a failed SIGTERM
- * persist loses at most 30 seconds of state instead of everything.
- * Fire-and-forget: failures are logged but don't block or retry.
+ * Periodic session snapshot. PRIMARY: synchronous local SQLite write every
+ * cycle (default 5s, SNAPSHOT_INTERVAL_MS), WITH chatBuffer — local writes
+ * are cheap, and the snapshot is now also the crash-recovery floor.
+ * MIRROR: the IONOS PHP store gets a chat-stripped copy roughly every 30s
+ * (the old cadence), fire-and-forget as before.
  */
+let _snapshotTick = 0;
 async function persistSnapshot() {
-  if (!ADMIN_KEY) return;
-
-  const activeSessions = [];
-  for (const [token, session] of sessions) {
-    if (session.mudSocket && !session.mudSocket.destroyed) {
-      const serializedDelays = [];
-      if (session._delays) {
-        const now = Date.now();
-        for (const [name, timer] of Object.entries(session._delays)) {
-          if (timer._wmt_fireAt && timer._wmt_command) {
-            serializedDelays.push({
-              name,
-              command: timer._wmt_command,
-              remainingMs: Math.max(0, timer._wmt_fireAt - now)
-            });
-          }
-        }
-      }
-
-      activeSessions.push({
-        userId: session.userId,
-        characterId: session.characterId,
-        characterName: session.characterName,
-        server: session.targetHost === '3scapes.org' ? '3s' : '3k',
-        token: token,
-        bridgeToken: session.bridgeToken || ((session.mudSocket instanceof BridgeSocket) ? session.mudSocket.token : undefined),
-        isWizard: session.isWizard || false,
-        persistedAt: Date.now(),
-        // Lightweight: no chatBuffer (too large for 30s snapshots)
-        chatBuffer: [],
-        variables: session.variables || {},
-        delays: serializedDelays,
-        actualMudChar: session._actualMudChar || null
-      });
-    }
-  }
-
+  const activeSessions = serializeActiveSessions(true);
   if (activeSessions.length === 0) return;
 
+  localStoreSave(activeSessions);
+
+  _snapshotTick++;
+  if (!ADMIN_KEY) return;
+  if (_snapshotTick % SNAPSHOT_MIRROR_EVERY !== 0) return;
+
   try {
-    const payload = JSON.stringify({ sessions: activeSessions });
+    const mirrorSessions = activeSessions.map(s => ({ ...s, chatBuffer: [] }));
+    const payload = JSON.stringify({ sessions: mirrorSessions });
     const url = new URL(`${PHP_SESSIONS_URL}?action=save`);
     const { mod: reqMod, port: reqPort } = sessionStoreTransport(url);
 
@@ -2190,9 +2243,25 @@ async function fetchCharacterPassword(userId, characterId) {
 }
 
 /**
- * Fetch persistent sessions from PHP backend
+ * Fetch persistent sessions: LOCAL store first (instant, synchronous), merged
+ * with the remote PHP store (best-effort) by token — newer persistedAt wins.
+ * The remote read covers the transition deploy (old code persisted to IONOS
+ * only) and a lost/replaced local DB; a remote failure degrades silently to
+ * local-only instead of stalling restore on a 5s HTTP timeout.
  */
 async function fetchPersistentSessions() {
+  const local = localStoreList();
+  const remote = await fetchRemotePersistentSessions();
+  const byToken = new Map();
+  for (const s of [...remote, ...local]) {
+    if (!s || !s.token) continue;
+    const prev = byToken.get(s.token);
+    if (!prev || (s.persistedAt || 0) > (prev.persistedAt || 0)) byToken.set(s.token, s);
+  }
+  return [...byToken.values()];
+}
+
+async function fetchRemotePersistentSessions() {
   if (!ADMIN_KEY) return [];
 
   const url = `${PHP_SESSIONS_URL}?action=list`;
@@ -2233,6 +2302,7 @@ async function fetchPersistentSessions() {
  * Remove a persistent session from PHP backend after successful restore
  */
 async function removePersistentSession(token) {
+  localStoreRemove(token);
   if (!ADMIN_KEY) return;
 
   try {
@@ -2275,6 +2345,7 @@ async function removePersistentSession(token) {
 async function clearAllPersistentSessions() {
   // The post-deploy adoption window is over once the store is cleared.
   persistedIdentity.clear();
+  localStoreClear();
   if (!ADMIN_KEY) return;
 
   try {
@@ -10561,6 +10632,42 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 // Also handle SIGINT (Ctrl+C) for local development
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+// ── Crash handler (review C2, 2026-06-12) ───────────────────────────────────
+// An unhandled throw used to kill the process with NO persist at all — every
+// player fell back to a snapshot up to 30s old, or nothing. The local store
+// makes a crash-time persist possible: better-sqlite3 is synchronous, so it
+// works inside a dying process where an async HTTPS POST to IONOS cannot be
+// trusted. Persist locally, exit(1); systemd (Restart=always, 3s) brings the
+// server back, bridge.js still holds every MUD socket, restore resumes them.
+// Synchronous-only in here: no awaits, no HTTP, console.error → journald.
+let _crashing = false;
+function crashPersistAndExit(kind, err) {
+  if (_crashing) return;   // a second throw while handling the first: just die
+  _crashing = true;
+  try {
+    console.error(`FATAL ${kind}:`, err && (err.stack || err.message || err));
+  } catch (e) {}
+  try {
+    const activeSessions = serializeActiveSessions(true);
+    const localOk = localStoreSave(activeSessions);
+    console.error(`CRASH_PERSIST: count=${activeSessions.length} localOk=${localOk}`);
+  } catch (e) {
+    try { console.error('CRASH_PERSIST failed:', e.message); } catch (e2) {}
+  }
+  process.exit(1);
+}
+process.on('uncaughtException', (err) => crashPersistAndExit('uncaughtException', err));
+process.on('unhandledRejection', (reason) => crashPersistAndExit('unhandledRejection', reason));
+
+// Test-only crash trigger for the CrashPersist gate suite: lets the sandbox
+// induce a genuine uncaughtException from outside the process. Env-gated —
+// never registered in production, where SIGUSR2 keeps its default behavior.
+if (process.env.ALLOW_TEST_CRASH === '1') {
+  process.on('SIGUSR2', () => {
+    setImmediate(() => { throw new Error('Test-induced crash (ALLOW_TEST_CRASH)'); });
+  });
+}
+
 server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}${BRIDGE_URL ? ' (bridge mode: ' + BRIDGE_URL + ')' : ' (direct mode)'}`);
 
@@ -10588,13 +10695,13 @@ server.listen(PORT, async () => {
     try { dbStmts.pruneOldChat.run(); } catch (e) {}
   }
 
-  // Periodic session snapshot — every 30s, persist variables + delays
-  // so a failed SIGTERM loses at most 30 seconds of state. The full
-  // SIGTERM persist (with chatBuffer) still runs on shutdown; this is
-  // the safety net. Starts after a 10s delay to let initial restore
-  // and browser reconnects settle.
+  // Periodic session snapshot — local SQLite every SNAPSHOT_INTERVAL_MS
+  // (default 5s; remote mirror ~30s) so a crash loses at most one interval
+  // of state. The full SIGTERM persist still runs on clean shutdown; the
+  // crash handler reuses the same local write on uncaughtException. Starts
+  // after a 10s delay to let initial restore and browser reconnects settle.
   setTimeout(() => {
-    setInterval(() => persistSnapshot(), 30000);
+    setInterval(() => persistSnapshot(), SNAPSHOT_INTERVAL_MS);
   }, 10000);
 
   // Restore persistent sessions after startup

@@ -1,5 +1,17 @@
 # 005 — Session-resilience identity model & the deploy lockout (2026-06-02)
 
+> **ADDENDUM (2026-06-12, commit 0963dfa):** the browser-wins adopt path
+> (`adoptPersistedBridgeToken`, added for G2/002) now carries the persisted
+> `actualMudChar` along with the bridgeToken. Without it, a browser that
+> reconnected before restore got a session with `_actualMudChar` unset →
+> `mudLoggedIn=false` → the Tier B relink dispatched a login-flow `session_new`
+> → the client TYPED THE CHAR NAME into the running game ("There is no reason
+> to 'mimic' here.", 2026-06-12 04:33 prod). Same family, cosmetic severity.
+> This also reframes the 2026-06-08 mimic boot: her "MUD at name prompt" was
+> derived from the same missing `_actualMudChar` (browser-wins race), not from
+> an observed prompt. Gated by `test_bridge_resume_race.js` T5/T6 (red on
+> pre-fix server, negative-controlled).
+
 > **STATUS (2026-06-03):** The core fix (Tier A below — stable `session.bridgeToken`)
 > is SHIPPED to production (commit e1e16a9) and VERIFIED: the deploy that ships it
 > resumed all 6 live sessions seamlessly (6×`RESTORE_BRIDGE_RESUME`, 0 fresh logins,
