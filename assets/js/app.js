@@ -5648,9 +5648,9 @@ class WMTClient {
         .ftp-edit-tools { display:inline-flex; gap:8px; align-items:center; }
         .ftp-foot-settings { position:relative; display:inline-flex; }
         .ftp-foot-settings .ftp-pop { top:auto; bottom:42px; right:auto; left:0; }   /* settings opens upward from the footer */
-        .ftp-modal .modal-footer { position:relative; overflow:visible; gap:8px; flex-wrap:wrap; }
-        .ftp-modal .modal-footer .ef-btn { padding:6px 12px; font-size:.85em; border-radius:4px; line-height:1.2; display:inline-flex; align-items:center; gap:5px; }
-        .ftp-modal .modal-footer .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
+        #ftp-win .modal-footer { position:relative; overflow:visible; gap:8px; flex-wrap:wrap; }
+        #ftp-win .modal-footer .ef-btn { padding:6px 12px; font-size:.85em; border-radius:4px; line-height:1.2; display:inline-flex; align-items:center; gap:5px; }
+        #ftp-win .modal-footer .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
         .ftp-pop { position:absolute; top:34px; right:0; z-index:20; width:290px; background:var(--bg-dark,#0e0e18); border:1px solid var(--border-color); border-radius:8px; padding:16px; box-shadow:0 12px 34px rgba(0,0,0,.55); }
         .ftp-pop h4 { margin:0 0 14px; font-size:1.05em; }
         .ftp-pop .form-group { margin-bottom:16px; }
