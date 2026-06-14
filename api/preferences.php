@@ -267,9 +267,14 @@ switch ($action) {
         if (isset($preferences['channelPrefs']) && is_array($preferences['channelPrefs'])) {
             $validatedChannels = [];
             foreach ($preferences['channelPrefs'] as $channel => $prefs) {
-                // Sanitize channel name (alphanumeric, lowercase, max 50 chars)
-                $channel = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '', substr($channel, 0, 50)));
-                if (empty($channel)) continue;
+                // Sanitize channel name (alphanumeric + SPACE, lowercase, max 50 chars).
+                // SPACE is required: 3K bard sub-channels arrive as "bchat bard",
+                // "bchat wiz", etc. Stripping the space rewrote the key to "bchatbard",
+                // which no longer matched the spaced incoming channel → Discord silently
+                // stopped after any prefs reload (mimic, 2026-06-14). Client keys via
+                // channel.toLowerCase() (space preserved), so storage must match.
+                $channel = strtolower(preg_replace('/[^a-zA-Z0-9 _-]/', '', substr($channel, 0, 50)));
+                if (trim($channel) === '') continue;
 
                 $channelData = [
                     'sound' => isset($prefs['sound']) ? (bool)$prefs['sound'] : false,
