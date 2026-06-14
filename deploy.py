@@ -366,6 +366,11 @@ def run_test_suites():
         # store (snapshot disabled, remote untouched) and a fresh instance must
         # restore from local + resume the live bridge socket — a crash is a blip.
         ('CrashPersist', 'test_crash_persist.js'),
+        # MIP-at-name-prompt guard: while the MUD socket is at a name prompt, the
+        # server must DROP '3klient ...' MIP-registration commands (a resume racing
+        # a fresh login otherwise fires them into the prompt → "Invalid character
+        # in position N" → broken login). elminster 2026-06-14. Negative-controlled.
+        ('MipNamePromptGuard', 'test_mip_nameprompt_guard.js'),
     ]
 
     total_passed = 0

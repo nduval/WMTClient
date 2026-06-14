@@ -6877,7 +6877,7 @@ function connectToMud(session) {
           char: session.characterName,
           reason: 'auto-reconnect; no held socket (fresh/parked) — not resurrecting',
           clientVersion: session.clientVersion,
-          connDiag: session._connDiag   // the prior-attempt close that flipped autoReconnect (2026-06-13 trace)
+          connDiag: session._connDiag ? JSON.stringify(session._connDiag) : null   // stringify — bare object logs as [object Object]
         });
         session._autoReconnect = false;
         if (session.mudSocket && !session.mudSocket.destroyed) {
@@ -7420,7 +7420,7 @@ wss.on('connection', (ws, req) => {
               wizard: isWizard,
               ip: clientIp,
               clientVersion: session.clientVersion,
-              connDiag: session._connDiag
+              connDiag: session._connDiag ? JSON.stringify(session._connDiag) : null
             });
             writeSessionLog(session, 'session', { event: 'new', user: userId, char: characterName || characterId });
 
@@ -7680,6 +7680,20 @@ wss.on('connection', (ws, req) => {
               });
               break;
             }
+          }
+
+          // MIP-at-name-prompt guard: the client (re)enables MIP on a resume and
+          // sends '3klient <id>~~PortalWMT...' registration commands. If a resume
+          // races a fresh login (SESSION_NEW then SESSION_RESUME seconds later),
+          // those land on the MUD's name prompt as junk ("Invalid character in
+          // position N") and break the login. Drop MIP-registration commands while
+          // the socket is at a name prompt (not logged in); the normal post-login
+          // enableMip re-sends them once in-game (_atNamePrompt clears at the
+          // Password: prompt). Confirmed: elminster 2026-06-14 (fresh login + 5s
+          // later resume → 3klient junk → name_invalid_char ×3).
+          if (session._atNamePrompt && /^3klient(\s|$)/i.test(String(data.command || '').trim())) {
+            console.log(`Dropped MIP cmd at name prompt: token=${session.token ? session.token.substring(0, 8) : '?'}`);
+            break;
           }
 
           // Multi-device password leak suppression: when "Password:" was
