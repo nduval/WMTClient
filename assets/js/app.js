@@ -4676,6 +4676,7 @@ class WMTClient {
         if (!this._ftp) this._ftp = { cwd: '.', curFile: null, dirty: false };
         this._ftp.connected = true;
         const dc = document.getElementById('ftp-disconnect'); if (dc) { dc.classList.remove('ftp-reconnect'); dc.textContent = 'Disconnect'; }
+        const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = ''; foot.style.color = ''; }   // clear any "connection lost" banner
         this._ftpShowWorkspace();
         this.appendOutput(`FTP connected as ${data.user}.`, 'system');
         this.connection.send('ftp_list', { path: '.' });
@@ -4685,7 +4686,12 @@ class WMTClient {
         if (this._ftpUlQueue || this._ftpDelQueue || this._ftpDlQueue) {   // a failed op closes the FTP connection server-side — stop the batch
             this._ftpUlQueue = null; this._ftpDelQueue = null; this._ftpDlQueue = null;
         }
-        const msg = `FTP ${data.op || ''} error: ${data.message || 'unknown'}`;
+        const raw = String(data.message || 'unknown');
+        // Humanize the worst raw library messages; the rest pass through as-is.
+        const human = /launched a task|client is closed/i.test(raw) ? 'FTP was busy — please try again'
+            : /not connected/i.test(raw) ? 'FTP connection lost'
+            : raw.replace(/^5\d\d\s+/, '');   // drop the bare numeric FTP code prefix (e.g. "550 ")
+        const msg = `FTP ${data.op || ''} error: ${human}`;
         if (data.op === 'connect') { const s = document.getElementById('ftp-acct-status'); if (s) s.textContent = msg; }
         const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = msg; foot.style.color = '#ff6666'; }
         if (data.op === 'put') this._ftpUpdateSaveBtn(this._ftp && this._ftp.dirty ? 'dirty' : 'clean');  // un-stick the button on a failed save

@@ -5643,6 +5643,41 @@ function ftpClose(session) {
   if (st && st.client) { try { st.client.close(); } catch (e) {} st.client = null; }
   if (session) session._ftp = null;   // drop the in-memory creds
 }
+// Connection-level error (idle drop / closed socket) vs an operational FTP error
+// (550 not found / permission denied / dir exists). Only the former should drop the
+// client; an operational error must leave the session fully intact.
+function ftpIsConnErr(e) {
+  if (!e) return false;
+  if (e.code === 'ECONNRESET' || e.code === 'EPIPE' || e.code === 'ERR_STREAM_DESTROYED') return true;
+  const m = String(e.message || '').toLowerCase();
+  return m.includes('client is closed') || m.includes('not connected') || m.includes('closed because')
+      || m.includes('timed out') || m.includes('timeout') || m.includes('econnreset')
+      || m.includes('epipe') || m.includes('hang up') || m.includes('socket');
+}
+// Drop a dead client but KEEP creds, so the next op reconnects on demand. (ftpClose,
+// which also nulls creds and forces a re-login, is reserved for explicit disconnect.)
+function ftpDropClient(session) {
+  const st = session && session._ftp;
+  if (st && st.client) { try { st.client.close(); } catch (e) {} st.client = null; }
+}
+// Run an FTP op SERIALIZED per session — basic-ftp allows one operation per
+// connection, so overlapping ops throw "User launched a task while another one is
+// still running". Also transparently reconnect + retry ONCE on a connection-level
+// error (idle drop), so a dropped link self-heals on the next action.
+function ftpRun(session, fn) {
+  const st = session && session._ftp;
+  if (!st || !st.creds) return Promise.reject(new Error('FTP: not connected'));
+  const attempt = async () => {
+    try { return await fn(await ftpEnsureClient(session)); }
+    catch (e) {
+      if (ftpIsConnErr(e)) { ftpDropClient(session); return await fn(await ftpEnsureClient(session)); }
+      throw e;
+    }
+  };
+  const next = (st.queue || Promise.resolve()).then(attempt, attempt);
+  st.queue = next.catch(() => {});   // a failed op must not poison the queue
+  return next;
+}
 function ftpEntryType(e) { return e.type === 2 ? 'dir' : (e.type === 1 ? 'file' : (e.type === 3 ? 'link' : 'other')); }
 
 function closeSession(session, reason) {
@@ -7501,63 +7536,47 @@ wss.on('connection', (ws, req) => {
         case 'ftp_list': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '.');
-          (async () => {
-            try {
-              const client = await ftpEnsureClient(session);
-              const entries = await client.list(p);
-              sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size, modifiedAt: (e.modifiedAt instanceof Date ? e.modifiedAt.toISOString() : (e.rawModifiedAt || null)) })) });
-            } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'list', path: p, message: e.message || 'list failed' }); }
-          })();
+          ftpRun(session, async (client) => {
+            const entries = await client.list(p);
+            sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size, modifiedAt: (e.modifiedAt instanceof Date ? e.modifiedAt.toISOString() : (e.rawModifiedAt || null)) })) });
+          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'list', path: p, message: e.message || 'list failed' }); });
           break;
         }
         case 'ftp_mkdir': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
           if (!p) break;
-          (async () => {
-            // MKD only; do NOT ftpClose on failure (e.g. "dir exists") — a bad mkdir
-            // shouldn't drop the whole session like list/get/put do.
-            try { const client = await ftpEnsureClient(session); await client.send('MKD ' + p); sendToClient(session, { type: 'ftp_mkdir_ok', path: p }); }
-            catch (e) { sendToClient(session, { type: 'ftp_error', op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); }
-          })();
+          ftpRun(session, async (client) => { await client.send('MKD ' + p); sendToClient(session, { type: 'ftp_mkdir_ok', path: p }); })
+            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); });
           break;
         }
         case 'ftp_delete': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
           if (!p) break;
-          (async () => {
-            // DELE a file. Do NOT ftpClose on failure (non-fatal).
-            try { const client = await ftpEnsureClient(session); await client.remove(p); sendToClient(session, { type: 'ftp_deleted', path: p }); }
-            catch (e) { sendToClient(session, { type: 'ftp_error', op: 'delete', path: p, message: e.message || 'delete failed' }); }
-          })();
+          ftpRun(session, async (client) => { await client.remove(p); sendToClient(session, { type: 'ftp_deleted', path: p }); })
+            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'delete', path: p, message: e.message || 'delete failed' }); });
           break;
         }
         case 'ftp_get': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
-          (async () => {
-            try {
-              const client = await ftpEnsureClient(session);
-              const chunks = [];
-              const sink = new (require('stream').Writable)({ write(c, enc, cb) { chunks.push(c); cb(); } });
-              await client.downloadTo(sink, p);
-              sendToClient(session, { type: 'ftp_file', path: p, content: Buffer.concat(chunks).toString('utf8') });
-            } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: e.message || 'get failed' }); }
-          })();
+          ftpRun(session, async (client) => {
+            const chunks = [];
+            const sink = new (require('stream').Writable)({ write(c, enc, cb) { chunks.push(c); cb(); } });
+            await client.downloadTo(sink, p);
+            sendToClient(session, { type: 'ftp_file', path: p, content: Buffer.concat(chunks).toString('utf8') });
+          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: e.message || 'get failed' }); });
           break;
         }
         case 'ftp_put': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
           const body = typeof data.content === 'string' ? data.content : '';
-          (async () => {
-            try {
-              const client = await ftpEnsureClient(session);
-              await client.uploadFrom(require('stream').Readable.from(Buffer.from(body, 'utf8')), p);
-              sendToClient(session, { type: 'ftp_saved', path: p });
-            } catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'put', path: p, message: e.message || 'put failed' }); }
-          })();
+          ftpRun(session, async (client) => {
+            await client.uploadFrom(require('stream').Readable.from(Buffer.from(body, 'utf8')), p);
+            sendToClient(session, { type: 'ftp_saved', path: p });
+          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'put', path: p, message: e.message || 'put failed' }); });
           break;
         }
         case 'ftp_disconnect': {
