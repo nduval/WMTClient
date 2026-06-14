@@ -4597,6 +4597,9 @@ class WMTClient {
     }
 
     _onFtpError(data) {
+        if (this._ftpUlQueue || this._ftpDelQueue || this._ftpDlQueue) {   // a failed op closes the FTP connection server-side — stop the batch
+            this._ftpUlQueue = null; this._ftpDelQueue = null; this._ftpDlQueue = null;
+        }
         const msg = `FTP ${data.op || ''} error: ${data.message || 'unknown'}`;
         if (data.op === 'connect') { const s = document.getElementById('ftp-acct-status'); if (s) s.textContent = msg; }
         const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = msg; foot.style.color = '#ff6666'; }
@@ -5044,14 +5047,24 @@ class WMTClient {
         const sel = (this._localRows || []).filter(r => r.cb.checked);
         if (!sel.length) return;
         if (!window.confirm('Copy ' + sel.length + ' file(s) to the FTP folder ' + (this._ftp.cwd || '.') + '?')) return;
-        let sent = 0;
-        for (const r of sel) {
-            let content; try { content = await (await r.handle.getFile()).text(); }
-            catch (e) { this._ftpFootMsg('Read failed: ' + r.name, '#ff6666'); continue; }
-            this.connection.send('ftp_put', { path: this._ftpJoin(this._ftp.cwd || '.', r.name), content });
-            sent++;
+        const items = [];
+        for (const r of sel) {   // local reads are fine to do up front; the FTP uploads must be one-at-a-time
+            try { items.push({ name: r.name, content: await (await r.handle.getFile()).text() }); }
+            catch (e) { this._ftpFootMsg('Read failed: ' + r.name, '#ff6666'); }
         }
-        this._ftpFootMsg('Copying ' + sent + ' file(s) to FTP …');   // _onFtpSaved re-lists FTP as each lands
+        if (!items.length) return;
+        this._ftpUlQueue = items; this._ftpUlDone = 0;
+        this._ftpUlNext();
+    }
+    _ftpUlNext() {   // upload ONE file at a time — basic-ftp allows only one operation per connection
+        if (!this._ftpUlQueue || !this._ftpUlQueue.length) {
+            const n = this._ftpUlDone || 0; this._ftpUlQueue = null;
+            if (n) { this._ftpFootMsg('Copied ' + n + ' file(s) to FTP.'); this._ftpRefresh(); }
+            return;
+        }
+        const it = this._ftpUlQueue[0];
+        this._ftpFootMsg('Uploading ' + it.name + ' …');
+        this.connection.send('ftp_put', { path: this._ftpJoin(this._ftp.cwd || '.', it.name), content: it.content });
     }
     _xferFtpToLocal() {
         if (!this._local || !this._local.dir) { this._ftpFootMsg('Open a local folder first.', '#caa300'); return; }
@@ -5205,6 +5218,7 @@ class WMTClient {
 
     _onFtpSaved(data) {
         if (this._ftp) this._ftp.dirty = false;
+        if (this._ftpUlQueue) { this._ftpUlQueue.shift(); this._ftpUlDone = (this._ftpUlDone || 0) + 1; this._ftpUlNext(); return; }   // transfer batch: next file, refresh only at the end
         this._ftpUpdateSaveBtn('saved');
         this.appendOutput(`FTP saved ${data.path}.`, 'system');
         this._ftpRefresh();   // so a newly-created file shows up without a manual refresh
@@ -5214,9 +5228,10 @@ class WMTClient {
     _ftpDelete() {
         if (!this._ftp || !this._ftp.connected) return;
         const checked = (this._ftpRows || []).filter(r => r.cb.checked);
-        if (checked.length) {   // delete all checked files
+        if (checked.length) {   // delete all checked files, ONE at a time (see _ftpDelNext)
             if (!window.confirm(`Delete ${checked.length} file(s) from the MUD?\n\nThis permanently removes them and cannot be undone.`)) return;
-            for (const r of checked) this.connection.send('ftp_delete', { path: r.path });
+            this._ftpDelQueue = checked.map(r => r.path); this._ftpDelDone = 0;
+            this._ftpDelNext();
             return;
         }
         const path = this._ftp.curFile;
@@ -5224,9 +5239,16 @@ class WMTClient {
         if (!window.confirm(`Delete ${path}?\n\nThis permanently removes the file from the MUD and cannot be undone.`)) return;
         this.connection.send('ftp_delete', { path });
     }
+    _ftpDelNext() {   // one DELE at a time — basic-ftp serializes per connection
+        if (!this._ftpDelQueue || !this._ftpDelQueue.length) {
+            const n = this._ftpDelDone || 0; this._ftpDelQueue = null;
+            if (n) { this._ftpFootMsg('Deleted ' + n + ' file(s).'); this._ftpRefresh(); }
+            return;
+        }
+        this.connection.send('ftp_delete', { path: this._ftpDelQueue[0] });
+    }
 
     _onFtpDeleted(data) {
-        this.appendOutput(`FTP deleted ${data.path}.`, 'system');
         if (this._ftp && this._ftp.curFile === data.path) {
             this._ftp.curFile = null;
             document.getElementById('ftp-filename').textContent = '(no file open)';
@@ -5234,6 +5256,8 @@ class WMTClient {
             if (this._ftpCM) this._ftpCM.setValue(''); else { const ta = document.getElementById('ftp-textarea'); if (ta) ta.value = ''; }
             this._ftpSetDirty(false);
         }
+        if (this._ftpDelQueue) { this._ftpDelQueue.shift(); this._ftpDelDone = (this._ftpDelDone || 0) + 1; this._ftpDelNext(); return; }   // delete batch: next, refresh at the end
+        this.appendOutput(`FTP deleted ${data.path}.`, 'system');
         this._ftpRefresh();
     }
 
