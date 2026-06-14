@@ -590,7 +590,7 @@ class WMTClient {
     // Health check to detect zombie WebSocket connections
     // Sends a ping, expects a response within timeout
     // If no response, connection is dead - force reconnect
-    verifyConnectionHealth() {
+    verifyConnectionHealth(timeoutMs = 5000) {
         // Don't stack health checks
         if (this.healthCheckPending) {
             console.log('Health check already pending, skipping');
@@ -627,7 +627,7 @@ class WMTClient {
             if (this.connection) {
                 this.connection.reconnect();
             }
-        }, 5000);
+        }, timeoutMs);
     }
 
     // Called when server responds to health check
@@ -3829,9 +3829,11 @@ class WMTClient {
                                 this.connection.connect();
                             }
                         } else if (state === WebSocket.OPEN) {
-                            // Connection looks alive - use health check to verify
-                            // This will auto-reconnect if no response within 5 seconds
-                            this.verifyConnectionHealth();
+                            // Connection looks alive — verify, but with a GENEROUS timeout.
+                            // A tab that just unfroze has throttled timers/network for a
+                            // moment; the old 5s window tripped constantly on app-switch and
+                            // forced needless reconnects. 12s only fires on a truly dead socket.
+                            this.verifyConnectionHealth(12000);
                         }
                     }
                 }, delay);

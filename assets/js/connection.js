@@ -7,7 +7,7 @@
 // message so the server can log which client version each session is running — so
 // when someone hits a bug that's already fixed, we can immediately see if they're
 // on stale cached code rather than guessing (2026-06-13, Nathan's idea).
-const WMT_CLIENT_VERSION = '2026-06-13b';
+const WMT_CLIENT_VERSION = '2026-06-13c';
 
 class MudConnection {
     constructor(options = {}) {
@@ -286,22 +286,25 @@ class MudConnection {
         this.sessionResumed = false;
         this.stopKeepAlive();
 
-        // Force close any existing socket, even if in weird state
-        if (this.socket) {
-            try {
-                // Don't send disconnect message - just close
-                this.socket.onclose = null;  // Prevent onclose handler from firing
-                this.socket.onerror = null;
-                this.socket.onmessage = null;
-                this.socket.close();
-            } catch (e) {
-                console.error('Error closing socket:', e);
-            }
-            this.socket = null;
+        // Close the existing socket and wait for it to ACTUALLY close before
+        // reconnecting. If we open the new socket immediately, its auth can reach
+        // the server before the server has processed the old socket's close — so
+        // the server briefly sees two connections for one token (the "multi-device"
+        // blip the user sees as a random disconnect). Reconnecting on the old
+        // socket's close event (with a safety timer) avoids that race.
+        const old = this.socket;
+        this.socket = null;
+        if (old && old.readyState !== WebSocket.CLOSED) {
+            let done = false;
+            const go = () => { if (done) return; done = true; this.connect(); };
+            old.onerror = null;
+            old.onmessage = null;
+            old.onclose = () => setTimeout(go, 100);   // reconnect just after the old socket is fully gone
+            try { old.close(); } catch (e) { go(); }
+            setTimeout(go, 1500);                        // safety net if the close event never fires
+        } else {
+            setTimeout(() => this.connect(), 300);
         }
-
-        // Small delay then reconnect fresh
-        setTimeout(() => this.connect(), 300);
     }
 
     requestReconnect() {
