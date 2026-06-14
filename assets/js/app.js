@@ -2589,6 +2589,7 @@ class WMTClient {
                                 <label>Header <input type="color" class="channel-header-color" value="${headerColor}"></label>
                                 <label>Background <input type="color" class="channel-bg-color" value="${bgColor}"></label>
                                 <button class="btn-reset-colors" title="Reset to defaults">Reset</button>
+                                <button class="btn-copy-colors" title="Copy these colors to other channels you choose">Copy to…</button>
                             </div>
                         </div>
                     `;
@@ -2637,6 +2638,11 @@ class WMTClient {
                         row.querySelector('.channel-color-row').style.display = 'none';
                     });
                 });
+
+                // "Copy to…" — copy this row's colors to a SET of channels you pick.
+                channelList.querySelectorAll('.btn-copy-colors').forEach(btn => {
+                    btn.addEventListener('click', (e) => this._chanOpenCopyPanel(e.target.closest('.channel-row')));
+                });
             }
         }
 
@@ -2680,8 +2686,54 @@ class WMTClient {
             this.channelPrefs[channel] = { sound, hidden, discord, webhookUrl, headerColor, bgColor, ifttt, iftttEvent };
         });
         this.saveChannelPrefs();
-        this.closeChannelSettingsModal();
+        // Keep the popup OPEN on save (so you can keep tweaking colors); flash a confirmation.
+        const flash = document.getElementById('channel-settings-saved');
+        if (flash) { flash.style.opacity = '1'; clearTimeout(this._chanSavedTimer); this._chanSavedTimer = setTimeout(() => { flash.style.opacity = '0'; }, 1800); }
         this.appendOutput('Channel settings saved.', 'system');
+    }
+
+    // "Copy to…" — apply one channel's colors to a CHOSEN set of other channels
+    // (e.g. give all 5 mage lines the same color without re-picking each). Inline
+    // checklist; changes land in the DOM only — Save still persists them.
+    _chanOpenCopyPanel(srcRow) {
+        if (!srcRow) return;
+        const existing = srcRow.querySelector('.channel-copy-panel');
+        if (existing) { existing.remove(); return; }   // toggle off if already open
+        const srcChannel = srcRow.dataset.channel;
+        const hdr = srcRow.querySelector('.channel-header-color')?.value || '#44dddd';
+        const bg = srcRow.querySelector('.channel-bg-color')?.value || '#64c8ff';
+        const targets = Array.from(document.querySelectorAll('#channel-list .channel-row'))
+            .map(r => r.dataset.channel).filter(c => c && c !== srcChannel).sort();
+        const panel = document.createElement('div');
+        panel.className = 'channel-copy-panel';
+        panel.style.cssText = 'margin-top:8px;padding:8px;border:1px solid var(--border-color,#444);border-radius:4px;background:rgba(0,0,0,.25);';
+        const sw = (c) => `<span style="display:inline-block;width:12px;height:12px;background:${c};border:1px solid #000;vertical-align:middle;border-radius:2px"></span>`;
+        panel.innerHTML =
+            `<div style="font-size:.85em;margin-bottom:6px">Copy ${sw(hdr)} header / ${sw(bg)} background from <b>${srcChannel}</b> to:</div>` +
+            `<div style="margin-bottom:6px;display:flex;gap:6px"><button type="button" class="ccp-all btn btn-secondary" style="padding:2px 8px;font-size:.8em">All</button><button type="button" class="ccp-none btn btn-secondary" style="padding:2px 8px;font-size:.8em">None</button></div>` +
+            `<div class="ccp-list" style="display:flex;flex-wrap:wrap;gap:4px 14px;max-height:160px;overflow:auto;margin-bottom:8px">` +
+            (targets.length ? targets.map(c => `<label style="font-size:.85em;display:flex;align-items:center;gap:4px"><input type="checkbox" value="${c}"> ${c}</label>`).join('') : '<span style="opacity:.6">No other channels yet.</span>') +
+            `</div>` +
+            `<div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="ccp-cancel btn btn-secondary">Cancel</button><button type="button" class="ccp-apply btn btn-primary">Apply to selected</button></div>`;
+        srcRow.appendChild(panel);
+        panel.querySelector('.ccp-all').addEventListener('click', () => panel.querySelectorAll('.ccp-list input').forEach(cb => cb.checked = true));
+        panel.querySelector('.ccp-none').addEventListener('click', () => panel.querySelectorAll('.ccp-list input').forEach(cb => cb.checked = false));
+        panel.querySelector('.ccp-cancel').addEventListener('click', () => panel.remove());
+        panel.querySelector('.ccp-apply').addEventListener('click', () => {
+            const picked = Array.from(panel.querySelectorAll('.ccp-list input:checked')).map(cb => cb.value);
+            let n = 0;
+            picked.forEach(ch => {
+                const row = document.querySelector(`#channel-list .channel-row[data-channel="${(window.CSS && CSS.escape) ? CSS.escape(ch) : ch}"]`);
+                if (!row) return;
+                const h = row.querySelector('.channel-header-color'); if (h) h.value = hdr;
+                const b = row.querySelector('.channel-bg-color'); if (b) b.value = bg;
+                const tog = row.querySelector('.channel-colors-toggle'); if (tog) tog.checked = true;
+                const cr = row.querySelector('.channel-color-row'); if (cr) cr.style.display = 'flex';
+                n++;
+            });
+            panel.remove();
+            this.appendOutput(`Copied colors to ${n} channel(s) — click Save to keep.`, 'system');
+        });
     }
 
     // Clear chat notification when chat is focused

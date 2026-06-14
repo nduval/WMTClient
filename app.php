@@ -724,6 +724,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <span id="channel-settings-saved" style="margin-right:auto;color:#00ff88;opacity:0;transition:opacity .2s;font-size:.9em;">Saved &#10003;</span>
                 <button class="btn btn-secondary" onclick="wmtClient.closeChannelSettingsModal()">Close</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveChannelSettings()">Save</button>
             </div>
