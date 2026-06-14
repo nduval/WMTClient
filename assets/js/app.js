@@ -4524,7 +4524,7 @@ class WMTClient {
         }
         this._ensureFtpModal();
         // Already connected this browser session? Go straight back to the files.
-        if (this._ftp && this._ftp.connected) this._ftpShowWorkspace();
+        if (this._ftp && this._ftp.connected) { this._ftpShowWorkspace(); this._ftpRefresh(); }   // re-list on reopen → surfaces a dropped connection (and reconnects on demand if creds still held)
         else this._ftpShowAccount();
         document.getElementById('ftp-modal').classList.add('open');
         // Restore docked mode (desktop) if the wizard previously docked the editor.
@@ -4593,6 +4593,7 @@ class WMTClient {
     _onFtpConnected(data) {
         if (!this._ftp) this._ftp = { cwd: '.', curFile: null, dirty: false };
         this._ftp.connected = true;
+        const dc = document.getElementById('ftp-disconnect'); if (dc) { dc.classList.remove('ftp-reconnect'); dc.textContent = 'Disconnect'; }
         this._ftpShowWorkspace();
         this.appendOutput(`FTP connected as ${data.user}.`, 'system');
         this.connection.send('ftp_list', { path: '.' });
@@ -4607,6 +4608,11 @@ class WMTClient {
         const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = msg; foot.style.color = '#ff6666'; }
         if (data.op === 'put') this._ftpUpdateSaveBtn(this._ftp && this._ftp.dirty ? 'dirty' : 'clean');  // un-stick the button on a failed save
         this.appendOutput(msg, 'error');
+        // Connection genuinely gone (idle drop / closed) — surface state + offer reconnect.
+        // Operational errors (550 not found, permission, dir exists) do NOT match.
+        if (data.op !== 'connect' && /not connected|client is closed|closed because|econnreset|epipe|timed out|timeout|socket hang|not logged in/i.test(String(data.message || ''))) {
+            this._ftpMarkDisconnected();
+        }
     }
 
     _onFtpList(data) {
@@ -5283,10 +5289,30 @@ class WMTClient {
     }
 
     _ftpDisconnect() {
+        const dc = document.getElementById('ftp-disconnect');
+        // When the connection has dropped, this button is in "Reconnect" mode:
+        // re-show the account form so the (session-only) password can be re-entered.
+        if (dc && dc.classList.contains('ftp-reconnect')) {
+            dc.classList.remove('ftp-reconnect'); dc.textContent = 'Disconnect';
+            this._ftp = null;
+            this._ftpShowAccount();
+            return;
+        }
         if (!this._ftpConfirmDiscard()) return;
         if (this.connection && this.connection.connected) this.connection.send('ftp_disconnect');
         this._ftp = null;
         this._ftpShowAccount();
+    }
+
+    // The server lets an idle FTP connection drop (no keepalive). When an op comes
+    // back "not connected"/closed, reflect that state and turn Disconnect into
+    // Reconnect — the model just needs awareness + a way back, not a kept-warm link.
+    _ftpMarkDisconnected() {
+        if (this._ftp) this._ftp.connected = false;
+        const foot = document.getElementById('ftp-foot');
+        if (foot) { foot.textContent = '⚠ FTP connection lost — click Reconnect'; foot.style.color = '#caa300'; }
+        const dc = document.getElementById('ftp-disconnect');
+        if (dc) { dc.textContent = '↻ Reconnect'; dc.classList.add('ftp-reconnect'); dc.style.display = ''; }
     }
 
     // ── CodeMirror (self-hosted) — lazy-loaded only for the FTP editor ──
@@ -5677,6 +5703,7 @@ class WMTClient {
         #ftp-win .modal-footer { position:relative; overflow:visible; gap:8px; flex-wrap:wrap; }
         #ftp-win .modal-footer .ef-btn { padding:6px 12px; font-size:.85em; border-radius:4px; line-height:1.2; display:inline-flex; align-items:center; gap:5px; }
         #ftp-win .modal-footer .ef-btn.active { background:var(--primary-color); color:#0b0b14; border-color:var(--primary-color); }
+        #ftp-disconnect.ftp-reconnect { background:#caa300; border-color:#caa300; color:#161616; }
         .ftp-pop { position:absolute; top:34px; right:0; z-index:20; width:290px; background:var(--bg-dark,#0e0e18); border:1px solid var(--border-color); border-radius:8px; padding:16px; box-shadow:0 12px 34px rgba(0,0,0,.55); }
         .ftp-pop h4 { margin:0 0 14px; font-size:1.05em; }
         .ftp-pop .form-group { margin-bottom:16px; }
