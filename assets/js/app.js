@@ -3685,6 +3685,10 @@ class WMTClient {
             sendBtn.addEventListener('click', () => this.sendCommand());
         }
 
+        // Numpad movement (opt-in pref): capture-phase + document-level so it works
+        // while the game input is focused and is handled before history-nav/typing.
+        document.addEventListener('keydown', (e) => this._handleNumpadKey(e), true);
+
         // Smart auto-scroll: detect when user scrolls up manually
         if (output) {
             output.addEventListener('scroll', () => {
@@ -4099,6 +4103,32 @@ class WMTClient {
             input.select();
         }
         this.autoResizeInput();
+    }
+
+    // Numpad walking: map numpad keys → movement. e.code is NumLock-independent.
+    _handleNumpadKey(e) {
+        if (!this.preferences || !this.preferences.numpadMove) return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        const dir = {
+            Numpad8: 'n', Numpad2: 's', Numpad4: 'w', Numpad6: 'e',
+            Numpad7: 'nw', Numpad9: 'ne', Numpad1: 'sw', Numpad3: 'se',
+            Numpad5: 'look', NumpadSubtract: 'up', NumpadAdd: 'down'
+        }[e.code];
+        if (!dir) return;
+        // Move when focus is the game input or a non-editable area; leave OTHER text
+        // boxes (chat, FTP editor, settings) alone so the numpad types numbers there.
+        const t = document.activeElement;
+        const otherEditable = t && t.id !== 'command-input' &&
+            (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.closest && t.closest('.CodeMirror')));
+        if (otherEditable) return;
+        e.preventDefault();
+        e.stopPropagation();   // capture phase: stop the game input seeing it (no digit typed / no history nav)
+        this._numpadMove(dir);
+    }
+    _numpadMove(dir) {
+        if (!this.connection || !this.connection.connected) return;
+        if (this.preferences.echoCommands !== false) this.appendOutput('> ' + dir, 'command');
+        this.connection.sendCommand(dir);
     }
 
     navigateHistory(direction) {
@@ -7885,6 +7915,14 @@ class WMTClient {
                     </label>
                 </div>
                 <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: -5px;">Prevents phone from sleeping while connected</p>
+                <div class="settings-toggle">
+                    <span class="settings-toggle-label">Numpad Movement</span>
+                    <label class="settings-toggle-switch">
+                        <input type="checkbox" id="pref-numpad-move" ${prefs.numpadMove ? 'checked' : ''}>
+                        <span class="settings-toggle-slider"></span>
+                    </label>
+                </div>
+                <p class="settings-hint" style="font-size: 11px; color: #666; margin-top: -5px;">Walk with the number pad — 8 N, 2 S, 4 W, 6 E, 7/9/1/3 diagonals, &minus; up, + down, 5 look. Works in the game input; other text boxes still type numbers.</p>
                 <div class="form-group" style="margin-top: 15px; margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; color: #ccc;">Auto-disconnect after inactivity</label>
                     <select id="pref-idle-disconnect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; color: #fff; border-radius: 4px;">
@@ -8259,6 +8297,7 @@ class WMTClient {
             retainLastCommand: document.getElementById('pref-retain')?.checked ?? this.preferences.retainLastCommand ?? false,
             historySize: parseInt(document.getElementById('pref-history-size')?.value) || this.preferences.historySize || 500,
             wakeLock: document.getElementById('pref-wake-lock')?.checked ?? this.preferences.wakeLock ?? false,
+            numpadMove: document.getElementById('pref-numpad-move')?.checked ?? this.preferences.numpadMove ?? false,
             idleDisconnectMinutes: parseInt(document.getElementById('pref-idle-disconnect')?.value) || 0,
             mipEnabled: document.getElementById('pref-mip-enabled')?.checked ?? this.preferences.mipEnabled ?? true,
             mipHpBar: document.getElementById('pref-mip-hpbar')?.checked ?? this.preferences.mipHpBar ?? true,

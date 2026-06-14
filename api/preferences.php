@@ -207,6 +207,10 @@ switch ($action) {
             $validated['wakeLock'] = (bool)$preferences['wakeLock'];
         }
 
+        if (isset($preferences['numpadMove'])) {
+            $validated['numpadMove'] = (bool)$preferences['numpadMove'];
+        }
+
         if (isset($preferences['mipEnabled'])) {
             $validated['mipEnabled'] = (bool)$preferences['mipEnabled'];
         }
