@@ -1138,18 +1138,55 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
     $characters[] = $newChar;
     saveJsonFile(getCharactersListPath($userId), $characters);
 
-    // Copy data files from source
+    // Create the new character's DB row FIRST — every DB write below (triggers,
+    // aliases, tickers, classes, preferences) FK-references the characters table.
+    // duplicateCharacter historically skipped this (createCharacter does it), so
+    // duplicated chars had NO DB row → every DB save silently FK-failed → the char
+    // lived permanently on the JSON fallback. See createCharacter +
+    // memory/bug_characters_not_synced_to_lightsail_db.md.
+    pushToLightsail('/admin/character', [
+        'id' => $newId,
+        'user_id' => $userId,
+        'name' => $source['name'],
+        'label' => $label,
+        'server' => $source['server'] ?? '3k',
+        'password' => $source['password'] ?? '',
+        'sort_order' => 0,
+        'created_at' => $newChar['created_at']
+    ]);
+
+    // Copy data from source.
     $sourcePath = getCharacterDataPath($userId, $sourceId);
-    $filesToCopy = ['triggers.json', 'aliases.json', 'tickers.json', 'classes.json', 'mip_conditions.json'];
-    foreach ($filesToCopy as $file) {
-        $src = $sourcePath . '/' . $file;
-        if (file_exists($src)) {
-            copy($src, $newPath . '/' . $file);
+
+    // mip_conditions is JSON-only (no DB table) — plain file copy.
+    $mipSrc = $sourcePath . '/mip_conditions.json';
+    if (file_exists($mipSrc)) {
+        copy($mipSrc, $newPath . '/mip_conditions.json');
+    }
+
+    // triggers/aliases/tickers/classes are dual-store (DB primary, JSON fallback).
+    // Replicate a real save: read the source's authoritative list (DB-primary with
+    // JSON fallback) and write BOTH the new char's JSON file AND its DB rows — so the
+    // duplicate is correct without leaning on the JSON safety net, and server-side
+    // execution (which loads triggers/aliases/tickers from the DB) sees them at once.
+    $dbBacked = [
+        'triggers' => ['/admin/triggers', '/admin/triggers-bulk', getTriggersPath($userId, $sourceId), getTriggersPath($userId, $newId)],
+        'aliases'  => ['/admin/aliases',  '/admin/aliases-bulk',  getAliasesPath($userId, $sourceId),  getAliasesPath($userId, $newId)],
+        'tickers'  => ['/admin/tickers',  '/admin/tickers-bulk',  getTickersPath($userId, $sourceId),  getTickersPath($userId, $newId)],
+        'classes'  => ['/admin/classes',  '/admin/classes-bulk',  $sourcePath . '/classes.json',       $newPath . '/classes.json'],
+    ];
+    foreach ($dbBacked as $listKey => $p) {
+        list($getEndpoint, $bulkEndpoint, $srcJsonPath, $newJsonPath) = $p;
+        $res = listWithJsonFallback($getEndpoint, $listKey, $sourceId, $srcJsonPath);
+        $list = is_array($res['list']) ? $res['list'] : [];
+        saveJsonFile($newJsonPath, $list);
+        if (count($list) > 0) {
+            pushBulkToLightsail($bulkEndpoint, $listKey, $newId, $list);
         }
     }
 
-    // Preferences are DB-only (single source of truth) — the JSON is no longer read,
-    // so copy the source char's prefs blob from the DB into the new char's DB.
+    // Preferences are DB-only (single source of truth) — copy the source char's
+    // prefs blob from the DB into the new char's DB (its FK row now exists above).
     $srcPrefsResp = fetchFromLightsail('/admin/preferences', $sourceId);
     $srcPrefs = ($srcPrefsResp && isset($srcPrefsResp['preferences']) && is_array($srcPrefsResp['preferences'])) ? $srcPrefsResp['preferences'] : [];
     if (!empty($srcPrefs)) {
