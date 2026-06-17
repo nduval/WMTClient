@@ -42,18 +42,12 @@ if ($action === 'get_discord_prefs') {
         errorResponse('User not found', 404);
     }
 
-    // Load preferences for this character
-    $prefsPath = getPreferencesPath($reqUserId, $reqCharacterId);
-    if (!file_exists($prefsPath)) {
-        // No preferences file - return empty prefs
-        successResponse([
-            'channelPrefs' => [],
-            'discordUsername' => $user['username'] ?? 'WMT Client'
-        ]);
-        exit;
-    }
-
-    $preferences = loadJsonFile($prefsPath);
+    // Read from the DB (single source of truth) — NOT the JSON. That copy is no longer
+    // authoritative (frozen/orphaned after the DB-only migration; see
+    // bug_channel_name_space_stripped), so reading it here would feed the wmt-server's
+    // Discord-prefs fetch stale channel keys.
+    $resp = fetchFromLightsail('/admin/preferences', $reqCharacterId);
+    $preferences = ($resp && isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
 
     // Extract just the Discord-relevant parts
     $channelPrefs = $preferences['channelPrefs'] ?? [];
