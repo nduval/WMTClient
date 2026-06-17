@@ -95,21 +95,16 @@ if (!$characterId) {
 
 switch ($action) {
     case 'get':
-        // DB-first with JSON safety net. If DB row is missing or has fewer
-        // keys than the JSON file, prefer JSON (silent FK-fail / migration gap).
+        // DB is the SINGLE SOURCE OF TRUTH. The old "richer source" comparison let a
+        // stale JSON copy win over the DB on every load, which silently clobbered
+        // settings (see bug_channel_name_space_stripped). No JSON authority now. If the
+        // DB is briefly unreachable, return 503 so the client keeps its own last-known
+        // cache instead of resurrecting a divergent server-side JSON.
         $resp = fetchFromLightsail('/admin/preferences', $characterId);
-        $dbPrefs = ($resp && isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
-        $jsonPath = getPreferencesPath($userId, $characterId);
-        $jsonPrefs = file_exists($jsonPath) ? loadJsonFile($jsonPath) : [];
-        $jsonPrefs = is_array($jsonPrefs) ? $jsonPrefs : [];
-
-        // Pick the richer source
-        if (count($jsonPrefs) > count($dbPrefs)) {
-            $preferences = $jsonPrefs;
-            @error_log("preferences fallback: using JSON for cid=$characterId (json=" . count($jsonPrefs) . " db=" . count($dbPrefs) . ")");
-        } else {
-            $preferences = $dbPrefs;
+        if ($resp === null) {
+            errorResponse('Preferences temporarily unavailable', 503);
         }
+        $preferences = (isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
 
         // Merge with defaults
         $defaults = [
@@ -404,11 +399,15 @@ switch ($action) {
             $validated['botFavorites'] = $favs;
         }
 
-        // Load existing and merge
-        $existing = loadJsonFile(getPreferencesPath($userId, $characterId));
+        // Merge onto the current DB blob (DB is the source of truth). Abort if the DB
+        // is unreachable rather than persisting a partial merge that could drop fields.
+        $resp = fetchFromLightsail('/admin/preferences', $characterId);
+        if ($resp === null) {
+            errorResponse('Preferences temporarily unavailable — not saved', 503);
+        }
+        $existing = (isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
         $merged = array_merge($existing, $validated);
 
-        saveJsonFile(getPreferencesPath($userId, $characterId), $merged);
         syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $merged]);
         successResponse(['preferences' => $merged]);
         break;
@@ -429,7 +428,6 @@ switch ($action) {
             'keepAliveInterval' => 60
         ];
 
-        saveJsonFile(getPreferencesPath($userId, $characterId), $defaults);
         syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $defaults]);
         successResponse(['preferences' => $defaults, 'message' => 'Preferences reset to defaults']);
         break;

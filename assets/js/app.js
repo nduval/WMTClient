@@ -432,13 +432,20 @@ class WMTClient {
             // Load preferences
             const prefsRes = await fetch(this.apiUrl('api/preferences.php?action=get'));
             const prefsData = await prefsRes.json();
+            const prefsCacheKey = 'wmt_prefs_' + ((window.WMT_CONFIG && window.WMT_CONFIG.characterId) || 'default');
             if (prefsData.success) {
                 this.preferences = prefsData.preferences || {};
-                // Load channel preferences (each channel can have its own webhook)
-                this.channelPrefs = this.preferences.channelPrefs || {};
-                // Load bot favorites
-                this.botFavorites = this.preferences.botFavorites || [];
+                // Cache last-known prefs so a brief DB outage doesn't reset everything.
+                try { localStorage.setItem(prefsCacheKey, JSON.stringify(this.preferences)); } catch (e) {}
+            } else {
+                // DB-only store briefly unavailable — fall back to our OWN last-known
+                // cache (not a server-side JSON) so prefs/channels aren't wiped to defaults.
+                try { const cached = localStorage.getItem(prefsCacheKey); if (cached) this.preferences = JSON.parse(cached) || {}; } catch (e) {}
             }
+            // Load channel preferences (each channel can have its own webhook)
+            this.channelPrefs = this.preferences.channelPrefs || {};
+            // Load bot favorites
+            this.botFavorites = this.preferences.botFavorites || [];
 
             // Load character password for auto-login
             const pwRes = await fetch(this.apiUrl('api/characters.php?action=get_password'));
