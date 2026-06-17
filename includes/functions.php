@@ -1158,11 +1158,8 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
     // Copy data from source.
     $sourcePath = getCharacterDataPath($userId, $sourceId);
 
-    // mip_conditions is JSON-only (no DB table) — plain file copy.
-    $mipSrc = $sourcePath . '/mip_conditions.json';
-    if (file_exists($mipSrc)) {
-        copy($mipSrc, $newPath . '/mip_conditions.json');
-    }
+    // (mip_conditions is no longer a separate file — it lives in the preferences
+    // blob, which the prefs DB sync further below copies to the new char.)
 
     // triggers/aliases/tickers/classes are dual-store (DB primary, JSON fallback).
     // Replicate a real save into the new char: write BOTH the JSON file AND the DB

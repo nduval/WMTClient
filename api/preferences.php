@@ -427,12 +427,13 @@ switch ($action) {
         break;
 
     case 'get_mip_conditions':
-        $conditionsPath = getMipConditionsPath($userId, $characterId);
-        $conditions = loadJsonFile($conditionsPath);
-
-        if (!is_array($conditions)) {
-            $conditions = [];
+        // mip_conditions live inside the DB-only preferences blob (preferences.mipConditions).
+        $resp = fetchFromLightsail('/admin/preferences', $characterId);
+        if ($resp === null) {
+            errorResponse('Preferences temporarily unavailable', 503);
         }
+        $prefs = (isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
+        $conditions = (isset($prefs['mipConditions']) && is_array($prefs['mipConditions'])) ? $prefs['mipConditions'] : [];
 
         successResponse(['conditions' => $conditions]);
         break;
@@ -524,8 +525,15 @@ switch ($action) {
             ];
         }
 
-        $conditionsPath = getMipConditionsPath($userId, $characterId);
-        saveJsonFile($conditionsPath, $validated);
+        // Store in the DB-only preferences blob (preferences.mipConditions) — no JSON.
+        // Merge onto the current blob so other preference keys (channelPrefs, etc.) survive.
+        $resp = fetchFromLightsail('/admin/preferences', $characterId);
+        if ($resp === null) {
+            errorResponse('Preferences temporarily unavailable — not saved', 503);
+        }
+        $prefs = (isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
+        $prefs['mipConditions'] = $validated;
+        syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $prefs]);
         successResponse(['conditions' => $validated, 'message' => 'MIP conditions saved']);
         break;
 
