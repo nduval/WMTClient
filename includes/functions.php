@@ -1165,20 +1165,53 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
     }
 
     // triggers/aliases/tickers/classes are dual-store (DB primary, JSON fallback).
-    // Replicate a real save: read the source's authoritative list (DB-primary with
-    // JSON fallback) and write BOTH the new char's JSON file AND its DB rows — so the
-    // duplicate is correct without leaning on the JSON safety net, and server-side
-    // execution (which loads triggers/aliases/tickers from the DB) sees them at once.
-    $dbBacked = [
+    // Replicate a real save into the new char: write BOTH the JSON file AND the DB
+    // rows so server-side execution (which loads from the DB) works immediately and
+    // the copy doesn't lean on the JSON safety net.
+    //
+    // CRITICAL: every id in these tables is GLOBALLY unique (the primary key is the
+    // bare id, not (character_id,id)). Copying a row with the SOURCE's id collides:
+    // aliases/triggers/tickers-bulk use plain INSERT → "UNIQUE constraint failed" →
+    // the whole transaction rolls back (0 rows); classes-bulk uses INSERT OR IGNORE
+    // → the row is silently dropped. So we MUST mint fresh ids on copy. Class
+    // membership is by class_id, so regenerate class ids FIRST, map old→new, then
+    // remap each item's `class` reference (the wire field that carries class_id).
+
+    // 1) classes first — fresh ids + old→new map for remapping below.
+    $clsRes = listWithJsonFallback('/admin/classes', 'classes', $sourceId, $sourcePath . '/classes.json');
+    $srcClasses = is_array($clsRes['list']) ? $clsRes['list'] : [];
+    $classMap = [];
+    $newClasses = [];
+    foreach ($srcClasses as $cl) {
+        if (!is_array($cl)) continue;
+        $oldId = $cl['id'] ?? null;
+        $cl['id'] = generateId();
+        if ($oldId !== null) $classMap[$oldId] = $cl['id'];
+        $newClasses[] = $cl;
+    }
+    saveJsonFile($newPath . '/classes.json', $newClasses);
+    if (count($newClasses) > 0) {
+        pushBulkToLightsail('/admin/classes-bulk', 'classes', $newId, $newClasses);
+    }
+
+    // 2) triggers/aliases/tickers — fresh item ids + remapped class refs.
+    $itemTypes = [
         'triggers' => ['/admin/triggers', '/admin/triggers-bulk', getTriggersPath($userId, $sourceId), getTriggersPath($userId, $newId)],
         'aliases'  => ['/admin/aliases',  '/admin/aliases-bulk',  getAliasesPath($userId, $sourceId),  getAliasesPath($userId, $newId)],
         'tickers'  => ['/admin/tickers',  '/admin/tickers-bulk',  getTickersPath($userId, $sourceId),  getTickersPath($userId, $newId)],
-        'classes'  => ['/admin/classes',  '/admin/classes-bulk',  $sourcePath . '/classes.json',       $newPath . '/classes.json'],
     ];
-    foreach ($dbBacked as $listKey => $p) {
+    foreach ($itemTypes as $listKey => $p) {
         list($getEndpoint, $bulkEndpoint, $srcJsonPath, $newJsonPath) = $p;
         $res = listWithJsonFallback($getEndpoint, $listKey, $sourceId, $srcJsonPath);
         $list = is_array($res['list']) ? $res['list'] : [];
+        foreach ($list as &$item) {
+            if (!is_array($item)) continue;
+            $item['id'] = generateId();
+            if (isset($item['class']) && $item['class'] !== null && isset($classMap[$item['class']])) {
+                $item['class'] = $classMap[$item['class']];
+            }
+        }
+        unset($item);
         saveJsonFile($newJsonPath, $list);
         if (count($list) > 0) {
             pushBulkToLightsail($bulkEndpoint, $listKey, $newId, $list);
