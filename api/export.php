@@ -77,9 +77,10 @@ switch ($action) {
             $data['aliases'] = loadJsonFile(getAliasesPath($userId, $characterId));
         }
 
-        // Export preferences
+        // Export preferences — from the DB (single source of truth), not the orphaned JSON.
         if ($include === 'all' || $include === 'preferences') {
-            $data['preferences'] = loadJsonFile(getPreferencesPath($userId, $characterId));
+            $resp = fetchFromLightsail('/admin/preferences', $characterId);
+            $data['preferences'] = ($resp && isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
         }
 
         // Include classes when exporting triggers or aliases (for cross-user/cross-character import)
@@ -253,14 +254,16 @@ switch ($action) {
             $imported[] = 'aliases';
         }
 
-        // Import preferences
+        // Import preferences — write to the DB (single source of truth); no JSON write,
+        // or the DB-only load would ignore it. Merge reads the current DB blob.
         if (isset($data['preferences']) && is_array($data['preferences'])) {
             if ($mode === 'merge') {
-                $existing = loadJsonFile(getPreferencesPath($userId, $characterId));
+                $resp = fetchFromLightsail('/admin/preferences', $characterId);
+                $existing = ($resp && isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
                 $data['preferences'] = array_merge($existing, $data['preferences']);
             }
 
-            saveJsonFile(getPreferencesPath($userId, $characterId), $data['preferences']);
+            syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $data['preferences']]);
             $imported[] = 'preferences';
         }
 

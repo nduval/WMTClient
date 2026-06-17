@@ -1140,12 +1140,20 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
 
     // Copy data files from source
     $sourcePath = getCharacterDataPath($userId, $sourceId);
-    $filesToCopy = ['triggers.json', 'aliases.json', 'tickers.json', 'preferences.json', 'classes.json', 'mip_conditions.json'];
+    $filesToCopy = ['triggers.json', 'aliases.json', 'tickers.json', 'classes.json', 'mip_conditions.json'];
     foreach ($filesToCopy as $file) {
         $src = $sourcePath . '/' . $file;
         if (file_exists($src)) {
             copy($src, $newPath . '/' . $file);
         }
+    }
+
+    // Preferences are DB-only (single source of truth) — the JSON is no longer read,
+    // so copy the source char's prefs blob from the DB into the new char's DB.
+    $srcPrefsResp = fetchFromLightsail('/admin/preferences', $sourceId);
+    $srcPrefs = ($srcPrefsResp && isset($srcPrefsResp['preferences']) && is_array($srcPrefsResp['preferences'])) ? $srcPrefsResp['preferences'] : [];
+    if (!empty($srcPrefs)) {
+        syncDataToDb(['type' => 'preferences', 'character_id' => $newId, 'data' => $srcPrefs]);
     }
 
     // Copy scripts directory if it exists
