@@ -2237,6 +2237,23 @@ class WMTClient {
     appendChatMessage(message, chatType = 'channel', channel = '', rawText = '', options = {}) {
         // Get channel preferences
         const channelKey = channel.toLowerCase();
+        // Self-heal stranded settings: an old save (or a stale-JSON fallback during a
+        // server blip) can leave a spaced channel's settings under the space-stripped
+        // key (e.g. "bchat bard" → "bchatbard"). When the REAL spaced channel arrives,
+        // move the stranded settings onto it and persist to BOTH stores, so it can't
+        // stay broken regardless of which copy went stale. See bug_channel_name_space_stripped.
+        if (channel) {
+            const stripped = channelKey.replace(/[^a-z0-9_-]/g, '');
+            if (stripped !== channelKey && this.channelPrefs[stripped]) {
+                const cur = this.channelPrefs[channelKey];
+                const curHasSettings = cur && (cur.discord || cur.sound || cur.hidden || cur.headerColor || cur.bgColor || cur.ifttt);
+                if (!curHasSettings) {
+                    this.channelPrefs[channelKey] = this.channelPrefs[stripped];
+                    delete this.channelPrefs[stripped];
+                    this.saveChannelPrefs();
+                }
+            }
+        }
         const prefs = this.channelPrefs[channelKey] || {};
 
         // Check if channel is hidden
