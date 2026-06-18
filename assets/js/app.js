@@ -4968,9 +4968,10 @@ class WMTClient {
         const pane = document.getElementById('ftp-local');
         const grid = document.querySelector('#ftp-win .ftp-grid');
         if (!pane || !grid) return;
-        if (pane.style.display !== 'none') { pane.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); document.querySelectorAll('#ftp-win .ftp-pane-foot').forEach(f => f.style.display = 'none'); }
+        const ld = document.getElementById('ftp-local-divider');
+        if (pane.style.display !== 'none') { pane.style.display = 'none'; if (ld) ld.style.display = 'none'; grid.classList.remove('local-on'); this._ftpSetActivePane('ftp'); document.querySelectorAll('#ftp-win .ftp-pane-foot').forEach(f => f.style.display = 'none'); }
         else {
-            pane.style.display = ''; grid.classList.add('local-on'); this._ftpSetActivePane('local');
+            pane.style.display = ''; if (ld) ld.style.display = ''; grid.classList.add('local-on'); this._ftpSetActivePane('local');
             document.querySelectorAll('#ftp-win .ftp-pane-foot').forEach(f => f.style.display = 'flex');   // transfer bars need both panes
             if (!this._local || !this._local.dir) await this._localOpenLast();
             else this._localRender();
@@ -5356,14 +5357,33 @@ class WMTClient {
     }
 
     _ftpSave() {
+        if (this._ftpCmp && this._ftpMergeView) {   // comparing → save the editable (left) working file
+            const cmp = this._ftpCmp, val = this._ftpMergeView.editor().getValue();
+            if (cmp.rightSrc === 'local' && cmp.rightHandle) return this._ftpWriteLocalHandle(cmp.rightHandle, val);
+            if (cmp.rightSrc === 'ftp' && cmp.rightPath) {
+                this._ftpUpdateSaveBtn('saving');
+                this.connection.send('ftp_put', { path: cmp.rightPath, content: val });
+                return;
+            }
+            document.getElementById('ftp-edit-status').textContent = 'nothing to save'; return;
+        }
         if (this._editSrc === 'local') return this._localSave();   // route Save to local disk when editing a local file
         if (!this._ftp || !this._ftp.curFile) { document.getElementById('ftp-edit-status').textContent = 'no file open'; return; }
         this._ftpUpdateSaveBtn('saving');
         this.connection.send('ftp_put', { path: this._ftp.curFile, content: this._ftpEditorValue() });
     }
 
+    async _ftpWriteLocalHandle(handle, text) {
+        try {
+            const w = await handle.createWritable(); await w.write(text); await w.close();
+            this._ftpCmpDirty = false; this._ftpUpdateSaveBtn('saved');
+            document.getElementById('ftp-edit-status').textContent = 'Saved (local)';
+        } catch (e) { document.getElementById('ftp-edit-status').textContent = 'local save failed: ' + (e.message || e); }
+    }
+
     _onFtpSaved(data) {
         if (this._ftp) this._ftp.dirty = false;
+        this._ftpCmpDirty = false;   // compare-mode FTP save also clears the working-pane dirty flag
         if (this._ftpUlQueue) { this._ftpUlQueue.shift(); this._ftpUlDone = (this._ftpUlDone || 0) + 1; this._ftpUlNext(); return; }   // transfer batch: next file, refresh only at the end
         this._ftpUpdateSaveBtn('saved');
         this.appendOutput(`FTP saved ${data.path}.`, 'system');
@@ -5599,29 +5619,39 @@ class WMTClient {
         const wrap = document.querySelector('#ftp-win .ftp-edit-wrap'); if (wrap) wrap.style.display = 'none';
         host.style.display = ''; host.classList.toggle('ftp-light', !!this._ftpLight);
         document.getElementById('ftp-cmp-bar').style.display = '';
-        document.getElementById('ftp-cmp-left').textContent = cmp.rightLabel || '(file)';
-        document.getElementById('ftp-cmp-right').textContent = '📌 ' + cmp.baseLabel;
+        // Left pane = the file you opened (EDITABLE); right pane = the pinned base (read-only reference).
+        document.getElementById('ftp-cmp-left').textContent = '✎ ' + (cmp.rightLabel || '(file)') + ' — editable';
+        document.getElementById('ftp-cmp-right').textContent = '🔒 📌 ' + cmp.baseLabel + ' — read-only reference';
         // Snapshot the pre-compare header + dirty state ONCE so exit can restore it verbatim.
         if (!cmp._snap) cmp._snap = {
             fn: (document.getElementById('ftp-filename') || {}).textContent || '',
             meta: (document.getElementById('ftp-filemeta') || {}).textContent || '',
             dirty: !!(this._ftp && this._ftp.dirty),
         };
-        const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = '⇄ Compare';
+        const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = '⇄ Compare — editing ' + (cmp.rightLabel || '');
         const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = '';
+        const cmSave = () => this._ftpSave();
         this._ftpMergeView = window.CodeMirror.MergeView(host, {
-            value: cmp.rightText || '',     // left pane = the file you just opened
-            orig: cmp.baseText || '',       // right pane = the pinned base
-            mode: 'text/x-lpc', lineNumbers: true, readOnly: true, revertButtons: false,
+            value: cmp.rightText || '',     // left pane = the file you opened (editable)
+            orig: cmp.baseText || '',       // right pane = the pinned base (read-only)
+            mode: 'text/x-lpc', lineNumbers: true,
+            revertButtons: true,            // ◀ arrows copy a diff chunk from the reference into your file
             highlightDifferences: true, connect: 'align', collapseIdentical: false,
+            extraKeys: { 'Ctrl-S': cmSave, 'Cmd-S': cmSave },
         });
+        this._ftpCmpDirty = false;
+        // Edits to the working (left) pane → dirty. (Initial value set at construction does NOT fire 'change'.)
+        this._ftpMergeView.editor().on('change', () => { this._ftpCmpDirty = true; this._ftpUpdateSaveBtn('dirty'); });
         const sz = (cm) => { if (cm) { cm.setSize('100%', '100%'); cm.refresh(); } };
         sz(this._ftpMergeView.editor());
         if (this._ftpMergeView.rightOriginal) sz(this._ftpMergeView.rightOriginal());
+        this._ftpUpdateSaveBtn('clean');
         document.getElementById('ftp-edit-status').textContent = '';
     }
 
     _ftpExitCompare() {
+        if (this._ftpCmpDirty && !window.confirm('You have unsaved changes in the file you were editing. Discard them?')) return;
+        this._ftpCmpDirty = false;
         const cmp = this._ftpCmp; this._ftpCmp = null; this._ftpMergeView = null;
         const host = document.getElementById('ftp-merge'); if (host) { host.innerHTML = ''; host.style.display = 'none'; }
         const bar = document.getElementById('ftp-cmp-bar'); if (bar) bar.style.display = 'none';
@@ -5852,6 +5882,29 @@ class WMTClient {
             if (w) { try { localStorage.setItem('wmt_ftp_treew', String(w)); } catch (e) {} }
             if (this._ftpCM) this._ftpCM.refresh();
         });
+
+        // Local-pane divider (only present/visible when the local pane is open).
+        const ldiv = overlay.querySelector('#ftp-local-divider');
+        if (ldiv) {
+            let lsaved; try { lsaved = parseInt(localStorage.getItem('wmt_ftp_localw'), 10); } catch (e) {}
+            if (lsaved && lsaved >= 140) grid.style.setProperty('--ftp-local-w', lsaved + 'px');
+            let ldragging = false;
+            ldiv.addEventListener('mousedown', (e) => { ldragging = true; e.preventDefault(); });
+            window.addEventListener('mousemove', (e) => {
+                if (!ldragging) return;
+                const rect = grid.getBoundingClientRect();
+                const w = Math.max(140, Math.min(rect.width - 480, e.clientX - rect.left));   // leave room for tree + editor
+                grid.style.setProperty('--ftp-local-w', w + 'px');
+            });
+            window.addEventListener('mouseup', () => {
+                if (!ldragging) return;
+                ldragging = false;
+                const w = parseInt(grid.style.getPropertyValue('--ftp-local-w'), 10);
+                if (w) { try { localStorage.setItem('wmt_ftp_localw', String(w)); } catch (e) {} }
+                if (this._ftpCM) this._ftpCM.refresh();
+                if (this._ftpMergeView) { this._ftpMergeView.editor().refresh(); if (this._ftpMergeView.rightOriginal) this._ftpMergeView.rightOriginal().refresh(); }
+            });
+        }
     }
 
     _ftpInitFloatDrag(overlay) {
@@ -5954,7 +6007,7 @@ class WMTClient {
         .ftp-grid { display:grid; grid-template-columns: var(--ftp-tree-w, 260px) 6px minmax(0,1fr); grid-template-rows: minmax(0, 1fr); gap:0; flex:1 1 auto; min-height:0; position:relative; }
         .ftp-divider { background:var(--border-color); cursor:col-resize; border-radius:3px; }
         .ftp-divider:hover { background:var(--primary-color); }
-        .ftp-grid.local-on { grid-template-columns: var(--ftp-local-w,240px) var(--ftp-tree-w,260px) 6px minmax(0,1fr); }   /* local pane on the LEFT */
+        .ftp-grid.local-on { grid-template-columns: var(--ftp-local-w,240px) 6px var(--ftp-tree-w,260px) 6px minmax(0,1fr); }   /* local | divider | tree | divider | editor */
         .ftp-tree, .ftp-local { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:#0b0b14; border:1px solid var(--border-color); border-radius:6px; }
         .ftp-tree .ftp-list, .ftp-local .ftp-list { flex:1 1 auto; min-height:0; overflow:auto; }   /* header stays fixed; only the list scrolls */
         .ftp-pane-head { display:flex; align-items:center; gap:6px; font-size:.74em; font-weight:600; letter-spacing:.03em; padding:5px 8px; cursor:pointer; border-bottom:1px solid var(--border-color); color:var(--text-muted); white-space:nowrap; }
@@ -6134,6 +6187,7 @@ class WMTClient {
                     <ul class="ftp-list" id="ftp-local-list"></ul>
                     <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-local-xfer" title="Copy the checked files to the FTP folder" disabled>→</button><span class="ftp-sel-count" id="ftp-local-selcount">0 selected</span></div>
                   </div>
+                  <div class="ftp-divider" id="ftp-local-divider" style="display:none" title="Drag to resize the local pane"></div>
                   <div class="ftp-tree">
                     <div class="ftp-pane-head" id="ftp-tree-head" title="FTP files — click to make this pane active">☁ FTP</div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
