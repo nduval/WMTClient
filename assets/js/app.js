@@ -4930,6 +4930,13 @@ class WMTClient {
             return;
         }
         if (!this._ftp) return;
+        if (this._ftpCmp) {   // compare armed → render the diff instead of loading into the editor
+            const c = typeof data.content === 'string' ? data.content : '';
+            this._ftp.curFile = data.path;
+            this._ftpShowMerge({ label: this._ftpBaseName(data.path), text: c, src: 'ftp', path: data.path });
+            document.getElementById('ftp-edit-status').textContent = '';
+            return;
+        }
         this._editSrc = 'ftp';   // the open file is now an FTP file (Save → ftp_put)
         this._ftp.curFile = data.path;
         document.getElementById('ftp-filename').textContent = data.path;
@@ -5070,6 +5077,7 @@ class WMTClient {
         let text = '', lastMod = null;
         try { const f = await handle.getFile(); text = await f.text(); lastMod = f.lastModified; }
         catch (e) { document.getElementById('ftp-edit-status').textContent = 'open failed'; return; }
+        if (this._ftpCmp) { this._ftpShowMerge({ label: '[local] ' + handle.name, text, src: 'local', handle }); return; }
         this._editSrc = 'local';
         this._ftpSetActivePane('local');
         if (!this._local) this._local = { stack: [] };
@@ -5507,6 +5515,92 @@ class WMTClient {
         this._ftpApplyEditorPrefs();   // font size + word wrap from saved prefs
     }
 
+    // ── File compare (phase 1: read-only side-by-side diff via CodeMirror MergeView) ──
+    // Pin the open file as the base, then open another file (FTP or local) to see a
+    // highlighted side-by-side diff. Lazy-loads the merge addon + diff_match_patch
+    // only the first time compare is used; both panes are read-only for now.
+    _ftpLoadMerge() {
+        if (this._ftpMergeReady) return this._ftpMergeReady;
+        const dir = 'assets/vendor/codemirror/';
+        const loadScript = (src) => new Promise((res, rej) => {
+            const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('load ' + src)); document.head.appendChild(s);
+        });
+        this._ftpMergeReady = Promise.resolve(this._ftpLoadCM())
+            .then(() => {
+                if (!window.CodeMirror) throw new Error('CodeMirror unavailable');
+                if (window.CodeMirror.MergeView) return;   // already present
+                const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = dir + 'merge.css'; document.head.appendChild(link);
+                return loadScript(dir + 'diff_match_patch.js').then(() => loadScript(dir + 'merge.js'));
+            })
+            .then(() => { if (!window.CodeMirror.MergeView) throw new Error('MergeView unavailable'); })
+            .catch((e) => { console.warn('FTP compare: diff view failed to load:', e); this._ftpMergeReady = null; throw e; });
+        return this._ftpMergeReady;
+    }
+
+    _ftpBaseName(p) { return String(p || '').replace(/\/+$/, '').split('/').pop() || String(p || ''); }
+
+    // Toolbar ⇄ Compare: pin the currently-open file, or exit if already comparing.
+    _ftpToggleCompare() {
+        if (this._ftpCmp) { this._ftpExitCompare(); return; }
+        if (!window.CodeMirror) { document.getElementById('ftp-edit-status').textContent = 'Compare needs the code editor (still loading) — try again in a moment.'; return; }
+        const isLocal = this._editSrc === 'local' && this._local && this._local.curHandle;
+        const path = this._ftp && this._ftp.curFile;
+        if (!isLocal && !path) { document.getElementById('ftp-edit-status').textContent = 'Open a file first, then click Compare to pin it as the base.'; return; }
+        const label = isLocal ? this._local.curName : this._ftpBaseName(path);
+        this._ftpCmp = { baseLabel: label, baseText: this._ftpEditorValue() };
+        this._ftpUpdateCompareUI();
+        document.getElementById('ftp-edit-status').textContent = 'Pinned “' + label + '” — open another file to compare.';
+    }
+
+    // Called from _onFtpFile / _localOpenFile when compare is armed.
+    _ftpShowMerge(opts) {
+        if (!this._ftpCmp) return;
+        Object.assign(this._ftpCmp, { rightLabel: opts.label, rightText: opts.text, rightSrc: opts.src, rightPath: opts.path || null, rightHandle: opts.handle || null });
+        document.getElementById('ftp-edit-status').textContent = 'Comparing…';
+        this._ftpLoadMerge().then(() => this._ftpRenderMerge())
+            .catch(() => { document.getElementById('ftp-edit-status').textContent = 'Compare unavailable (diff view failed to load).'; this._ftpExitCompare(); });
+    }
+
+    _ftpRenderMerge() {
+        const cmp = this._ftpCmp; if (!cmp || !window.CodeMirror || !window.CodeMirror.MergeView) return;
+        const host = document.getElementById('ftp-merge'); if (!host) return;
+        host.innerHTML = '';   // rebuild fresh each open — avoids stale-diff state
+        const wrap = document.querySelector('#ftp-win .ftp-edit-wrap'); if (wrap) wrap.style.display = 'none';
+        host.style.display = ''; host.classList.toggle('ftp-light', !!this._ftpLight);
+        document.getElementById('ftp-cmp-bar').style.display = '';
+        document.getElementById('ftp-cmp-left').textContent = cmp.rightLabel || '(file)';
+        document.getElementById('ftp-cmp-right').textContent = '📌 ' + cmp.baseLabel;
+        const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = '⇄ Compare';
+        const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = '';
+        this._ftpMergeView = window.CodeMirror.MergeView(host, {
+            value: cmp.rightText || '',     // left pane = the file you just opened
+            orig: cmp.baseText || '',       // right pane = the pinned base
+            mode: 'text/x-lpc', lineNumbers: true, readOnly: true, revertButtons: false,
+            highlightDifferences: true, connect: 'align', collapseIdentical: false,
+        });
+        const sz = (cm) => { if (cm) { cm.setSize('100%', '100%'); cm.refresh(); } };
+        sz(this._ftpMergeView.editor());
+        if (this._ftpMergeView.rightOriginal) sz(this._ftpMergeView.rightOriginal());
+        document.getElementById('ftp-edit-status').textContent = '';
+    }
+
+    _ftpExitCompare() {
+        const cmp = this._ftpCmp; this._ftpCmp = null; this._ftpMergeView = null;
+        const host = document.getElementById('ftp-merge'); if (host) { host.innerHTML = ''; host.style.display = 'none'; }
+        const bar = document.getElementById('ftp-cmp-bar'); if (bar) bar.style.display = 'none';
+        const wrap = document.querySelector('#ftp-win .ftp-edit-wrap'); if (wrap) wrap.style.display = '';
+        this._ftpUpdateCompareUI();
+        // Return to the file you were viewing on the left (the one you opened), via its normal open path.
+        if (cmp && cmp.rightSrc === 'local' && cmp.rightHandle) this._localOpenFile(cmp.rightHandle);
+        else if (cmp && cmp.rightSrc === 'ftp' && cmp.rightPath) this._ftpOpenFile(cmp.rightPath);
+        else if (this._ftpCM) this._ftpCM.refresh();
+    }
+
+    _ftpUpdateCompareUI() {
+        const btn = document.getElementById('ftp-compare');
+        if (btn) { const on = !!this._ftpCmp; btn.classList.toggle('active', on); btn.textContent = on ? '⇄ Comparing' : '⇄ Compare'; }
+    }
+
     _ftpEditorValue() { return this._ftpCM ? this._ftpCM.getValue() : (document.getElementById('ftp-textarea') || {}).value || ''; }
 
     // Light/dark editor theme, remembered per browser (localStorage). Applies a
@@ -5876,6 +5970,26 @@ class WMTClient {
         .ftp-edit-wrap:not(.ftp-light) .CodeMirror .cm-operator, .ftp-edit-wrap:not(.ftp-light) .CodeMirror .cm-bracket { color:#89ddff; }
         .ftp-edit-wrap:not(.ftp-light) .CodeMirror .cm-meta { color:#ffcb6b; }
         .ftp-edit-wrap:not(.ftp-light) .CodeMirror .cm-variable-2 { color:#80cbc4; }
+        /* ── File-compare (MergeView) ── */
+        .ftp-cmp-bar { display:flex; align-items:center; gap:8px; margin:4px 0; font-size:.78em; }
+        .ftp-cmp-side { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--primary-color); }
+        .ftp-cmp-side.ftp-cmp-base { text-align:right; }
+        .ftp-cmp-vs { flex:0 0 auto; color:var(--text-muted); }
+        #ftp-cmp-exit { flex:0 0 auto; padding:2px 10px; }
+        .ftp-merge { flex:1; min-height:0; border:1px solid var(--border-color); border-radius:6px; overflow:hidden; }
+        .ftp-merge .CodeMirror-merge, .ftp-merge .CodeMirror-merge-pane, .ftp-merge .CodeMirror { height:100%; }
+        .ftp-merge .CodeMirror-merge { border:none; }
+        .ftp-merge .CodeMirror { background:#0b0b14; color:#d6d6e0; font-family:var(--font-mono); font-size:13px; line-height:1.4; }
+        .ftp-merge .CodeMirror-gutters { background:#0b0b14; border-right:1px solid var(--border-color); }
+        .ftp-merge .CodeMirror-linenumber { color:#5a5a78; }
+        .ftp-merge .CodeMirror-merge-gap { background:#0b0b14; border-color:var(--border-color); }
+        .ftp-merge:not(.ftp-light) .CodeMirror-merge-r-chunk, .ftp-merge:not(.ftp-light) .CodeMirror-merge-l-chunk { background:rgba(255,203,107,.12); }
+        .ftp-merge:not(.ftp-light) .CodeMirror-merge-r-chunk-start, .ftp-merge:not(.ftp-light) .CodeMirror-merge-l-chunk-start { border-top:1px solid rgba(255,203,107,.45); }
+        .ftp-merge:not(.ftp-light) .CodeMirror-merge-r-chunk-end, .ftp-merge:not(.ftp-light) .CodeMirror-merge-l-chunk-end { border-bottom:1px solid rgba(255,203,107,.45); }
+        .ftp-merge:not(.ftp-light) .CodeMirror-merge-r-connect, .ftp-merge:not(.ftp-light) .CodeMirror-merge-l-connect { fill:rgba(255,203,107,.12); stroke:rgba(255,203,107,.45); }
+        .ftp-merge.ftp-light .CodeMirror { background:#ffffff; color:#1a1a2e; }
+        .ftp-merge.ftp-light .CodeMirror-gutters { background:#f3f3f7; border-right:1px solid #d7d7e0; }
+        .ftp-merge.ftp-light .CodeMirror-linenumber { color:#9a9ab0; }
         .ftp-status { font-size:.8em; color:var(--text-muted); }
         @media (max-width:760px) {
           .ftp-modal .modal { width:98vw; }
@@ -5966,12 +6080,20 @@ class WMTClient {
                       <div class="ftp-gutter" id="ftp-gutter">1</div>
                       <textarea id="ftp-textarea" spellcheck="false" wrap="off"></textarea>
                     </div>
+                    <div class="ftp-cmp-bar" id="ftp-cmp-bar" style="display:none">
+                      <span class="ftp-cmp-side" id="ftp-cmp-left"></span>
+                      <span class="ftp-cmp-vs">⟷</span>
+                      <span class="ftp-cmp-side ftp-cmp-base" id="ftp-cmp-right"></span>
+                      <button class="ef-btn" id="ftp-cmp-exit" title="Exit compare">✕ Exit</button>
+                    </div>
+                    <div class="ftp-merge" id="ftp-merge" style="display:none"></div>
                   </div>
                 </div>
               </div>
             </div>
             <div class="modal-footer">
               <div id="ftp-edit-tools" class="ftp-edit-tools" style="display:none">
+              <button class="ef-btn" id="ftp-compare" title="Pin the open file, then open another to compare side by side">⇄ Compare</button>
               <button class="ef-btn" id="ftp-wrap-btn" title="Toggle word wrap">⮐ Wrap</button>
               <button class="ef-btn" id="ftp-theme" title="Toggle light/dark editor">☀ Light</button>
               <div class="ftp-foot-settings">
@@ -6044,6 +6166,8 @@ class WMTClient {
         overlay.querySelector('#ftp-wrap-btn').addEventListener('click', () => this._ftpSetWrap(!this._ftpWrap));
         overlay.querySelector('#ftp-longwarn').addEventListener('click', () => this._ftpJumpLongLine());
         overlay.querySelector('#ftp-theme').addEventListener('click', () => this._ftpToggleTheme());
+        overlay.querySelector('#ftp-compare').addEventListener('click', () => this._ftpToggleCompare());
+        overlay.querySelector('#ftp-cmp-exit').addEventListener('click', () => this._ftpExitCompare());
         const gear = overlay.querySelector('#ftp-settings-btn'), pop = overlay.querySelector('#ftp-settings-pop');
         gear.addEventListener('click', (e) => { e.stopPropagation(); pop.style.display = (pop.style.display === 'none') ? '' : 'none'; });
         document.addEventListener('mousedown', (e) => { if (pop.style.display !== 'none' && !pop.contains(e.target) && e.target !== gear) pop.style.display = 'none'; });
