@@ -4760,6 +4760,8 @@ class WMTClient {
             nm.textContent = (e.type === 'dir' ? '📁 ' : '📄 ') + e.name;
             li.appendChild(nm);
             if (e.type === 'file') {
+                const ds = this._ftpFmtDate(e.modifiedAt);
+                if (ds) { const dt = document.createElement('span'); dt.className = 'ftp-date'; dt.textContent = ds; dt.title = ds; li.appendChild(dt); }
                 const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(e.size); li.appendChild(sz);
                 this._ftp.mtimes[full] = e.modifiedAt || null;   // remember the FTP last-modified for the editor header
             }
@@ -5052,7 +5054,9 @@ class WMTClient {
             cb.addEventListener('change', () => this._localUpdateXfer());
             li.appendChild(cb);
             const n = document.createElement('span'); n.className = 'ftp-name'; n.textContent = '📄 ' + name; li.appendChild(n);
-            let size = 0; try { size = (await h.getFile()).size; } catch (e) {}
+            let size = 0, lastMod = 0; try { const f = await h.getFile(); size = f.size; lastMod = f.lastModified; } catch (e) {}
+            const ds = this._ftpFmtDate(lastMod);
+            if (ds) { const dt = document.createElement('span'); dt.className = 'ftp-date'; dt.textContent = ds; dt.title = ds; li.appendChild(dt); }
             const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(size); li.appendChild(sz);
             li.addEventListener('click', () => this._localOpenFile(h));
             ul.appendChild(li);
@@ -5803,7 +5807,8 @@ class WMTClient {
         .ftp-xfer-btn:disabled { opacity:.35; cursor:default; }
         .ftp-xfer-btn:not(:disabled):hover { border-color:var(--primary-color); }
         .ftp-item:hover { background:rgba(255,255,255,.06); } .ftp-dir { color:var(--primary-color); }
-        .ftp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .ftp-name { flex:1 1 auto; min-width:5em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .ftp-date { flex:0 1000 auto; min-width:0; overflow:hidden; white-space:nowrap; text-align:right; color:var(--text-muted); font-size:.8em; font-variant-numeric:tabular-nums; }
         .ftp-size { flex:0 0 auto; color:var(--text-muted); font-size:.82em; font-variant-numeric:tabular-nums; }
         .ftp-editor { display:flex; flex-direction:column; min-width:0; min-height:0; }
         .ftp-editor-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; position:relative; }

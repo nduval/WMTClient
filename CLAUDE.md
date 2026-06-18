@@ -1,11 +1,54 @@
 # WMT Client - Project Notes
 
+## ⛔ CARDINAL RULES — these override everything else in this file
+
+If any other rule (including Session Resilience below) would mean breaking one
+of these, stop and do these first. These are scars from real sessions; see
+`memory/feedback_read_full_model_no_tunnel.md` and
+`memory/feedback_dont_be_a_goldfish.md`.
+
+### 1. Don't guess — verify with data
+- Never state a cause, mechanism, or "it's fixed" as fact unless a log line,
+  code line, DB row, or file read backs it. If you're inferring, SAY so —
+  then go get the evidence before acting on it.
+- Pull the logs / query the DB / read the **deployed** file. A plausible story
+  is not evidence.
+- Confirm a fix by re-checking real state after deploy (read the deployed file,
+  re-query the DB), not by assuming the edit took.
+
+### 2. Scope it fully — no tunnel vision
+- Before saying anything is "done," grep for ALL call sites / read + write
+  paths / edge cases. State the VERIFIED scope ("done for X and Y; Z pending"),
+  never a blanket "done." (The 2026-05-25 char-sync gap and the 2026-06-17
+  duplicate-character id-collision were both half-checked scopes.)
+- For churn-prone subsystems (reconnect / bridge / resume / DB / auth), read the
+  governing whole-system doc FIRST (see the context-loading table below) before
+  touching code.
+- When there's a real trade-off, surface it — don't barrel into the first fix.
+- When updating memory after work, document what was NOT covered as explicitly
+  as what was.
+
+**Everything below is secondary to these two.**
+
+---
+
+## Working norms (reads & credentials)
+
+- **Routine reads are not permission-gated.** Do SFTP enumeration, log greps, DB
+  SELECTs, file inspection, and public-data fetches directly — don't propose them
+  first. Ask permission only for writes, deploys, destructive ops, or anything
+  that affects other users.
+- **Never echo secrets.** With credentials from local files (`sftp.txt`, ssh
+  keys, `.pem`), verify with `wc -l <file>` or `test -f <file> && echo present` —
+  never print contents. Pass credentials inline to python/ssh without printing.
+
+---
+
 ## IMPORTANT: Pre-work Context Loading
 
-Before starting ANY non-trivial change in this project, read the relevant
-context files first. The MEMORY.md index is auto-loaded, but the actual
-content of individual memory files is NOT — I will only have that context
-if I deliberately read the files BEFORE making claims or writing code.
+The MEMORY.md index is auto-loaded, but the actual content of individual memory
+files is NOT — I only have that context if I deliberately read the files BEFORE
+making claims or writing code.
 
 **Mandatory reads by work area:**
 
@@ -72,37 +115,17 @@ duplicate → the original socket orphans (no reaper) → the character is stuck
   `memory/bug_bridge_resume_miss_orphan_lockout.md`, the MEMORY.md index) so the
   map never contradicts the code.
 
-**Action discipline — don't ask permission for routine reads:**
-- Read operations (SFTP enumeration, log greps, DB SELECTs, file inspection,
-  fetching public data) should be done directly, not proposed first. Ask
-  permission only for writes, deploys, destructive operations, or anything
-  that affects other users.
-- When using credentials from local files (sftp.txt, ssh keys, .pem files),
-  NEVER echo the file contents to verify existence — use `wc -l <file>` or
-  `test -f <file> && echo present`. Pass credentials inline to python/ssh
-  without printing them.
-
-**Scope discipline when claiming things done:**
-- Never say "the migration is done" — say "the migration is done for
-  aliases/triggers/classes/tickers/preferences. characters and bots
-  remain JSON-only" (or whatever the actual verified scope is).
-- Before claiming a system is "fixed", grep for ALL callers / write
-  paths / edge cases. The 2026-05-25 character-sync gap was a half-finished
-  migration where the existing-data backfill worked but the new-data
-  create path was never wired. That pattern is what scope-qualifier
-  discipline prevents.
-- When updating memory after work, document what was NOT covered as
-  explicitly as what was. The reader (future me) needs both.
-
 ---
 
 ## IMPORTANT: Always Deploy
 
-**After making ANY code changes, run `python deploy.py all` immediately.** Do not wait for the user to ask. This deploys to both IONOS (PHP/JS/CSS) and Lightsail (WebSocket proxy). It's safe to run even if only one side changed.
+**After making ANY code changes, run `python deploy.py all` immediately.** Do not wait for the user to ask. This deploys to both IONOS (PHP/JS/CSS) and Lightsail (WebSocket proxy). It's safe to run even if only one side changed. (For PHP/JS/CSS-only changes, `deploy.py ionos` is fine and avoids a wmt-server restart — preferable during live play.)
 
 The deploy script **auto-commits tracked changes** before deploying (for easy rollback). Use `--no-commit` to skip. Only tracked files are staged (`git add -u`) — untracked files are never committed automatically.
 
 **NEVER restart `wmt-bridge`.** Bridge.js holds the raw TCP connections to the MUD for every user. Restarting it causes instant linkdeath for ALL connected players. `deploy.py all` and `deploy.py lightsail` are safe — they only restart `wmt-server` while bridge preserves connections. Do not run `deploy.py bridge`, `systemctl restart wmt-bridge`, or any command that stops/restarts the bridge service unless the user explicitly asks for it.
+
+> Before deploying server.js: a syntax error in a site-wide-included PHP file (e.g. `includes/functions.php`) is a full outage — lint on the sandbox first (`php -l`).
 
 ---
 
@@ -139,10 +162,12 @@ Critical behaviors (summary — see checklist for details):
 When adding a new preference (settings toggle, dropdown, slider, etc.), updates are required in **all three** of these places or the value won't persist:
 
 1. **`assets/js/app.js`** — UI markup in the settings panel render code AND read the value into `this.preferences` inside `savePreferences()`.
-2. **`api/preferences.php`** — add a validation block in `case 'save'`. This is a **default-deny whitelist**: fields not listed here are silently dropped before being saved to disk/DB. Easy to forget; symptom is "I toggle it, click save, reload, and it's back to default."
+2. **`api/preferences.php`** — add a validation block in `case 'save'`. This is a **default-deny whitelist**: fields not listed here are silently dropped before being saved to the DB. Easy to forget; symptom is "I toggle it, click save, reload, and it's back to default."
 3. **`glitch/server.js`** (only if server-side behavior cares) — handle the field on the relevant WS message (`set_discord_prefs`, etc.).
 
 If a user reports "this new toggle doesn't save," the cause is almost always missing step 2.
+
+> Preferences are now **DB-only** (no JSON) — load via `/admin/preferences`, save via `/data-sync`. ChatMon channel settings and mip_conditions both live in the prefs blob. See `memory/bug_channel_name_space_stripped.md`.
 
 ---
 
@@ -158,122 +183,14 @@ These files are NOT auto-loaded to save context. Read them on-demand when workin
 
 ---
 
-## Detailed Documentation
+## Reference (read on demand — NOT auto-loaded)
 
-Detailed docs are in `docs/claude-reference/` (NOT auto-loaded to save context):
+Project reference detail lives in `docs/claude-reference/` to keep this file focused:
 
 | File | Contents |
 |------|----------|
+| `project-reference.md` | Dev environments, deploy commands, architecture overview, key directories, TinTin++ support, storage limits, quick troubleshooting |
 | `tintin-reference.md` | TinTin++ patterns, wildcards, all command references |
 | `troubleshooting.md` | Common issues and solutions |
 | `protocols.md` | MIP, TCP packet handling, ANSI colors, telnet |
 | `architecture.md` | Session persistence, triggers, multi-server, mobile UI |
-
-Read these files when working on related topics.
-
----
-
-## Development Environments
-
-The working directory varies by machine. SSH connection details and IPs are in the Claude memory files (not committed to git).
-
-| Environment | Path | Notes |
-|-------------|------|-------|
-| **Primary** | (see memory/hosts.md) | Uses Git Bash |
-| **Secondary** | (see memory/hosts.md) | **READ ONLY** |
-| **Mac Mini** | `~/github/client` | Secondary, SSH accessible |
-
-SSH connection strings for Mac Mini, MUD Box (EC2), and Test Lightsail (Sandbox) are stored in Claude memory files only — see `memory/hosts.md`.
-
-- **Test Sandbox**: Safe for testing server.js changes without affecting users
-- Mock MUD on port 4000, WMT server on port 3000
-- TinTin++ + `ttrun` installed for behavior comparison
-- Reference test library: `/opt/wmt/tests/` — run with `/opt/wmt/tests/run_tests.sh`
-
-**Sync between environments:**
-```bash
-python .claude/sync.py status   # Check both
-python .claude/sync.py push     # Push local changes via git
-python .claude/sync.py pull     # Pull remote changes via git
-```
-
----
-
-## Deployment
-
-### IONOS (PHP Client)
-- **URL**: https://client.wemudtogether.com/app.php
-- **Command**: `python deploy.py ionos`
-- Deploys PHP, JS, CSS via SFTP
-
-### Lightsail (WebSocket Proxy)
-- **Command**: `python deploy.py lightsail`
-- Deploys `server.js` via SSH to AWS Lightsail
-- **Bridge deploy** (rare): `python deploy.py bridge` — restarts bridge.js (breaks MUD connections)
-
-### Deploy Both
-- **Command**: `python deploy.py all` (default, always safe to run)
-- Deploys server.js to Lightsail + PHP/JS/CSS to IONOS
-
----
-
-## Architecture Overview
-
-- **Frontend**: PHP on IONOS (index.php, app.php, etc.)
-- **WebSocket Proxy**: Node.js on AWS Lightsail (server.js + bridge.js) - connects browser to MUD
-- **MUD Servers**:
-  - 3Kingdoms: 3k.org:3000 (default)
-  - 3Scapes: 3scapes.org:3200
-
-**Key architectural decisions:**
-- **Triggers run server-side** - survives browser disconnects, critical for mobile
-- **Session persistence** - MUD connections survive app switches, network blips
-- **Token-based auth** - 256-bit random tokens tie browser to MUD session
-
-See `docs/claude-reference/architecture.md` for detailed documentation.
-
----
-
-## Key Directories
-
-| Path | Purpose |
-|------|---------|
-| `assets/js/app.js` | Main client JavaScript |
-| `assets/css/style.css` | All styling |
-| `glitch/server.js` | WebSocket proxy (deployed to Lightsail) |
-| `includes/` | PHP helpers (auth, functions, settings) |
-| `api/` | PHP API endpoints |
-| `config/config.php` | App configuration |
-
----
-
-## TinTin++ Support Summary
-
-**Fully Supported:** `#action`, `#alias`, `#var`, `#math`, `#if`, `#delay`, `#ticker`, `#gag`, `#highlight`, `#showme`, `#bell`, `#loop`, `#foreach`, `#list`, `#function`, `#local`, `#switch`, `#event`, speedwalk
-
-**Partially Supported:** `#split` (no row positioning), `#prompt` (basic), `#config` (speedwalk only)
-
-**Not Supported:** `#system` (security), multi-session, terminal manipulation
-
-See `docs/claude-reference/tintin-reference.md` for complete pattern and command reference.
-
----
-
-## Storage Limits
-
-- 25 MB total per user
-- 250 files max per user
-
----
-
-## Quick Troubleshooting
-
-| Issue | Quick Fix |
-|-------|-----------|
-| MIP data showing raw | Check MIP filter is FIRST in data handler |
-| Lines breaking mid-text | TCP buffering issue, check `lineBuffer` |
-| HP bars not updating | Client name must start with "Portal" |
-| Mobile freezing | Check for duplicate event listeners |
-| Login loops | Cookie path mismatch, check auth logs |
-
-See `docs/claude-reference/troubleshooting.md` for detailed solutions.
