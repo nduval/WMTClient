@@ -461,22 +461,101 @@ function auditLog(string $activity, string $account, string $character, string $
         }
     }
 
-    // Enrich IP if geo data not provided
+    // Enrich IP if geo data not provided — cached per IP so we don't hammer ipinfo's
+    // rate-limited free tier (and skip the up-to-2s blocking lookup on repeat IPs).
     if ($ip && !$country && !$asn) {
-        $ctx = stream_context_create(['http' => ['timeout' => 2]]);
-        $ipData = @file_get_contents("https://ipinfo.io/{$ip}/json", false, $ctx);
-        if ($ipData) {
-            $info = json_decode($ipData, true);
-            if ($info) {
-                $country = $info['country'] ?? '';
-                $city = str_replace(',', ' ', $info['city'] ?? '');
-                $asn = str_replace(',', ' ', $info['org'] ?? '');
-            }
-        }
+        $geo = geoLookupCached($ip);
+        $country = $geo['country']; $city = $geo['city']; $asn = $geo['asn'];
     }
 
     $csvLine = date('c') . ',' . $activity . ',' . $account . ',' . $character . ',' . strtoupper($realm) . ',' . $ip . ',' . $country . ',' . $city . ',' . $asn . "\n";
     @file_put_contents($csvFile, $csvLine, FILE_APPEND | LOCK_EX);
+
+    // Keep the audit CSV bounded — report_query.php loads the WHOLE file each request.
+    // Self-limited to once per day via a marker, so this is a cheap no-op almost always.
+    auditPruneOncePerDay($csvFile);
+}
+
+/**
+ * IP geo lookup with a per-IP file cache (data/logs/geo_cache.json).
+ *
+ * auditLog enriches geo on EVERY event (login/reconnect/disconnect); without a cache
+ * that's a blocking ipinfo.io call per event, re-querying the same IPs and blowing
+ * through ipinfo's unauthenticated rate limit (~1k/day) — which is exactly why recent
+ * audit rows had blank country/city/asn. Cache SUCCESSFUL lookups for 30 days; do NOT
+ * cache failures (a rate-limited blank should retry next time, not stick for 30 days).
+ */
+function geoLookupCached(string $ip): array {
+    $empty = ['country' => '', 'city' => '', 'asn' => ''];
+    if (!$ip) return $empty;
+    $cacheFile = __DIR__ . '/../data/logs/geo_cache.json';
+    $ttl = 30 * 86400;
+    $now = time();
+    $cache = [];
+    if (is_file($cacheFile)) {
+        $raw = @file_get_contents($cacheFile);
+        if ($raw) { $d = json_decode($raw, true); if (is_array($d)) $cache = $d; }
+    }
+    if (isset($cache[$ip]) && is_array($cache[$ip]) && ($now - ($cache[$ip]['ts'] ?? 0)) < $ttl) {
+        return ['country' => $cache[$ip]['country'] ?? '', 'city' => $cache[$ip]['city'] ?? '', 'asn' => $cache[$ip]['asn'] ?? ''];
+    }
+    // Cache miss → live lookup (2s timeout, non-fatal).
+    $ctx = stream_context_create(['http' => ['timeout' => 2]]);
+    $ipData = @file_get_contents("https://ipinfo.io/{$ip}/json", false, $ctx);
+    $geo = $empty;
+    if ($ipData) {
+        $info = json_decode($ipData, true);
+        if (is_array($info) && (isset($info['country']) || isset($info['org']))) {
+            $geo = [
+                'country' => $info['country'] ?? '',
+                'city' => str_replace(',', ' ', $info['city'] ?? ''),
+                'asn' => str_replace(',', ' ', $info['org'] ?? ''),
+            ];
+        }
+    }
+    if ($geo['country'] !== '' || $geo['asn'] !== '') {   // persist successes only
+        $cache[$ip] = $geo + ['ts' => $now];
+        foreach ($cache as $k => $v) { if (($now - ($v['ts'] ?? 0)) > $ttl) unset($cache[$k]); }
+        if (count($cache) > 5000) {
+            uasort($cache, function ($a, $b) { return ($a['ts'] ?? 0) <=> ($b['ts'] ?? 0); });
+            $cache = array_slice($cache, -5000, null, true);
+        }
+        @file_put_contents($cacheFile, json_encode($cache), LOCK_EX);
+    }
+    return $geo;
+}
+
+/**
+ * Trim the audit CSV to a retention window, at most once per calendar day (a marker file
+ * claims the day). report_query.php reads the whole file, so this bounds it without cron
+ * (IONOS shared hosting gives us none). Atomic swap via a temp file + rename.
+ */
+function auditPruneOncePerDay(string $csvFile): void {
+    $marker = dirname($csvFile) . '/.audit_prune_day';
+    $today = date('Y-m-d');
+    if (@file_get_contents($marker) === $today) return;   // already handled today
+    @file_put_contents($marker, $today, LOCK_EX);          // claim the day first (avoid a herd)
+
+    $retentionDays = 180;                                  // ~6 months; tune here
+    $cutoffTs = time() - $retentionDays * 86400;
+    $lines = @file($csvFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!$lines || count($lines) < 2) return;
+
+    $kept = [$lines[0]];                                   // header
+    for ($i = 1, $n = count($lines); $i < $n; $i++) {
+        $comma = strpos($lines[$i], ',');
+        $ts = $comma === false ? $lines[$i] : substr($lines[$i], 0, $comma);
+        $t = strtotime($ts);
+        if ($t === false || $t >= $cutoffTs) $kept[] = $lines[$i];   // keep recent (and unparseable, to be safe)
+    }
+    if (count($kept) < count($lines)) {                    // rewrite only if rows were dropped
+        $tmp = $csvFile . '.tmp';
+        if (@file_put_contents($tmp, implode("\n", $kept) . "\n", LOCK_EX) !== false) {
+            @rename($tmp, $csvFile);
+        } else {
+            @unlink($tmp);
+        }
+    }
 }
 
 /**
