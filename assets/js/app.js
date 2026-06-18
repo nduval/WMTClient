@@ -5173,12 +5173,14 @@ class WMTClient {
     _localUpdateXfer() {
         const n = (this._localRows || []).filter(r => r.cb.checked).length;
         const lbl = document.getElementById('ftp-local-selcount'); if (lbl) lbl.textContent = n + ' selected';
-        const btn = document.getElementById('ftp-local-xfer'); if (btn) btn.disabled = !n || !(this._ftp && this._ftp.connected);
+        const btn = document.getElementById('ftp-local-xfer');
+        if (btn) { btn.disabled = !n || !(this._ftp && this._ftp.connected); btn.textContent = n ? `Copy ${n} → FTP` : 'Check a box, then copy → FTP'; }
     }
     _ftpUpdateXfer() {
         const n = (this._ftpRows || []).filter(r => r.cb.checked).length;
         const lbl = document.getElementById('ftp-tree-selcount'); if (lbl) lbl.textContent = n + ' selected';
-        const btn = document.getElementById('ftp-tree-xfer'); if (btn) btn.disabled = !n || !(this._local && this._local.dir);
+        const btn = document.getElementById('ftp-tree-xfer');
+        if (btn) { btn.disabled = !n || !(this._local && this._local.dir); btn.textContent = n ? `Copy ${n} → Local` : 'Check a box, then copy → Local'; }
     }
     async _xferLocalToFtp() {
         if (!this._ftp || !this._ftp.connected) { this._ftpFootMsg('Connect FTP first.', '#caa300'); return; }
@@ -6033,9 +6035,10 @@ class WMTClient {
         .ftp-check { flex:0 0 auto; margin:0; cursor:pointer; }
         .ftp-check-spacer { flex:0 0 auto; width:13px; }
         .ftp-pane-foot { display:flex; align-items:center; gap:8px; padding:4px 8px; border-top:1px solid var(--border-color); font-size:.72em; color:var(--text-muted); }
-        .ftp-xfer-btn { background:var(--bg-darker); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; padding:1px 12px; font-size:1.05em; line-height:1.3; color:var(--primary-color); }
-        .ftp-xfer-btn:disabled { opacity:.35; cursor:default; }
-        .ftp-xfer-btn:not(:disabled):hover { border-color:var(--primary-color); }
+        .ftp-xfer-btn { background:var(--bg-darker); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; padding:5px 12px; font-size:12px; font-weight:600; line-height:1.3; color:var(--primary-color); white-space:nowrap; }
+        .ftp-xfer-btn:disabled { opacity:.6; cursor:default; }   /* still readable so the instruction shows */
+        .ftp-xfer-btn:not(:disabled):hover { border-color:var(--primary-color); background:rgba(0,255,0,.08); }
+        .ftp-check { transform:scale(1.25); margin:0 3px; }      /* a touch bigger — the box you must tick to transfer */
         .ftp-item:hover { background:rgba(255,255,255,.06); } .ftp-dir { color:var(--primary-color); }
         .ftp-name { flex:1 1 auto; min-width:5em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .ftp-date { flex:0 1000 auto; min-width:0; overflow:hidden; white-space:nowrap; text-align:right; color:var(--text-muted); font-size:.8em; font-variant-numeric:tabular-nums; }
@@ -6185,13 +6188,13 @@ class WMTClient {
                   <div class="ftp-local" id="ftp-local" style="display:none">
                     <div class="ftp-pane-head" id="ftp-local-head" title="Local files — click to make this pane active">🖥️ <span id="ftp-local-path" class="ftp-pane-path">Open a local folder…</span><button class="ftp-pick-btn" id="ftp-local-pick" title="Choose a different folder">📂</button></div>
                     <ul class="ftp-list" id="ftp-local-list"></ul>
-                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-local-xfer" title="Copy the checked files to the FTP folder" disabled>→</button><span class="ftp-sel-count" id="ftp-local-selcount">0 selected</span></div>
+                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-local-xfer" title="Tick the checkbox on each local file you want, then click to copy them to the current FTP folder" disabled>Check a box, then copy → FTP</button></div>
                   </div>
                   <div class="ftp-divider" id="ftp-local-divider" style="display:none" title="Drag to resize the local pane"></div>
                   <div class="ftp-tree">
                     <div class="ftp-pane-head" id="ftp-tree-head" title="FTP files — click to make this pane active">☁ FTP</div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
-                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-tree-xfer" title="Copy the checked files to your local folder" disabled>←</button><span class="ftp-sel-count" id="ftp-tree-selcount">0 selected</span></div>
+                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-tree-xfer" title="Tick the checkbox on each FTP file you want, then click to copy them to your current local folder" disabled>Check a box, then copy → Local</button></div>
                   </div>
                   <div class="ftp-divider" id="ftp-divider" title="Drag to resize the file pane"></div>
                   <div id="ftp-goto-pop" class="ftp-pop" style="display:none">
