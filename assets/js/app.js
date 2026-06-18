@@ -5275,7 +5275,9 @@ class WMTClient {
         if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { document.getElementById('ftp-edit-status').textContent = 'no matches'; return; } }
         cm.setSelection(cur.from(), cur.to());
         cm.scrollIntoView({ from: cur.from(), to: cur.to() }, 60);
-        cm.focus();
+        // Do NOT cm.focus() here — focusing CodeMirror mid-keydown made the Enter that
+        // triggered the search land in the editor as a newline. Keeping focus in the
+        // Find box also lets Enter repeat the search; Esc (below) jumps into the editor.
     }
 
     _ftpReplaceOne() {
@@ -6192,7 +6194,10 @@ class WMTClient {
         ta.addEventListener('input', () => { this._ftpSetDirty(true); this._ftpUpdateGutter(); });
         ta.addEventListener('scroll', () => { overlay.querySelector('#ftp-gutter').scrollTop = ta.scrollTop; });
         overlay.querySelector('#ftp-find-next').addEventListener('click', () => this._ftpFindNext());
-        overlay.querySelector('#ftp-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') this._ftpFindNext(); });
+        overlay.querySelector('#ftp-find').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); this._ftpFindNext(); }       // find (repeatable); preventDefault stops a stray newline
+            else if (e.key === 'Escape') { e.preventDefault(); if (this._ftpCM) this._ftpCM.focus(); }   // jump into the editor at the match
+        });
         overlay.querySelector('#ftp-replace-one').addEventListener('click', () => this._ftpReplaceOne());
         overlay.querySelector('#ftp-replace-all').addEventListener('click', () => this._ftpReplaceAll());
         this._ftpLoadCM();   // begin loading CodeMirror in the background; editor upgrades when ready
