@@ -4932,7 +4932,8 @@ class WMTClient {
         if (!this._ftp) return;
         if (this._ftpCmp) {   // compare armed → render the diff instead of loading into the editor
             const c = typeof data.content === 'string' ? data.content : '';
-            this._ftp.curFile = data.path;
+            // NOTE: do NOT touch this._ftp.curFile here — the main editor still holds the
+            // pre-compare file; keeping curFile in sync with it avoids a Save-to-wrong-path.
             this._ftpShowMerge({ label: this._ftpBaseName(data.path), text: c, src: 'ftp', path: data.path });
             document.getElementById('ftp-edit-status').textContent = '';
             return;
@@ -5600,6 +5601,12 @@ class WMTClient {
         document.getElementById('ftp-cmp-bar').style.display = '';
         document.getElementById('ftp-cmp-left').textContent = cmp.rightLabel || '(file)';
         document.getElementById('ftp-cmp-right').textContent = '📌 ' + cmp.baseLabel;
+        // Snapshot the pre-compare header + dirty state ONCE so exit can restore it verbatim.
+        if (!cmp._snap) cmp._snap = {
+            fn: (document.getElementById('ftp-filename') || {}).textContent || '',
+            meta: (document.getElementById('ftp-filemeta') || {}).textContent || '',
+            dirty: !!(this._ftp && this._ftp.dirty),
+        };
         const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = '⇄ Compare';
         const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = '';
         this._ftpMergeView = window.CodeMirror.MergeView(host, {
@@ -5620,10 +5627,17 @@ class WMTClient {
         const bar = document.getElementById('ftp-cmp-bar'); if (bar) bar.style.display = 'none';
         const wrap = document.querySelector('#ftp-win .ftp-edit-wrap'); if (wrap) wrap.style.display = '';
         this._ftpUpdateCompareUI();
-        // Return to the file you were viewing on the left (the one you opened), via its normal open path.
-        if (cmp && cmp.rightSrc === 'local' && cmp.rightHandle) this._localOpenFile(cmp.rightHandle);
-        else if (cmp && cmp.rightSrc === 'ftp' && cmp.rightPath) this._ftpOpenFile(cmp.rightPath);
-        else if (this._ftpCM) this._ftpCM.refresh();
+        // Compare is a READ-ONLY overlay — the main editor was never touched, so just
+        // reveal it again exactly as it was. Do NOT reopen via _ftpOpenFile (that's the
+        // switch-to-a-different-file path, which prompts "discard unsaved changes"). Restore
+        // the header + dirty flag snapshotted in _ftpRenderMerge so compare is fully
+        // transparent to your editing state.
+        if (cmp && cmp._snap) {
+            const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = cmp._snap.fn;
+            const meta = document.getElementById('ftp-filemeta'); if (meta) meta.textContent = cmp._snap.meta;
+            this._ftpSetDirty(cmp._snap.dirty);
+        }
+        if (this._ftpCM) setTimeout(() => this._ftpCM.refresh(), 0);
     }
 
     _ftpUpdateCompareUI() {
