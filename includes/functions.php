@@ -474,6 +474,9 @@ function auditLog(string $activity, string $account, string $character, string $
     // Keep the audit CSV bounded — report_query.php loads the WHOLE file each request.
     // Self-limited to once per day via a marker, so this is a cheap no-op almost always.
     auditPruneOncePerDay($csvFile);
+    // Heavier server logs (auth.log/security.csv/security_scan.log) — pruned WEEKLY,
+    // marker-gated, so this is a cheap no-op on all but the first call each week.
+    pruneServerLogsWeekly();
 }
 
 /**
@@ -556,6 +559,68 @@ function auditPruneOncePerDay(string $csvFile): void {
             @unlink($tmp);
         }
     }
+}
+
+/**
+ * Extract a unix timestamp from a log line. Two formats handled:
+ *  - CSV row: first field is an ISO timestamp.
+ *  - Bracket log: line begins "[<timestamp>] ...".
+ * Returns null when there's no parseable timestamp (caller keeps such lines).
+ */
+function logLineTimestamp(string $line, bool $csv) {
+    if ($csv) {
+        $comma = strpos($line, ',');
+        $ts = $comma === false ? $line : substr($line, 0, $comma);
+    } else {
+        if ($line === '' || $line[0] !== '[') return null;
+        $close = strpos($line, ']');
+        if ($close === false) return null;
+        $ts = substr($line, 1, $close - 1);
+    }
+    $t = strtotime($ts);
+    return $t === false ? null : $t;
+}
+
+/**
+ * Trim a log file to a retention window by STREAMING (line-by-line read → temp file →
+ * atomic rename). Streaming keeps memory flat — auth.log runs ~50MB / 400k+ lines, so a
+ * file()-into-array prune would risk the PHP memory limit. Lines with no parseable
+ * timestamp are kept (don't drop continuation rows); a CSV keeps its header.
+ */
+function pruneLogByAgeStream(string $file, int $retentionDays, bool $csv): void {
+    if (!is_file($file)) return;
+    $cutoffTs = time() - $retentionDays * 86400;
+    $in = @fopen($file, 'r'); if (!$in) return;
+    $tmp = $file . '.tmp';
+    $out = @fopen($tmp, 'w'); if (!$out) { fclose($in); return; }
+    $dropped = false; $first = true;
+    while (($line = fgets($in)) !== false) {
+        if ($csv && $first) { fwrite($out, $line); $first = false; continue; }   // keep header
+        $first = false;
+        if (trim($line) === '') continue;
+        $ts = logLineTimestamp(rtrim($line, "\r\n"), $csv);
+        if ($ts === null || $ts >= $cutoffTs) fwrite($out, $line);
+        else $dropped = true;
+    }
+    fclose($in); fclose($out);
+    if ($dropped) @rename($tmp, $file); else @unlink($tmp);
+}
+
+/**
+ * Prune the heavy server logs once per ISO week (marker-gated). No cron on IONOS shared
+ * hosting, so this piggybacks on auditLog (a frequently-hit path); the marker makes it a
+ * no-op on all but the first call each week. Retention per file below — tune here.
+ */
+function pruneServerLogsWeekly(): void {
+    $dir = __DIR__ . '/../data/logs';
+    $marker = $dir . '/.logs_prune_week';
+    $week = date('o-W');                                   // ISO-8601 year + week number
+    if (@file_get_contents($marker) === $week) return;
+    @file_put_contents($marker, $week, LOCK_EX);           // claim the week first (avoid a herd)
+
+    pruneLogByAgeStream($dir . '/auth.log', 30, false);            // very verbose; 30 days
+    pruneLogByAgeStream($dir . '/security.csv', 90, true);         // security events; 90 days
+    pruneLogByAgeStream($dir . '/security_scan.log', 30, false);   // scan heartbeat; 30 days
 }
 
 /**
