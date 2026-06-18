@@ -4919,7 +4919,7 @@ class WMTClient {
     }
 
     _ftpConfirmDiscard() { return !(this._ftp && this._ftp.dirty) || window.confirm('You have unsaved changes. Discard them?'); }
-    _ftpOpenDir(path) { if (this._ftpConfirmDiscard()) this.connection.send('ftp_list', { path }); }
+    _ftpOpenDir(path) { this.connection.send('ftp_list', { path }); }   // browsing a folder only re-lists the tree; it never touches the open editor → no discard prompt
     _ftpOpenFile(path) { if (!this._ftpConfirmDiscard()) return; document.getElementById('ftp-edit-status').textContent = 'Loading…'; this.connection.send('ftp_get', { path }); }
 
     _onFtpFile(data) {
