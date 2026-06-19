@@ -5678,17 +5678,6 @@ class WMTClient {
         if (btn) { const on = !!this._ftpCmp; btn.classList.toggle('active', on); btn.textContent = on ? '⇄ Comparing' : '⇄ Compare'; }
     }
 
-    // Hard-wrap the selection (or the current paragraph) to 80 columns. Intended for
-    // comment/prose blocks — wrapping code statements would break them, so it acts on
-    // what you select rather than reflowing the whole file.
-    _ftpWrap80() {
-        const cm = this._ftpCM; if (!cm || !cm.wrapParagraph) { document.getElementById('ftp-edit-status').textContent = 'wrap-80 needs the code editor'; return; }
-        const opt = { column: 80, wrapOn: /\s/, killTrailingSpace: true };
-        if (cm.somethingSelected()) cm.wrapParagraphsInRange(cm.getCursor('from'), cm.getCursor('to'), opt);
-        else cm.wrapParagraph(cm.getCursor(), opt);
-        this._ftpSetDirty(true); this._ftpMarkLongLines();
-    }
-
     // Maximize / restore the whole FTP window (fills the viewport — great on big monitors;
     // keeps tree + toolbar, unlike CodeMirror's editor-only fullscreen).
     _ftpToggleMax() {
@@ -6168,6 +6157,13 @@ class WMTClient {
           .ftp-modal .modal { width:98vw; }
           .ftp-grid { grid-template-columns:1fr; grid-template-rows:auto auto; height:auto; }
           .ftp-tree { height:22vh; } .ftp-edit-wrap { height:40vh; }
+          /* keep the title clear of the phone status bar / notch */
+          .ftp-modal .modal-header { padding-top:calc(10px + env(safe-area-inset-top,0px)); }
+          /* ICON-ONLY, compact bottom buttons — text is zeroed, the data-icon shows via ::before */
+          .ftp-modal .modal-footer { gap:6px; padding:6px 8px; flex-wrap:wrap; }
+          .ftp-modal #ftp-edit-tools { flex-wrap:wrap; gap:6px; }
+          .ftp-modal .modal-footer .ef-btn, .ftp-modal .modal-footer .btn { font-size:0; min-width:0; padding:8px 10px; line-height:1; }
+          .ftp-modal .modal-footer .ef-btn::before, .ftp-modal .modal-footer .btn::before { content:attr(data-icon); font-size:18px; line-height:1; }
         }`;
         document.head.appendChild(style);
 
@@ -6269,14 +6265,13 @@ class WMTClient {
             </div>
             <div class="modal-footer">
               <div id="ftp-edit-tools" class="ftp-edit-tools" style="display:none">
-              <button class="ef-btn" id="ftp-compare" title="Pin the open file, then open another to compare side by side">⇄ Compare</button>
-              <button class="ef-btn" id="ftp-preview-btn" title="Live preview of the @color:…@ formatting, as it renders in-game">👁 Preview</button>
-              <button class="ef-btn" id="ftp-wrap-btn" title="Toggle word wrap">⮐ Wrap</button>
-              <button class="ef-btn" id="ftp-wrap80" title="Hard-wrap the selection (or current paragraph) to 80 columns — best for comment/prose blocks, not code statements">↦ 80</button>
-              <button class="ef-btn" id="ftp-max" title="Maximize / restore the window">⛶ Max</button>
-              <button class="ef-btn" id="ftp-theme" title="Toggle light/dark editor">☀ Light</button>
+              <button class="ef-btn" id="ftp-compare" data-icon="⇄" title="Pin the open file, then open another to compare side by side">⇄ Compare</button>
+              <button class="ef-btn" id="ftp-preview-btn" data-icon="👁" title="Live preview of the @color:…@ formatting, as it renders in-game">👁 Preview</button>
+              <button class="ef-btn" id="ftp-wrap-btn" data-icon="⮐" title="Toggle word wrap">⮐ Wrap</button>
+              <button class="ef-btn" id="ftp-max" data-icon="⛶" title="Maximize / restore the window">⛶ Max</button>
+              <button class="ef-btn" id="ftp-theme" data-icon="🌓" title="Toggle light/dark editor">☀ Light</button>
               <div class="ftp-foot-settings">
-                <button class="ef-btn" id="ftp-settings-btn" title="Editor settings">⚙ Settings</button>
+                <button class="ef-btn" id="ftp-settings-btn" data-icon="⚙" title="Editor settings">⚙ Settings</button>
                 <div id="ftp-settings-pop" class="ftp-pop" style="display:none">
                   <h4>Editor Settings</h4>
                   <div class="form-group">
@@ -6296,9 +6291,9 @@ class WMTClient {
               </div>
               </div>
               <span class="ftp-status" id="ftp-foot" style="margin-right:auto"></span>
-              <button class="btn" id="ftp-disconnect" style="display:none">Disconnect</button>
-              <button class="btn" id="ftp-cancel">Close</button>
-              <button class="btn btn-primary" id="ftp-save" style="display:none">Save</button>
+              <button class="btn" id="ftp-disconnect" data-icon="🔌" style="display:none">Disconnect</button>
+              <button class="btn" id="ftp-cancel" data-icon="✕">Close</button>
+              <button class="btn btn-primary" id="ftp-save" data-icon="💾" style="display:none">Save</button>
             </div>
           </div>`;
         document.body.appendChild(overlay);
@@ -6348,7 +6343,6 @@ class WMTClient {
         overlay.querySelector('#ftp-compare').addEventListener('click', () => this._ftpToggleCompare());
         overlay.querySelector('#ftp-cmp-exit').addEventListener('click', () => this._ftpExitCompare());
         overlay.querySelector('#ftp-preview-btn').addEventListener('click', () => this._ftpTogglePreview());
-        overlay.querySelector('#ftp-wrap80').addEventListener('click', () => this._ftpWrap80());
         overlay.querySelector('#ftp-max').addEventListener('click', () => this._ftpToggleMax());
         const outline = overlay.querySelector('#ftp-outline');
         outline.addEventListener('mousedown', () => this._ftpBuildOutline());   // rebuild from current text just before it opens
