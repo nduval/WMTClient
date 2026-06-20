@@ -3256,7 +3256,7 @@ class WMTClient {
             const d = (e.dir || '').toLowerCase(); if (!pos.has(e.from)) continue;
             if (d === 'u' || d === 'up' || d === 'd' || d === 'down') {
                 const o = vert.get(e.from) || {};
-                if (d[0] === 'u') o.up = true; else o.down = true;
+                if (d[0] === 'u') { o.up = true; o.upCmd = e.cmd || 'u'; } else { o.down = true; o.downCmd = e.cmd || 'd'; }
                 vert.set(e.from, o);
             }
         }
@@ -3299,8 +3299,17 @@ class WMTClient {
             g.appendChild(rect);
             const ttl = document.createElementNS(NS, 'title'); ttl.textContent = room.name || ('#' + v); g.appendChild(ttl);
             const vd = vert.get(v);
-            if (vd && vd.up) { const t = document.createElementNS(NS, 'text'); t.setAttribute('x', sx(p.x) + BOX / 2); t.setAttribute('y', sy(p.y) + 7); t.setAttribute('class', 'map-vglyph'); t.textContent = '▲'; g.appendChild(t); }
-            if (vd && vd.down) { const t = document.createElementNS(NS, 'text'); t.setAttribute('x', sx(p.x) + BOX / 2); t.setAttribute('y', sy(p.y) + BOX - 2); t.setAttribute('class', 'map-vglyph'); t.textContent = '▼'; g.appendChild(t); }
+            const addGlyph = (txt, yy, cmd, tip) => {
+                const t = document.createElementNS(NS, 'text');
+                t.setAttribute('x', sx(p.x) + BOX / 2); t.setAttribute('y', yy);
+                t.setAttribute('class', 'map-vglyph'); t.textContent = txt;
+                t.style.pointerEvents = 'auto'; t.style.cursor = 'pointer';
+                t.addEventListener('click', (ev) => { ev.stopPropagation(); this._mapWalkTo(v, cmd); });
+                const tt = document.createElementNS(NS, 'title'); tt.textContent = tip; t.appendChild(tt);
+                g.appendChild(t);
+            };
+            if (vd && vd.up) addGlyph('▲', sy(p.y) + 7, vd.upCmd, 'Go up from here');
+            if (vd && vd.down) addGlyph('▼', sy(p.y) + BOX - 2, vd.downCmd, 'Go down from here (e.g. to the sewers)');
             if (v !== curVnum) { g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v)); }
             svg.appendChild(g);
         }
@@ -3309,17 +3318,21 @@ class WMTClient {
     }
 
     // Click-to-walk: BFS shortest path over in-area exits, then send each step's command.
-    _mapWalkTo(target) {
+    _mapWalkTo(target, thenCmd) {
         const graph = this.mapAreaGraph, cur = this.mapCurrentVnum;
-        if (!graph || cur == null || target === cur) return;
-        const adj = new Map();
-        for (const v of graph.rooms.keys()) adj.set(v, []);
-        for (const e of graph.exits) if (adj.has(e.from)) adj.get(e.from).push({ to: e.to, cmd: e.cmd || e.dir });
-        const prev = new Map(), q = [cur], seen = new Set([cur]);
-        while (q.length) { const v = q.shift(); if (v === target) break; for (const ex of (adj.get(v) || [])) { if (seen.has(ex.to)) continue; seen.add(ex.to); prev.set(ex.to, { from: v, cmd: ex.cmd }); q.push(ex.to); } }
-        if (!prev.has(target)) { const f = document.getElementById('map-footer'); if (f) f.textContent = 'No known path to that room.'; return; }
-        const steps = []; let v = target; while (v !== cur) { const p = prev.get(v); if (!p) break; steps.unshift(p.cmd); v = p.from; }
+        if (!graph || cur == null) return;
+        let steps = [];
+        if (target !== cur) {
+            const adj = new Map();
+            for (const v of graph.rooms.keys()) adj.set(v, []);
+            for (const e of graph.exits) if (adj.has(e.from)) adj.get(e.from).push({ to: e.to, cmd: e.cmd || e.dir });
+            const prev = new Map(), q = [cur], seen = new Set([cur]);
+            while (q.length) { const v = q.shift(); if (v === target) break; for (const ex of (adj.get(v) || [])) { if (seen.has(ex.to)) continue; seen.add(ex.to); prev.set(ex.to, { from: v, cmd: ex.cmd }); q.push(ex.to); } }
+            if (!prev.has(target)) { const f = document.getElementById('map-footer'); if (f) f.textContent = 'No known path to that room.'; return; }
+            let v = target; while (v !== cur) { const p = prev.get(v); if (!p) break; steps.unshift(p.cmd); v = p.from; }
+        }
         for (const cmd of steps) if (cmd) this.connection.sendCommand(cmd);
+        if (thenCmd) this.connection.sendCommand(thenCmd);   // e.g. after walking to a manhole room, go down
     }
 
     _truncate(str, max) {
