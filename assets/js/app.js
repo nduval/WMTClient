@@ -5387,7 +5387,7 @@ class WMTClient {
             if (cmp.rightSrc === 'local' && cmp.rightHandle) return this._ftpWriteLocalHandle(cmp.rightHandle, val);
             if (cmp.rightSrc === 'ftp' && cmp.rightPath) {
                 this._ftpUpdateSaveBtn('saving');
-                this.connection.send('ftp_put', { path: cmp.rightPath, content: val });
+                this.connection.send('ftp_put', { path: cmp.rightPath, content: val, allowEmpty: !val });   // user already confirmed via _ftpGuardEmpty
                 return;
             }
             document.getElementById('ftp-edit-status').textContent = 'nothing to save'; return;
@@ -5397,7 +5397,7 @@ class WMTClient {
         const val = this._ftpEditorValue();
         if (!this._ftpGuardEmpty(val, this._ftp.curFile)) return;
         this._ftpUpdateSaveBtn('saving');
-        this.connection.send('ftp_put', { path: this._ftp.curFile, content: val });
+        this.connection.send('ftp_put', { path: this._ftp.curFile, content: val, allowEmpty: !val });   // user already confirmed via _ftpGuardEmpty
     }
 
     async _ftpWriteLocalHandle(handle, text) {

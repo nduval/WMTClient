@@ -5679,6 +5679,14 @@ function ftpRun(session, fn) {
   return next;
 }
 function ftpEntryType(e) { return e.type === 2 ? 'dir' : (e.type === 1 ? 'file' : (e.type === 3 ? 'link' : 'other')); }
+// Common fields for FTP audit logs. NEVER includes file content or the FTP password.
+function ftpLogBase(session) {
+  return {
+    token: session.token ? session.token.substring(0, 8) : null,
+    user: session.userId, char: effectiveCharName(session),
+    ftpUser: (session._ftp && session._ftp.creds && session._ftp.creds.user) || null
+  };
+}
 
 function closeSession(session, reason) {
   // Guard against double-close (e.g., explicit disconnect + socket close event)
@@ -7539,23 +7547,23 @@ wss.on('connection', (ws, req) => {
           ftpRun(session, async (client) => {
             const entries = await client.list(p);
             sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size, modifiedAt: (e.modifiedAt instanceof Date ? e.modifiedAt.toISOString() : (e.rawModifiedAt || null)) })) });
-          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'list', path: p, message: e.message || 'list failed' }); });
+          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'list', path: p, message: e.message || 'list failed' }); sendToClient(session, { type: 'ftp_error', op: 'list', path: p, message: e.message || 'list failed' }); });
           break;
         }
         case 'ftp_mkdir': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
           if (!p) break;
-          ftpRun(session, async (client) => { await client.send('MKD ' + p); sendToClient(session, { type: 'ftp_mkdir_ok', path: p }); })
-            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); });
+          ftpRun(session, async (client) => { await client.send('MKD ' + p); logSessionEvent('FTP_MKDIR', { ...ftpLogBase(session), path: p }); sendToClient(session, { type: 'ftp_mkdir_ok', path: p }); })
+            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); sendToClient(session, { type: 'ftp_error', op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); });
           break;
         }
         case 'ftp_delete': {
           if (!ftpEditorAllowed(session)) break;
           const p = String(data.path || '');
           if (!p) break;
-          ftpRun(session, async (client) => { await client.remove(p); sendToClient(session, { type: 'ftp_deleted', path: p }); })
-            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'delete', path: p, message: e.message || 'delete failed' }); });
+          ftpRun(session, async (client) => { await client.remove(p); logSessionEvent('FTP_DELETE', { ...ftpLogBase(session), path: p }); sendToClient(session, { type: 'ftp_deleted', path: p }); })
+            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'delete', path: p, message: e.message || 'delete failed' }); sendToClient(session, { type: 'ftp_error', op: 'delete', path: p, message: e.message || 'delete failed' }); });
           break;
         }
         case 'ftp_get': {
@@ -7565,8 +7573,10 @@ wss.on('connection', (ws, req) => {
             const chunks = [];
             const sink = new (require('stream').Writable)({ write(c, enc, cb) { chunks.push(c); cb(); } });
             await client.downloadTo(sink, p);
-            sendToClient(session, { type: 'ftp_file', path: p, content: Buffer.concat(chunks).toString('utf8') });
-          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: e.message || 'get failed' }); });
+            const buf = Buffer.concat(chunks);
+            logSessionEvent('FTP_GET', { ...ftpLogBase(session), path: p, bytes: buf.length });
+            sendToClient(session, { type: 'ftp_file', path: p, content: buf.toString('utf8') });
+          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'get', path: p, message: e.message || 'get failed' }); sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: e.message || 'get failed' }); });
           break;
         }
         case 'ftp_put': {
@@ -7574,9 +7584,22 @@ wss.on('connection', (ws, req) => {
           const p = String(data.path || '');
           const body = typeof data.content === 'string' ? data.content : '';
           ftpRun(session, async (client) => {
+            // SERVER-SIDE zeroing guard: never overwrite a non-empty remote file with empty
+            // content unless the client explicitly forces it (allowEmpty). Defense-in-depth
+            // behind the client guards — see feedback_guard_destructive_file_writes.
+            if (body.length === 0 && !data.allowEmpty) {
+              let existing = -1;
+              try { existing = await client.size(p); } catch (e) { existing = -1; }   // -1 = not found / unknown
+              if (existing > 0) {
+                logSessionEvent('FTP_PUT_REFUSED_EMPTY', { ...ftpLogBase(session), path: p, existingBytes: existing });
+                sendToClient(session, { type: 'ftp_error', op: 'put', path: p, message: `Refused: "${p}" has ${existing} bytes and the save was empty — not overwriting it with 0 bytes.` });
+                return;
+              }
+            }
             await client.uploadFrom(require('stream').Readable.from(Buffer.from(body, 'utf8')), p);
+            logSessionEvent('FTP_PUT', { ...ftpLogBase(session), path: p, bytes: body.length });
             sendToClient(session, { type: 'ftp_saved', path: p });
-          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); sendToClient(session, { type: 'ftp_error', op: 'put', path: p, message: e.message || 'put failed' }); });
+          }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'put', path: p, message: e.message || 'put failed' }); sendToClient(session, { type: 'ftp_error', op: 'put', path: p, message: e.message || 'put failed' }); });
           break;
         }
         case 'ftp_disconnect': {
