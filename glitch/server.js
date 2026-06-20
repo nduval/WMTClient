@@ -142,6 +142,7 @@ try {
     mapStmts.getRoomByName = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE');
     mapStmts.getRoomByNameArea = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE AND area = ? COLLATE NOCASE');
     mapStmts.getAreaRooms = mapDb.prepare('SELECT vnum, name, terrain FROM rooms WHERE area = ? COLLATE NOCASE');
+    mapStmts.getAreaExits = mapDb.prepare('SELECT e.from_vnum, e.to_vnum, e.direction, e.command FROM exits e JOIN rooms r ON r.vnum = e.from_vnum WHERE r.area = ? COLLATE NOCASE');
     mapStmts.searchRooms = mapDb.prepare('SELECT vnum, name, area FROM rooms WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
     mapStmts.searchLocations = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
     mapStmts.getLocation = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name = ? COLLATE NOCASE');
@@ -5810,8 +5811,9 @@ function sendMapContext(session, vnum) {
     const neighbors = allNeighbors.filter(n => mipExitSet.has(n.direction));
     const exits = allExits.filter(e => mipExitSet.has(e.direction));
 
-    sendToClient(session, {
+    const msg = {
       type: 'map_context',
+      currentVnum: room.vnum,
       room: {
         vnum: room.vnum,
         name: room.name,
@@ -5831,7 +5833,23 @@ function sendMapContext(session, vnum) {
         direction: n.direction,
         command: n.command
       }))
-    });
+    };
+
+    // On an AREA CHANGE, ship the whole area's room+exit graph so the client can lay out a
+    // real map (not just the current room's spokes). The client caches it; subsequent
+    // same-area moves just carry currentVnum and move the "you are here" marker.
+    if (session._lastMapArea !== room.area) {
+      session._lastMapArea = room.area;
+      const areaRooms = mapStmts.getAreaRooms.all(room.area);
+      const areaExits = mapStmts.getAreaExits.all(room.area);
+      msg.area = {
+        name: room.area,
+        rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain })),
+        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command }))
+      };
+    }
+
+    sendToClient(session, msg);
   } catch (e) {
     // Non-fatal — map is informational
   }

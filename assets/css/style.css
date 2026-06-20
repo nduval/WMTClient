@@ -3461,6 +3461,36 @@ body {
     pointer-events: none;
 }
 
+/* ── Area map (full-area graph render) ── */
+.map-area-edge {
+    stroke: #3f5688;
+    stroke-width: 2;
+    stroke-linecap: round;
+    opacity: 0.6;
+}
+.map-area-room rect {
+    fill: #1b2742;
+    stroke: #4a6aa5;
+    stroke-width: 1.4;
+    transition: fill 0.12s, stroke 0.12s;
+}
+.map-area-room:hover rect {
+    fill: #28406e;
+    stroke: #7fa6e8;
+}
+.map-area-room.current rect {
+    fill: #2e8b3e;
+    stroke: #b6ffb6;
+    stroke-width: 2.4;
+}
+.map-vglyph {
+    fill: #cdd6f4;
+    font-size: 7px;
+    text-anchor: middle;
+    pointer-events: none;
+    opacity: 0.85;
+}
+
 .map-footer {
     padding: 4px 10px;
     background: #16213e;

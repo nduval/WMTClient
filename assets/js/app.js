@@ -3058,20 +3058,30 @@ class WMTClient {
         if (!this.mapWindowOpen) return;
         const svg = document.getElementById('map-svg');
         if (!svg) return;
+        // Cache the area graph whenever the server includes it (sent on area change).
+        if (ctx.area) {
+            const rooms = new Map();
+            for (const r of (ctx.area.rooms || [])) rooms.set(r.vnum, r);
+            this.mapAreaGraph = { name: ctx.area.name, rooms, exits: ctx.area.exits || [] };
+        }
+        const cur = (ctx.currentVnum != null) ? ctx.currentVnum : (ctx.room && ctx.room.vnum);
+        this.mapCurrentVnum = cur;
 
-        // Update title
         const title = document.getElementById('map-title');
         if (title) title.textContent = `${ctx.room.area} — ${ctx.room.name}`;
-
-        // Update footer
         const footer = document.getElementById('map-footer');
-        if (footer) {
-            const exitList = ctx.exits.map(e => e.direction).join(', ');
-            footer.textContent = `Exits: ${exitList}`;
-        }
+        if (footer) footer.textContent = 'Exits: ' + (ctx.exits || []).map(e => e.direction).join(', ');
 
+        // Real area map when we have the graph and know where we are; otherwise the
+        // 1-hop compass fallback (e.g. MIP gave a name, not a vnum).
+        if (this.mapAreaGraph && this.mapAreaGraph.rooms.has(cur)) { this._renderAreaMap(svg, this.mapAreaGraph, cur, ctx); return; }
+        this._renderCompass(svg, ctx);
+    }
+
+    _renderCompass(svg, ctx) {
         // Clear SVG
         svg.innerHTML = '';
+        svg.setAttribute('viewBox', '0 0 400 400');
         const W = 400, H = 400;
         const CX = W / 2, CY = H / 2;
 
@@ -3203,6 +3213,109 @@ class WMTClient {
         g.appendChild(titleEl);
 
         svg.appendChild(g);
+    }
+
+    // Real area map: lay the whole area out as a grid by walking exit directions from the
+    // current room, draw rooms + connecting edges, glow "you are here", click a room to walk.
+    _renderAreaMap(svg, graph, curVnum) {
+        const NS = 'http://www.w3.org/2000/svg';
+        svg.innerHTML = '';
+        const DIR = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0], ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1] };
+
+        // adjacency (in-area only)
+        const adj = new Map();
+        for (const v of graph.rooms.keys()) adj.set(v, []);
+        for (const e of graph.exits) if (adj.has(e.from) && graph.rooms.has(e.to)) adj.get(e.from).push({ to: e.to, dir: (e.dir || '').toLowerCase(), cmd: e.cmd });
+
+        // BFS layout from the current room; first-reached wins; spiral out of collisions.
+        const pos = new Map(), taken = new Set();
+        const key = (a, b) => a + ',' + b;
+        const place = (v, x, y) => {
+            if (!taken.has(key(x, y))) { pos.set(v, { x, y }); taken.add(key(x, y)); return; }
+            for (let r = 1; r < 60; r++) for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
+                if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+                if (!taken.has(key(x + dx, y + dy))) { pos.set(v, { x: x + dx, y: y + dy }); taken.add(key(x + dx, y + dy)); return; }
+            }
+            pos.set(v, { x, y });   // give up — allow overlap (rare, non-planar)
+        };
+        place(curVnum, 0, 0);
+        const q = [curVnum], seen = new Set([curVnum]);
+        while (q.length) {
+            const v = q.shift(), p = pos.get(v);
+            for (const ex of (adj.get(v) || [])) {
+                if (seen.has(ex.to) || !DIR[ex.dir]) continue;
+                seen.add(ex.to); place(ex.to, p.x + DIR[ex.dir][0], p.y + DIR[ex.dir][1]); q.push(ex.to);
+            }
+        }
+
+        // up/down presence per room → ▲▼ glyphs (they don't get a 2D position)
+        const vert = new Map();
+        for (const e of graph.exits) {
+            const d = (e.dir || '').toLowerCase(); if (!pos.has(e.from)) continue;
+            if (d === 'u' || d === 'up' || d === 'd' || d === 'down') {
+                const o = vert.get(e.from) || {};
+                if (d[0] === 'u') o.up = true; else o.down = true;
+                vert.set(e.from, o);
+            }
+        }
+
+        // bounds + scale to fit
+        let minX = 0, maxX = 0, minY = 0, maxY = 0;
+        for (const { x, y } of pos.values()) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+        const GAP = 34, BOX = 20, PAD = 24;
+        const sx = (x) => PAD + (x - minX) * GAP, sy = (y) => PAD + (y - minY) * GAP;
+        const w = PAD * 2 + (maxX - minX) * GAP + BOX, h = PAD * 2 + (maxY - minY) * GAP + BOX;
+        svg.setAttribute('viewBox', `0 0 ${Math.max(w, 80)} ${Math.max(h, 80)}`);
+
+        const defs = document.createElementNS(NS, 'defs');
+        defs.innerHTML = '<filter id="map-glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
+        svg.appendChild(defs);
+
+        // edges first (under rooms), cardinal only, de-duped so A↔B is one line
+        const cx = (v) => sx(pos.get(v).x) + BOX / 2, cy = (v) => sy(pos.get(v).y) + BOX / 2;
+        const drawn = new Set();
+        for (const e of graph.exits) {
+            if (!pos.has(e.from) || !pos.has(e.to) || !DIR[(e.dir || '').toLowerCase()]) continue;
+            const k = e.from < e.to ? e.from + '-' + e.to : e.to + '-' + e.from;
+            if (drawn.has(k)) continue; drawn.add(k);
+            const ln = document.createElementNS(NS, 'line');
+            ln.setAttribute('x1', cx(e.from)); ln.setAttribute('y1', cy(e.from));
+            ln.setAttribute('x2', cx(e.to)); ln.setAttribute('y2', cy(e.to));
+            ln.setAttribute('class', 'map-area-edge');
+            svg.appendChild(ln);
+        }
+
+        // rooms
+        for (const [v, p] of pos) {
+            const room = graph.rooms.get(v) || {};
+            const g = document.createElementNS(NS, 'g');
+            g.setAttribute('class', 'map-area-room' + (v === curVnum ? ' current' : ''));
+            const rect = document.createElementNS(NS, 'rect');
+            rect.setAttribute('x', sx(p.x)); rect.setAttribute('y', sy(p.y));
+            rect.setAttribute('width', BOX); rect.setAttribute('height', BOX); rect.setAttribute('rx', 4);
+            if (v === curVnum) rect.setAttribute('filter', 'url(#map-glow)');
+            g.appendChild(rect);
+            const ttl = document.createElementNS(NS, 'title'); ttl.textContent = room.name || ('#' + v); g.appendChild(ttl);
+            const vd = vert.get(v);
+            if (vd && vd.up) { const t = document.createElementNS(NS, 'text'); t.setAttribute('x', sx(p.x) + BOX / 2); t.setAttribute('y', sy(p.y) + 7); t.setAttribute('class', 'map-vglyph'); t.textContent = '▲'; g.appendChild(t); }
+            if (vd && vd.down) { const t = document.createElementNS(NS, 'text'); t.setAttribute('x', sx(p.x) + BOX / 2); t.setAttribute('y', sy(p.y) + BOX - 2); t.setAttribute('class', 'map-vglyph'); t.textContent = '▼'; g.appendChild(t); }
+            if (v !== curVnum) { g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v)); }
+            svg.appendChild(g);
+        }
+    }
+
+    // Click-to-walk: BFS shortest path over in-area exits, then send each step's command.
+    _mapWalkTo(target) {
+        const graph = this.mapAreaGraph, cur = this.mapCurrentVnum;
+        if (!graph || cur == null || target === cur) return;
+        const adj = new Map();
+        for (const v of graph.rooms.keys()) adj.set(v, []);
+        for (const e of graph.exits) if (adj.has(e.from)) adj.get(e.from).push({ to: e.to, cmd: e.cmd || e.dir });
+        const prev = new Map(), q = [cur], seen = new Set([cur]);
+        while (q.length) { const v = q.shift(); if (v === target) break; for (const ex of (adj.get(v) || [])) { if (seen.has(ex.to)) continue; seen.add(ex.to); prev.set(ex.to, { from: v, cmd: ex.cmd }); q.push(ex.to); } }
+        if (!prev.has(target)) { const f = document.getElementById('map-footer'); if (f) f.textContent = 'No known path to that room.'; return; }
+        const steps = []; let v = target; while (v !== cur) { const p = prev.get(v); if (!p) break; steps.unshift(p.cmd); v = p.from; }
+        for (const cmd of steps) if (cmd) this.connection.sendCommand(cmd);
     }
 
     _truncate(str, max) {
