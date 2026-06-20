@@ -5788,15 +5788,77 @@ function closeSession(session, reason) {
 }
 
 /**
+ * Full DB exit-direction signature for a room: sorted, comma-joined, lowercased.
+ * Used to match a MIP-reported room (which has no vnum in some areas) against
+ * candidate rooms in the map DB.
+ */
+function roomExitSig(vnum) {
+  return mapStmts.getExitsByVnum.all(vnum)
+    .map(e => (e.direction || '').toLowerCase()).sort().join(',');
+}
+
+/**
+ * Dead-reckon the current room when MIP reports a room NAME + exits but NO vnum
+ * (e.g. Mahjongg: 70 rooms all named "## Mahjongg ##"). The room we just entered
+ * must be a direct neighbor of where we were (session._mapReckonVnum) — match it
+ * by name + exit-signature. This is tt++'s model (it advances along the exit you
+ * took); we derive the destination from MIP's data + the static graph instead of
+ * parsing keystrokes, so it works for bot/trigger movement too.
+ *
+ * Returns { vnum, uncertain } or null when we genuinely can't place it. `uncertain`
+ * is set when several identical candidates fit (open-grid ambiguity) — the client
+ * uses it to avoid overriding a known-exact optimistic step and to dim the marker.
+ */
+function reckonCurrentRoom(session) {
+  if (!mapDb || !session.mipStats) return null;
+  const name = session.mipStats.room || '';
+  const mipSig = (session.mipStats.exits || '').split(/,\s*/)
+    .map(s => s.trim().toLowerCase()).filter(Boolean).sort().join(',');
+  const prev = session._mapReckonVnum;
+
+  if (prev) {
+    // 1) Neighbor-constrained: the new room is a direct graph neighbor of where we were.
+    //    (Works across an area boundary too — the id'd room we came from carries the
+    //    cross-area exit into the un-id'd area, giving us the entry anchor for free.)
+    const nbrVnums = [...new Set(mapStmts.getExitsByVnum.all(prev).map(e => e.to_vnum))];
+    const nbrs = nbrVnums.map(v => mapStmts.getRoomByVnum.get(v)).filter(Boolean);
+    const hit = nbrs.filter(r => r.name === name && roomExitSig(r.vnum) === mipSig);
+    if (hit.length === 1) return { vnum: hit[0].vnum, uncertain: false };
+
+    // 2) Didn't move (wall / "you can't go that way"): same name + exit-sig as prev,
+    //    and no neighbor matched — assume we're still where we were.
+    if (hit.length === 0) {
+      const prevRoom = mapStmts.getRoomByVnum.get(prev);
+      if (prevRoom && prevRoom.name === name && roomExitSig(prev) === mipSig) {
+        return { vnum: prev, uncertain: false };
+      }
+    }
+
+    // 3) Several identical neighbors fit — pick one but flag it uncertain.
+    if (hit.length > 1) return { vnum: hit[0].vnum, uncertain: true };
+  }
+
+  // 4) No anchor / teleport (recall, flee out of area): area-wide unique match.
+  const byName = mapStmts.getRoomByName.all(name);
+  if (byName.length === 1) return { vnum: byName[0].vnum, uncertain: false };
+  if (byName.length > 1 && mipSig) {
+    const m = byName.filter(r => roomExitSig(r.vnum) === mipSig);
+    if (m.length === 1) return { vnum: m[0].vnum, uncertain: false };
+  }
+  return null;
+}
+
+/**
  * Send map context to client when room changes.
  * Includes current room info + neighbors from map DB.
  */
-function sendMapContext(session, vnum, force) {
+function sendMapContext(session, vnum, force, uncertain) {
   if (!mapDb) return;
   try {
     const room = mapStmts.getRoomByVnum.get(vnum);
     if (!room) return; // Vnum not in map DB
 
+    session._mapReckonVnum = vnum;   // remember our confident position for reckoning the next move
     // Don't resend if we're still in the same room (unless forced — e.g. map-open / post-refresh).
     if (!force && session._lastMapVnum === vnum) return;
     session._lastMapVnum = vnum;
@@ -5850,6 +5912,7 @@ function sendMapContext(session, vnum, force) {
       };
     }
 
+    if (uncertain) msg.uncertain = true;
     sendToClient(session, msg);
   } catch (e) {
     // Non-fatal — map is informational
@@ -5857,30 +5920,48 @@ function sendMapContext(session, vnum, force) {
 }
 
 /**
- * Name-based map lookup fallback when MIP doesn't send vnums.
- * Uses room name + exits to disambiguate.
+ * We can't pin the room yet (no vnum, no anchor — e.g. you opened the map while
+ * already standing in an un-id'd area). Still ship the AREA graph if we can guess
+ * the area from the room name, so the client can draw the level greyed-out and let
+ * you click your current room to place yourself ("I am here"). No guessing of position.
  */
-function sendMapContextByName(session, roomName, exitsStr, force) {
-  if (!mapDb || !roomName) return;
+function sendUnmappedWithArea(session, roomName) {
+  if (!mapDb) return;
   try {
-    const candidates = mapStmts.getRoomByName.all(roomName);
-    if (candidates.length === 1) { sendMapContext(session, candidates[0].vnum, force); return; }
-
-    // Ambiguous name (e.g. Mahjongg: all 70 rooms are "## Mahjongg ##"). Try a UNIQUE
-    // exit-signature match; only render if exactly one room qualifies.
-    let matches = candidates;
-    if (candidates.length > 1 && exitsStr) {
-      const mipExits = exitsStr.split(/,\s*/).map(s => s.trim()).filter(Boolean).sort().join(',');
-      matches = candidates.filter(c => mapStmts.getExitsByVnum.all(c.vnum).map(e => e.direction).sort().join(',') === mipExits);
+    const candidates = roomName ? mapStmts.getRoomByName.all(roomName) : [];
+    const area = candidates[0] ? candidates[0].area : '';
+    const msg = { type: 'map_context', unmapped: true, room: { name: roomName || '', area } };
+    if (area) {
+      const areaRooms = mapStmts.getAreaRooms.all(area);
+      const areaExits = mapStmts.getAreaExits.all(area);
+      msg.placeable = true;   // client: render greyed + enable click-to-place
+      msg.area = {
+        name: area,
+        rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain })),
+        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command }))
+      };
+      session._lastMapArea = area;
     }
-    if (matches.length === 1) { sendMapContext(session, matches[0].vnum, force); return; }
-
-    // Can't pinpoint the room — do NOT guess (guessing showed a wrong/jumping highlight).
-    // Tell the client so it can say so honestly instead of rendering the wrong place.
-    sendToClient(session, { type: 'map_context', unmapped: true, room: { name: roomName, area: candidates[0] ? candidates[0].area : '' } });
+    sendToClient(session, msg);
   } catch (e) {
     // Non-fatal
   }
+}
+
+/**
+ * Decide what map update to send for the session's current MIP room. Single entry
+ * point used by DDD (room change), request_map (map open), and set_map_position.
+ *   - real vnum from MIP  → authoritative (resync, drift impossible)
+ *   - no vnum             → dead-reckon (neighbor + exit-signature)
+ *   - can't place         → unmapped + area graph for click-to-place
+ */
+function dispatchMapUpdate(session, force) {
+  if (!mapDb || !session.mipStats) return;
+  const mip = session.mipStats;
+  if (mip.roomVnum) { sendMapContext(session, mip.roomVnum, force); return; }
+  const r = reckonCurrentRoom(session);
+  if (r) { sendMapContext(session, r.vnum, force, r.uncertain); return; }
+  sendUnmappedWithArea(session, mip.room);
 }
 
 /**
@@ -5949,9 +6030,10 @@ function parseMipMessage(session, msgType, msgData) {
       const rawRoom = msgData.trim();
       // Extract room vnum if present (MIP appends ~12345 to room name)
       const vnumMatch = rawRoom.match(/~(\d+)\s*$/);
-      if (vnumMatch) {
-        mipStats.roomVnum = parseInt(vnumMatch[1], 10);
-      }
+      // Clear the vnum when this room doesn't report one (e.g. Mahjongg) — otherwise the
+      // STALE vnum from the last id'd room leaks in and the map highlights the wrong place.
+      // A null vnum routes us into dead-reckoning (reckonCurrentRoom) instead.
+      mipStats.roomVnum = vnumMatch ? parseInt(vnumMatch[1], 10) : null;
       mipStats.room = rawRoom.replace(/\s*\([^)]*\)?(~\d+)?\s*$/, '').trim();
       updated = true;
       // Debug: log raw BAD data for map development (Nathan only, temporary)
@@ -5970,11 +6052,7 @@ function parseMipMessage(session, msgType, msgData) {
       // Now both room name (from BAD) and exits (from DDD) are current.
       // Send map context with accurate exit filtering.
       if (mapDb && session && MAP_ENABLED_USERS.has(session.userId)) {
-        if (mipStats.roomVnum) {
-          sendMapContext(session, mipStats.roomVnum);
-        } else {
-          sendMapContextByName(session, mipStats.room, mipStats.exits);
-        }
+        dispatchMapUpdate(session, false);
       }
       break;
 
@@ -7626,8 +7704,18 @@ wss.on('connection', (ws, req) => {
           // Client opened the map (or reconnected) — force a fresh full context for the
           // current room so the map isn't blank until the next room change.
           if (!mapDb || !MAP_ENABLED_USERS.has(session.userId) || !session.mipStats) break;
-          if (session.mipStats.roomVnum) sendMapContext(session, session.mipStats.roomVnum, true);
-          else if (session.mipStats.room) sendMapContextByName(session, session.mipStats.room, session.mipStats.exits, true);
+          dispatchMapUpdate(session, true);
+          break;
+        }
+        case 'set_map_position': {
+          // Manual "I am here" anchor: the player clicked their current room when we
+          // couldn't pin it (un-id'd area). Trust it as the confident position and
+          // re-render; subsequent moves dead-reckon from here.
+          if (!mapDb || !MAP_ENABLED_USERS.has(session.userId)) break;
+          const v = parseInt(data.vnum, 10);
+          if (!Number.isFinite(v) || !mapStmts.getRoomByVnum.get(v)) break;
+          session._mapReckonVnum = v;
+          sendMapContext(session, v, true);
           break;
         }
 

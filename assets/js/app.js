@@ -823,7 +823,12 @@ class WMTClient {
             // `secstep$secstepnumber` against a missing var. See memory:
             // project_var_sync_flush_before_command.
             this._flushPendingVarSync();
-            return _origSendCommand(command, raw);
+            const r = _origSendCommand(command, raw);
+            // Map dead-reckoning: when YOU send a single bare direction, step the marker
+            // on the cached graph instantly (we know the exact direction — no ambiguity,
+            // no round-trip). MIP/server reckon then confirms or corrects it.
+            if (!raw) this._mapOptimisticStep(command);
+            return r;
         };
 
         this.connection.connect();
@@ -3061,31 +3066,95 @@ class WMTClient {
         if (!this.mapWindowOpen) return;
         const svg = document.getElementById('map-svg');
         if (!svg) return;
-        if (ctx.unmapped) {   // area the MUD can't identify us in (no room IDs / duplicate names)
-            svg.innerHTML = ''; svg.setAttribute('viewBox', '0 0 400 400');
-            const t = document.getElementById('map-title'); if (t) t.textContent = (ctx.room && ctx.room.area) ? ctx.room.area : 'Map';
-            const f = document.getElementById('map-footer'); if (f) f.textContent = "This area doesn't report room IDs — can't pinpoint your position here.";
-            this.lastMapContext = ctx;
-            return;
-        }
-        // Cache the area graph whenever the server includes it (sent on area change).
+
+        // Cache the area graph whenever the server includes it (area change OR an
+        // unmapped-but-area-known context that lets us draw the level for click-to-place).
         if (ctx.area) {
             const rooms = new Map();
             for (const r of (ctx.area.rooms || [])) rooms.set(r.vnum, r);
             this.mapAreaGraph = { name: ctx.area.name, rooms, exits: ctx.area.exits || [] };
         }
+        this.lastMapContext = ctx;
+
+        // Unplaced: the MUD can't identify our room. If we have the area graph, draw it
+        // greyed and let the player click their current room ("I am here"); otherwise an
+        // honest message. We do NOT guess a position.
+        if (ctx.unmapped) {
+            this.mapCurrentVnum = null;
+            this._mapOptimistic = false;
+            this.mapUncertain = false;
+            const t = document.getElementById('map-title');
+            if (t) t.textContent = (ctx.room && ctx.room.area) ? ctx.room.area : 'Map';
+            if (ctx.placeable && this.mapAreaGraph && this.mapAreaGraph.rooms.size) {
+                this.mapPlaceMode = true;
+                this._renderAreaMap(svg, this.mapAreaGraph, null, ctx);
+                const f = document.getElementById('map-footer');
+                if (f) f.textContent = "Can't pinpoint you here — click your current room to place yourself.";
+            } else {
+                this.mapPlaceMode = false;
+                svg.innerHTML = ''; svg.setAttribute('viewBox', '0 0 400 400');
+                const f = document.getElementById('map-footer');
+                if (f) f.textContent = "This area doesn't report room IDs — can't pinpoint your position here.";
+            }
+            return;
+        }
+
         const cur = (ctx.currentVnum != null) ? ctx.currentVnum : (ctx.room && ctx.room.vnum);
-        this.mapCurrentVnum = cur;
+
+        // If the server is only DEAD-RECKONING (uncertain) and we already hold a confident
+        // optimistic position from a direction you typed, keep ours — a guess must never
+        // yank the marker off a known-exact step. Otherwise the server's position wins.
+        const keepOptimistic = ctx.uncertain && this._mapOptimistic && this.mapCurrentVnum != null
+            && this.mapAreaGraph && this.mapAreaGraph.rooms.has(this.mapCurrentVnum);
+        if (!keepOptimistic) {
+            this.mapCurrentVnum = cur;
+            this._mapOptimistic = false;
+            this.mapUncertain = !!ctx.uncertain;
+            this.mapPlaceMode = false;
+        }
 
         const title = document.getElementById('map-title');
         if (title) title.textContent = `${ctx.room.area} — ${ctx.room.name}`;
-        const footer = document.getElementById('map-footer');
-        if (footer) footer.textContent = 'Exits: ' + (ctx.exits || []).map(e => e.direction).join(', ');
 
         // Real area map when we have the graph and know where we are; otherwise the
-        // 1-hop compass fallback (e.g. MIP gave a name, not a vnum).
-        if (this.mapAreaGraph && this.mapAreaGraph.rooms.has(cur)) { this._renderAreaMap(svg, this.mapAreaGraph, cur, ctx); return; }
+        // 1-hop compass fallback.
+        if (this.mapAreaGraph && this.mapAreaGraph.rooms.has(this.mapCurrentVnum)) {
+            this._renderAreaMap(svg, this.mapAreaGraph, this.mapCurrentVnum, ctx); return;
+        }
+        const footer = document.getElementById('map-footer');
+        if (footer) footer.textContent = 'Exits: ' + (ctx.exits || []).map(e => e.direction).join(', ');
         this._renderCompass(svg, ctx);
+    }
+
+    // Normalize a direction token (full word or abbreviation) to its short form, or null.
+    _normDir(d) {
+        if (!d) return null;
+        d = String(d).trim().toLowerCase();
+        const long = { north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw', up: 'u', down: 'd' };
+        if (long[d]) return long[d];
+        return ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw', 'u', 'd'].includes(d) ? d : null;
+    }
+
+    // Optimistic dead-reckoning step (see the sendCommand hook). Only fires for a bare
+    // single direction whose exit exists in the cached graph from where we are.
+    _mapOptimisticStep(rawCmd) {
+        if (!this.mapWindowOpen || !this.mapAreaGraph || this.mapCurrentVnum == null) return;
+        const dir = this._normDir(rawCmd);
+        if (!dir) return;
+        const ex = (this.mapAreaGraph.exits || []).find(e =>
+            e.from === this.mapCurrentVnum && this._normDir(e.dir) === dir && this.mapAreaGraph.rooms.has(e.to));
+        if (!ex) return;
+        this.mapCurrentVnum = ex.to;
+        this._mapOptimistic = true;
+        this.mapUncertain = false;
+        this.mapPlaceMode = false;
+        const svg = document.getElementById('map-svg');
+        if (svg) this._renderAreaMap(svg, this.mapAreaGraph, this.mapCurrentVnum, this.lastMapContext || {});
+    }
+
+    // "I am here": tell the server our confident position (manual anchor for un-id'd areas).
+    _mapSetPosition(vnum) {
+        if (this.connection && this.connection.connected) this.connection.send('set_map_position', { vnum });
     }
 
     _renderCompass(svg, ctx) {
@@ -3237,14 +3306,20 @@ class WMTClient {
         for (const v of graph.rooms.keys()) adj.set(v, []);
         for (const e of graph.exits) if (adj.has(e.from) && graph.rooms.has(e.to)) adj.get(e.from).push({ to: e.to, dir: (e.dir || '').toLowerCase(), cmd: e.cmd });
 
-        // Cardinal-connected component containing the current room = the PLANE you're on
+        // Place-mode (curVnum == null): we don't know where we are yet, so anchor layout at
+        // the lowest vnum in the area and let the player click their room to place themselves.
+        let layoutAnchor = (curVnum != null && graph.rooms.has(curVnum)) ? curVnum : null;
+        if (layoutAnchor == null) { for (const v of graph.rooms.keys()) if (layoutAnchor == null || v < layoutAnchor) layoutAnchor = v; }
+        const placing = (curVnum == null) || this.mapPlaceMode;
+
+        // Cardinal-connected component containing the anchor room = the PLANE you're on
         // (sewers/towers are separate components reached via u/d, and aren't drawn here).
-        const comp = new Set([curVnum]);
-        { const cq = [curVnum]; while (cq.length) { const v = cq.shift(); for (const ex of (adj.get(v) || [])) { if (DIR[ex.dir] && !comp.has(ex.to)) { comp.add(ex.to); cq.push(ex.to); } } } }
+        const comp = new Set([layoutAnchor]);
+        { const cq = [layoutAnchor]; while (cq.length) { const v = cq.shift(); for (const ex of (adj.get(v) || [])) { if (DIR[ex.dir] && !comp.has(ex.to)) { comp.add(ex.to); cq.push(ex.to); } } } }
 
         // STABLE layout: anchor at the LOWEST vnum in the component (deterministic), so moving
         // around the plane keeps every room fixed — only the highlight + viewport move (no reshuffle).
-        let anchor = curVnum; for (const v of comp) if (v < anchor) anchor = v;
+        let anchor = layoutAnchor; for (const v of comp) if (v < anchor) anchor = v;
         const pos = new Map(), taken = new Set();
         const key = (a, b) => a + ',' + b;
         const place = (v, x, y) => {
@@ -3279,7 +3354,7 @@ class WMTClient {
         // Absolute coords; the viewport scrolls to keep the current room centered (stable map).
         const GAP = 34, BOX = 20;
         const sx = (x) => x * GAP, sy = (y) => y * GAP;
-        const cp = pos.get(curVnum) || { x: 0, y: 0 };
+        const cp = pos.get(curVnum) || pos.get(layoutAnchor) || { x: 0, y: 0 };
         const ccx = sx(cp.x) + BOX / 2, ccy = sy(cp.y) + BOX / 2;
         const VW = 13 * GAP, VH = 11 * GAP;   // visible window, centered on you
         svg.setAttribute('viewBox', `${ccx - VW / 2} ${ccy - VH / 2} ${VW} ${VH}`);
@@ -3309,7 +3384,7 @@ class WMTClient {
             if (!inView(p)) continue;
             const room = graph.rooms.get(v) || {};
             const g = document.createElementNS(NS, 'g');
-            g.setAttribute('class', 'map-area-room' + (v === curVnum ? ' current' : ''));
+            g.setAttribute('class', 'map-area-room' + (v === curVnum ? ' current' : '') + (v === curVnum && this.mapUncertain ? ' uncertain' : '') + (placing ? ' placing' : ''));
             const rect = document.createElementNS(NS, 'rect');
             rect.setAttribute('x', sx(p.x)); rect.setAttribute('y', sy(p.y));
             rect.setAttribute('width', BOX); rect.setAttribute('height', BOX); rect.setAttribute('rx', 4);
@@ -3328,11 +3403,15 @@ class WMTClient {
             };
             if (vd && vd.up) addGlyph('▲', sy(p.y) + 7, vd.upCmd, 'Go up from here');
             if (vd && vd.down) addGlyph('▼', sy(p.y) + BOX - 2, vd.downCmd, 'Go down from here (e.g. to the sewers)');
-            if (v !== curVnum) { g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v)); }
+            if (placing) {
+                g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapSetPosition(v));   // "I am here"
+            } else if (v !== curVnum) {
+                g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v));         // walk there
+            }
             svg.appendChild(g);
         }
         const footer = document.getElementById('map-footer');
-        if (footer) footer.textContent = `${graph.name}: ${comp.size} rooms on this level`;
+        if (footer && !placing) footer.textContent = `${graph.name}: ${comp.size} rooms on this level` + (this.mapUncertain ? ' · approximate position' : '');
     }
 
     // Click-to-walk: BFS shortest path over in-area exits, then send each step's command.

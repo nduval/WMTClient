@@ -3483,6 +3483,23 @@ body {
     stroke: #b6ffb6;
     stroke-width: 2.4;
 }
+/* Dead-reckoned (no room ID to confirm) — amber + dashed so an approximate
+   position never looks as authoritative as an MIP-confirmed one. */
+.map-area-room.current.uncertain rect {
+    fill: #8a6d1e;
+    stroke: #ffd95a;
+    stroke-dasharray: 3 2;
+}
+/* Place-mode: every room is a click target ("I am here"). */
+.map-area-room.placing rect {
+    stroke-dasharray: 2 2;
+    opacity: 0.85;
+}
+.map-area-room.placing:hover rect {
+    fill: #2e8b3e;
+    stroke: #b6ffb6;
+    opacity: 1;
+}
 .map-vglyph {
     fill: #cdd6f4;
     font-size: 7px;
