@@ -3368,14 +3368,36 @@ class WMTClient {
             }
         }
 
-        // Absolute coords; the viewport scrolls to keep the current room centered (stable map).
+        // Absolute coords.
         const GAP = 34, BOX = 20;
         const sx = (x) => x * GAP, sy = (y) => y * GAP;
+
+        // Bounding box of everything laid out on this level.
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of pos.values()) {
+            minX = Math.min(minX, sx(p.x)); minY = Math.min(minY, sy(p.y));
+            maxX = Math.max(maxX, sx(p.x) + BOX); maxY = Math.max(maxY, sy(p.y) + BOX);
+        }
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = BOX; maxY = BOX; }
+        const PAD = GAP; minX -= PAD; minY -= PAD; maxX += PAD; maxY += PAD;
+        const contentW = maxX - minX, contentH = maxY - minY;
+
+        // Viewport: when the whole level fits, frame the LEVEL (centered, fills the window —
+        // no dead space dumped below you); when it's too big, follow the player but clamp to
+        // the content edges so we never scroll into emptiness. preserveAspectRatio centers it.
         const cp = pos.get(curVnum) || pos.get(layoutAnchor) || { x: 0, y: 0 };
-        const ccx = sx(cp.x) + BOX / 2, ccy = sy(cp.y) + BOX / 2;
-        const VW = 13 * GAP, VH = 11 * GAP;   // visible window, centered on you
-        svg.setAttribute('viewBox', `${ccx - VW / 2} ${ccy - VH / 2} ${VW} ${VH}`);
-        const inView = (p) => Math.abs(sx(p.x) + BOX / 2 - ccx) < VW / 2 + GAP * 2 && Math.abs(sy(p.y) + BOX / 2 - ccy) < VH / 2 + GAP * 2;
+        const pcx = sx(cp.x) + BOX / 2, pcy = sy(cp.y) + BOX / 2;
+        const MAXSPAN = 16 * GAP;
+        let vbX, vbY, vbW, vbH;
+        if (contentW <= MAXSPAN && contentH <= MAXSPAN) {
+            vbX = minX; vbY = minY; vbW = contentW; vbH = contentH;
+        } else {
+            vbW = Math.min(contentW, MAXSPAN); vbH = Math.min(contentH, MAXSPAN);
+            vbX = Math.max(minX, Math.min(pcx - vbW / 2, maxX - vbW));
+            vbY = Math.max(minY, Math.min(pcy - vbH / 2, maxY - vbH));
+        }
+        svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`);
+        const inView = (p) => (sx(p.x) + BOX) >= vbX - GAP && sx(p.x) <= vbX + vbW + GAP && (sy(p.y) + BOX) >= vbY - GAP && sy(p.y) <= vbY + vbH + GAP;
 
         const defs = document.createElementNS(NS, 'defs');
         defs.innerHTML = '<filter id="map-glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
