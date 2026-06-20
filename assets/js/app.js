@@ -4923,7 +4923,7 @@ class WMTClient {
     _ftpOpenFile(path) { if (!this._ftpConfirmDiscard()) return; document.getElementById('ftp-edit-status').textContent = 'Loading…'; this.connection.send('ftp_get', { path }); }
 
     _onFtpFile(data) {
-        if (this._ftpXfer && this._ftpXfer.toLocal) {   // this fetch is a transfer to the local pane, not an editor open
+        if (this._ftpXfer && this._ftpXfer.toLocal && (!this._ftpXfer.path || !data.path || data.path === this._ftpXfer.path)) {   // transfer-to-local AND the response matches the requested file (guard against a misrouted concurrent get)
             const x = this._ftpXfer; this._ftpXfer = null;
             this._localWriteFile(x.dir, x.name, typeof data.content === 'string' ? data.content : '')
                 .then(() => { if (this._ftpDlQueue) { this._ftpDlQueue.shift(); this._ftpDlNext(); } });
@@ -5097,9 +5097,11 @@ class WMTClient {
     }
     async _localSave() {
         if (!this._local || !this._local.curHandle) { document.getElementById('ftp-edit-status').textContent = 'no local file'; return; }
+        const val = this._ftpEditorValue();
+        if (!this._ftpGuardEmpty(val, this._local.curName)) return;
         try {
             const w = await this._local.curHandle.createWritable();
-            await w.write(this._ftpEditorValue()); await w.close();
+            await w.write(val); await w.close();
             this._ftpSetDirty(false);
             document.getElementById('ftp-edit-status').textContent = 'Saved (local)';
         } catch (e) { document.getElementById('ftp-edit-status').textContent = 'local save failed: ' + (e.message || e); }
@@ -5189,7 +5191,11 @@ class WMTClient {
         if (!window.confirm('Copy ' + sel.length + ' file(s) to the FTP folder ' + (this._ftp.cwd || '.') + '?')) return;
         const items = [];
         for (const r of sel) {   // local reads are fine to do up front; the FTP uploads must be one-at-a-time
-            try { items.push({ name: r.name, content: await (await r.handle.getFile()).text() }); }
+            try {
+                const content = await (await r.handle.getFile()).text();
+                if (!content || content.length === 0) { this._ftpFootMsg('Skipped empty ' + r.name + ' — refusing to upload 0 bytes over FTP', '#caa300'); continue; }
+                items.push({ name: r.name, content });
+            }
             catch (e) { this._ftpFootMsg('Read failed: ' + r.name, '#ff6666'); }
         }
         if (!items.length) return;
@@ -5219,13 +5225,21 @@ class WMTClient {
     _ftpDlNext() {   // download FTP files one at a time over the WS, writing each to disk
         if (!this._ftpDlQueue || !this._ftpDlQueue.length) { this._ftpFootMsg('Copied ' + (this._ftpDlTotal || '') + ' file(s) to local.'); this._localRender(); return; }
         const item = this._ftpDlQueue[0];
-        this._ftpXfer = { toLocal: true, name: item.name, dir: this._ftpDlDir };
+        this._ftpXfer = { toLocal: true, name: item.name, dir: this._ftpDlDir, path: item.path };
         this._ftpFootMsg('Downloading ' + item.name + ' …');
         this.connection.send('ftp_get', { path: item.path });
     }
     async _localWriteFile(dir, name, content) {
-        try { const h = await dir.getFileHandle(name, { create: true }); const w = await h.createWritable(); await w.write(content); await w.close(); }
-        catch (e) { this._ftpFootMsg('Local write failed: ' + name + ' (' + (e.message || e) + ')', '#ff6666'); }
+        try {
+            if (!content || content.length === 0) {   // refuse to silently zero an existing local file
+                let existing = 0;
+                try { const eh = await dir.getFileHandle(name); existing = (await eh.getFile()).size; } catch (e) {}
+                if (existing > 0 && !window.confirm('⚠ Copying EMPTY content over "' + name + '" (currently ' + existing + ' bytes) would erase it — almost always a glitch. Overwrite anyway?')) {
+                    this._ftpFootMsg('Skipped empty overwrite of ' + name, '#caa300'); return;
+                }
+            }
+            const h = await dir.getFileHandle(name, { create: true }); const w = await h.createWritable(); await w.write(content); await w.close();
+        } catch (e) { this._ftpFootMsg('Local write failed: ' + name + ' (' + (e.message || e) + ')', '#ff6666'); }
     }
 
     _ftpUpdateGutter() {
@@ -5358,9 +5372,18 @@ class WMTClient {
         btn.textContent = 'Save'; btn.classList.remove('ftp-dirty', 'ftp-saved');
     }
 
+    // Guard against silently writing an EMPTY file over existing content (the workroom.c
+    // zeroing). EVERY file-overwrite path routes through this — saving 0 bytes over a real
+    // file is virtually always a glitch, so make the human confirm it explicitly.
+    _ftpGuardEmpty(content, label) {
+        if (content && content.length > 0) return true;
+        return window.confirm('⚠ "' + (label || 'this file') + '" would be saved EMPTY (0 bytes), erasing its contents.\n\nThis is almost always a glitch, not what you meant. Save the empty file anyway?');
+    }
+
     _ftpSave() {
         if (this._ftpCmp && this._ftpMergeView) {   // comparing → save the editable (left) working file
             const cmp = this._ftpCmp, val = this._ftpMergeView.editor().getValue();
+            if (!this._ftpGuardEmpty(val, cmp.rightLabel)) { this._ftpUpdateSaveBtn('dirty'); return; }
             if (cmp.rightSrc === 'local' && cmp.rightHandle) return this._ftpWriteLocalHandle(cmp.rightHandle, val);
             if (cmp.rightSrc === 'ftp' && cmp.rightPath) {
                 this._ftpUpdateSaveBtn('saving');
@@ -5371,11 +5394,14 @@ class WMTClient {
         }
         if (this._editSrc === 'local') return this._localSave();   // route Save to local disk when editing a local file
         if (!this._ftp || !this._ftp.curFile) { document.getElementById('ftp-edit-status').textContent = 'no file open'; return; }
+        const val = this._ftpEditorValue();
+        if (!this._ftpGuardEmpty(val, this._ftp.curFile)) return;
         this._ftpUpdateSaveBtn('saving');
-        this.connection.send('ftp_put', { path: this._ftp.curFile, content: this._ftpEditorValue() });
+        this.connection.send('ftp_put', { path: this._ftp.curFile, content: val });
     }
 
     async _ftpWriteLocalHandle(handle, text) {
+        if (!this._ftpGuardEmpty(text, handle && handle.name)) { this._ftpUpdateSaveBtn('dirty'); return; }
         try {
             const w = await handle.createWritable(); await w.write(text); await w.close();
             this._ftpCmpDirty = false; this._ftpUpdateSaveBtn('saved');
