@@ -3227,25 +3227,30 @@ class WMTClient {
         for (const v of graph.rooms.keys()) adj.set(v, []);
         for (const e of graph.exits) if (adj.has(e.from) && graph.rooms.has(e.to)) adj.get(e.from).push({ to: e.to, dir: (e.dir || '').toLowerCase(), cmd: e.cmd });
 
-        // BFS layout from the current room; first-reached wins; spiral out of collisions.
+        // Cardinal-connected component containing the current room = the PLANE you're on
+        // (sewers/towers are separate components reached via u/d, and aren't drawn here).
+        const comp = new Set([curVnum]);
+        { const cq = [curVnum]; while (cq.length) { const v = cq.shift(); for (const ex of (adj.get(v) || [])) { if (DIR[ex.dir] && !comp.has(ex.to)) { comp.add(ex.to); cq.push(ex.to); } } } }
+
+        // STABLE layout: anchor at the LOWEST vnum in the component (deterministic), so moving
+        // around the plane keeps every room fixed — only the highlight + viewport move (no reshuffle).
+        let anchor = curVnum; for (const v of comp) if (v < anchor) anchor = v;
         const pos = new Map(), taken = new Set();
         const key = (a, b) => a + ',' + b;
         const place = (v, x, y) => {
             if (!taken.has(key(x, y))) { pos.set(v, { x, y }); taken.add(key(x, y)); return; }
-            for (let r = 1; r < 60; r++) for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
+            for (let r = 1; r < 80; r++) for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
                 if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
                 if (!taken.has(key(x + dx, y + dy))) { pos.set(v, { x: x + dx, y: y + dy }); taken.add(key(x + dx, y + dy)); return; }
             }
             pos.set(v, { x, y });   // give up — allow overlap (rare, non-planar)
         };
-        place(curVnum, 0, 0);
-        const q = [curVnum], seen = new Set([curVnum]);
-        const MAX_ROOMS = 80;   // big areas (Pinnacle = 774 rooms) → draw a clean local neighborhood, BFS-nearest first
-        while (q.length && pos.size < MAX_ROOMS) {
+        place(anchor, 0, 0);
+        const q = [anchor], seen = new Set([anchor]);
+        while (q.length) {
             const v = q.shift(), p = pos.get(v);
             for (const ex of (adj.get(v) || [])) {
-                if (seen.has(ex.to) || !DIR[ex.dir]) continue;
-                if (pos.size >= MAX_ROOMS) break;
+                if (seen.has(ex.to) || !DIR[ex.dir] || !comp.has(ex.to)) continue;
                 seen.add(ex.to); place(ex.to, p.x + DIR[ex.dir][0], p.y + DIR[ex.dir][1]); q.push(ex.to);
             }
         }
@@ -3261,13 +3266,14 @@ class WMTClient {
             }
         }
 
-        // bounds + scale to fit
-        let minX = 0, maxX = 0, minY = 0, maxY = 0;
-        for (const { x, y } of pos.values()) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
-        const GAP = 34, BOX = 20, PAD = 24;
-        const sx = (x) => PAD + (x - minX) * GAP, sy = (y) => PAD + (y - minY) * GAP;
-        const w = PAD * 2 + (maxX - minX) * GAP + BOX, h = PAD * 2 + (maxY - minY) * GAP + BOX;
-        svg.setAttribute('viewBox', `0 0 ${Math.max(w, 80)} ${Math.max(h, 80)}`);
+        // Absolute coords; the viewport scrolls to keep the current room centered (stable map).
+        const GAP = 34, BOX = 20;
+        const sx = (x) => x * GAP, sy = (y) => y * GAP;
+        const cp = pos.get(curVnum) || { x: 0, y: 0 };
+        const ccx = sx(cp.x) + BOX / 2, ccy = sy(cp.y) + BOX / 2;
+        const VW = 13 * GAP, VH = 11 * GAP;   // visible window, centered on you
+        svg.setAttribute('viewBox', `${ccx - VW / 2} ${ccy - VH / 2} ${VW} ${VH}`);
+        const inView = (p) => Math.abs(sx(p.x) + BOX / 2 - ccx) < VW / 2 + GAP * 2 && Math.abs(sy(p.y) + BOX / 2 - ccy) < VH / 2 + GAP * 2;
 
         const defs = document.createElementNS(NS, 'defs');
         defs.innerHTML = '<filter id="map-glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
@@ -3278,6 +3284,7 @@ class WMTClient {
         const drawn = new Set();
         for (const e of graph.exits) {
             if (!pos.has(e.from) || !pos.has(e.to) || !DIR[(e.dir || '').toLowerCase()]) continue;
+            if (!inView(pos.get(e.from)) && !inView(pos.get(e.to))) continue;
             const k = e.from < e.to ? e.from + '-' + e.to : e.to + '-' + e.from;
             if (drawn.has(k)) continue; drawn.add(k);
             const ln = document.createElementNS(NS, 'line');
@@ -3289,6 +3296,7 @@ class WMTClient {
 
         // rooms
         for (const [v, p] of pos) {
+            if (!inView(p)) continue;
             const room = graph.rooms.get(v) || {};
             const g = document.createElementNS(NS, 'g');
             g.setAttribute('class', 'map-area-room' + (v === curVnum ? ' current' : ''));
@@ -3314,7 +3322,7 @@ class WMTClient {
             svg.appendChild(g);
         }
         const footer = document.getElementById('map-footer');
-        if (footer) footer.textContent = `${graph.name}: ${pos.size}${graph.rooms.size > pos.size ? ' of ' + graph.rooms.size : ''} rooms near you`;
+        if (footer) footer.textContent = `${graph.name}: ${comp.size} rooms on this level`;
     }
 
     // Click-to-walk: BFS shortest path over in-area exits, then send each step's command.
