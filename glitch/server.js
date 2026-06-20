@@ -5838,43 +5838,50 @@ function reckonCurrentRoom(session) {
   const mipSig = (session.mipStats.exits || '').split(/,\s*/)
     .map(s => s.trim().toLowerCase()).filter(Boolean).sort().join(',');
   const prev = session._mapReckonVnum;
+  // CRITICAL: only treat a room update as a MOVE if a movement command was sent just
+  // before it. A `look` (or combat re-display) re-sends the same room with no preceding
+  // move — without this gate, in a uniform grid every look walks the marker to a
+  // same-fingerprint neighbor and bounces (Nathan: orange↔green on every look).
+  const movedRecently = session._lastMoveAt && (Date.now() - session._lastMoveAt < 5000);
 
   if (prev) {
-    // 0) Direction-primary (the reliable signal): if we just sent a movement command,
-    //    trust the exit we took — this is the ONLY way to disambiguate a uniform grid
-    //    where many neighbors share the same name + exit-signature (Aegis). Consume the
-    //    direction so a later non-move BAD (e.g. `look`) can't re-apply a stale step.
-    if (session._lastMoveDir && (Date.now() - (session._lastMoveAt || 0) < 5000)) {
+    const prevRoom = mapStmts.getRoomByVnum.get(prev);
+
+    if (!movedRecently) {
+      // No movement → this is the SAME room being re-displayed. Stay put.
+      if (prevRoom && prevRoom.name === name) return { vnum: prev, uncertain: false };
+      // Name changed with no move we captured → teleport/forced move; fall through to global match.
+    } else {
+      // We moved. Consume the one-shot move signal so the next look isn't seen as a move.
       const took = session._lastMoveDir;
       session._lastMoveDir = null;
-      const de = mapStmts.getExitsByVnum.all(prev).find(e => mapNormDir(e.direction) === took);
-      if (de) {
-        const dest = mapStmts.getRoomByVnum.get(de.to_vnum);
-        if (dest && dest.name === name) return { vnum: dest.vnum, uncertain: false };
-        // dir known but destination name doesn't match (blocked / teleport / unmapped exit) —
-        // fall through to the signature heuristics rather than force a wrong step.
+      session._lastMoveAt = 0;
+
+      // 0) Direction-primary (the reliable signal): trust the exit we took. This is the
+      //    only way to disambiguate a uniform grid where neighbors share name + exit-sig.
+      if (took) {
+        const de = mapStmts.getExitsByVnum.all(prev).find(e => mapNormDir(e.direction) === took);
+        if (de) {
+          const dest = mapStmts.getRoomByVnum.get(de.to_vnum);
+          if (dest && dest.name === name) return { vnum: dest.vnum, uncertain: false };
+          // dir known but destination name mismatches (blocked / teleport / unmapped exit) —
+          // fall through to the signature heuristics rather than force a wrong step.
+        }
       }
+
+      // 1) Neighbor-constrained: the new room is a direct graph neighbor of where we were.
+      //    (Works across an area boundary too — the id'd room we came from carries the
+      //    cross-area exit into the un-id'd area, giving us the entry anchor for free.)
+      const nbrVnums = [...new Set(mapStmts.getExitsByVnum.all(prev).map(e => e.to_vnum))];
+      const nbrs = nbrVnums.map(v => mapStmts.getRoomByVnum.get(v)).filter(Boolean);
+      const hit = nbrs.filter(r => r.name === name && roomExitSig(r.vnum) === mipSig);
+      if (hit.length === 1) return { vnum: hit[0].vnum, uncertain: false };
+      if (hit.length > 1) return { vnum: hit[0].vnum, uncertain: true };
+
+      // Moved but can't resolve the destination (blocked, or dest not a graph neighbor) —
+      // hold our last position rather than jump, but flag it uncertain.
+      if (prevRoom && prevRoom.name === name) return { vnum: prev, uncertain: true };
     }
-
-    // 1) Neighbor-constrained: the new room is a direct graph neighbor of where we were.
-    //    (Works across an area boundary too — the id'd room we came from carries the
-    //    cross-area exit into the un-id'd area, giving us the entry anchor for free.)
-    const nbrVnums = [...new Set(mapStmts.getExitsByVnum.all(prev).map(e => e.to_vnum))];
-    const nbrs = nbrVnums.map(v => mapStmts.getRoomByVnum.get(v)).filter(Boolean);
-    const hit = nbrs.filter(r => r.name === name && roomExitSig(r.vnum) === mipSig);
-    if (hit.length === 1) return { vnum: hit[0].vnum, uncertain: false };
-
-    // 2) Didn't move (wall / "you can't go that way"): same name + exit-sig as prev,
-    //    and no neighbor matched — assume we're still where we were.
-    if (hit.length === 0) {
-      const prevRoom = mapStmts.getRoomByVnum.get(prev);
-      if (prevRoom && prevRoom.name === name && roomExitSig(prev) === mipSig) {
-        return { vnum: prev, uncertain: false };
-      }
-    }
-
-    // 3) Several identical neighbors fit — pick one but flag it uncertain.
-    if (hit.length > 1) return { vnum: hit[0].vnum, uncertain: true };
   }
 
   // 4) No anchor / teleport (recall, flee out of area): area-wide unique match.
