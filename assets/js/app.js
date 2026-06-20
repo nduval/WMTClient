@@ -3024,6 +3024,9 @@ class WMTClient {
             mapWindow.classList.remove('hidden');
             document.getElementById('map-toggle-btn')?.classList.add('active');
             if (this.lastMapContext) this.renderMap(this.lastMapContext);
+            // Ask the server for the current location so the map fills in immediately
+            // (it otherwise only updates on a room change — blank after a refresh / standing still).
+            if (this.connection && this.connection.connected) this.connection.send('request_map', {});
         } else {
             mapWindow.classList.add('hidden');
             document.getElementById('map-toggle-btn')?.classList.remove('active');
@@ -3058,6 +3061,13 @@ class WMTClient {
         if (!this.mapWindowOpen) return;
         const svg = document.getElementById('map-svg');
         if (!svg) return;
+        if (ctx.unmapped) {   // area the MUD can't identify us in (no room IDs / duplicate names)
+            svg.innerHTML = ''; svg.setAttribute('viewBox', '0 0 400 400');
+            const t = document.getElementById('map-title'); if (t) t.textContent = (ctx.room && ctx.room.area) ? ctx.room.area : 'Map';
+            const f = document.getElementById('map-footer'); if (f) f.textContent = "This area doesn't report room IDs — can't pinpoint your position here.";
+            this.lastMapContext = ctx;
+            return;
+        }
         // Cache the area graph whenever the server includes it (sent on area change).
         if (ctx.area) {
             const rooms = new Map();

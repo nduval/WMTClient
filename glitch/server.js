@@ -5791,15 +5791,16 @@ function closeSession(session, reason) {
  * Send map context to client when room changes.
  * Includes current room info + neighbors from map DB.
  */
-function sendMapContext(session, vnum) {
+function sendMapContext(session, vnum, force) {
   if (!mapDb) return;
   try {
     const room = mapStmts.getRoomByVnum.get(vnum);
     if (!room) return; // Vnum not in map DB
 
-    // Don't resend if we're still in the same room
-    if (session._lastMapVnum === vnum) return;
+    // Don't resend if we're still in the same room (unless forced — e.g. map-open / post-refresh).
+    if (!force && session._lastMapVnum === vnum) return;
     session._lastMapVnum = vnum;
+    if (force) session._lastMapArea = null;   // force the area graph to be (re)sent
 
     const allNeighbors = mapStmts.getNeighborRooms.all(vnum);
     const allExits = mapStmts.getExitsByVnum.all(vnum);
@@ -5859,27 +5860,24 @@ function sendMapContext(session, vnum) {
  * Name-based map lookup fallback when MIP doesn't send vnums.
  * Uses room name + exits to disambiguate.
  */
-function sendMapContextByName(session, roomName, exitsStr) {
+function sendMapContextByName(session, roomName, exitsStr, force) {
   if (!mapDb || !roomName) return;
   try {
     const candidates = mapStmts.getRoomByName.all(roomName);
-    if (candidates.length === 0) return;
+    if (candidates.length === 1) { sendMapContext(session, candidates[0].vnum, force); return; }
 
-    let match = candidates[0]; // Default to first match
+    // Ambiguous name (e.g. Mahjongg: all 70 rooms are "## Mahjongg ##"). Try a UNIQUE
+    // exit-signature match; only render if exactly one room qualifies.
+    let matches = candidates;
     if (candidates.length > 1 && exitsStr) {
-      // Disambiguate by exit count/directions
-      const mipExits = exitsStr.split(/,\s*/).sort().join(',');
-      for (const c of candidates) {
-        const dbExits = mapStmts.getExitsByVnum.all(c.vnum);
-        const dbExitStr = dbExits.map(e => e.direction).sort().join(',');
-        if (dbExitStr === mipExits) {
-          match = c;
-          break;
-        }
-      }
+      const mipExits = exitsStr.split(/,\s*/).map(s => s.trim()).filter(Boolean).sort().join(',');
+      matches = candidates.filter(c => mapStmts.getExitsByVnum.all(c.vnum).map(e => e.direction).sort().join(',') === mipExits);
     }
+    if (matches.length === 1) { sendMapContext(session, matches[0].vnum, force); return; }
 
-    sendMapContext(session, match.vnum);
+    // Can't pinpoint the room — do NOT guess (guessing showed a wrong/jumping highlight).
+    // Tell the client so it can say so honestly instead of rendering the wrong place.
+    sendToClient(session, { type: 'map_context', unmapped: true, room: { name: roomName, area: candidates[0] ? candidates[0].area : '' } });
   } catch (e) {
     // Non-fatal
   }
@@ -7622,6 +7620,14 @@ wss.on('connection', (ws, req) => {
         }
         case 'ftp_disconnect': {
           ftpClose(session);
+          break;
+        }
+        case 'request_map': {
+          // Client opened the map (or reconnected) — force a fresh full context for the
+          // current room so the map isn't blank until the next room change.
+          if (!mapDb || !MAP_ENABLED_USERS.has(session.userId) || !session.mipStats) break;
+          if (session.mipStats.roomVnum) sendMapContext(session, session.mipStats.roomVnum, true);
+          else if (session.mipStats.room) sendMapContextByName(session, session.mipStats.room, session.mipStats.exits, true);
           break;
         }
 
