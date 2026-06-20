@@ -5180,7 +5180,7 @@ class WMTClient {
         const n = (this._ftpRows || []).filter(r => r.cb.checked).length;
         const lbl = document.getElementById('ftp-tree-selcount'); if (lbl) lbl.textContent = n + ' selected';
         const btn = document.getElementById('ftp-tree-xfer');
-        if (btn) { btn.disabled = !n || !(this._local && this._local.dir); btn.textContent = n ? `Copy ${n} → Local` : 'Check a box, then copy → Local'; }
+        if (btn) { btn.disabled = !n || !(this._local && this._local.dir); btn.textContent = n ? `Copy ${n} ← Local` : 'Check a box, then copy ← Local'; }   // FTP is on the right, Local on the left → arrow points left
     }
     async _xferLocalToFtp() {
         if (!this._ftp || !this._ftp.connected) { this._ftpFootMsg('Connect FTP first.', '#caa300'); return; }
@@ -6213,7 +6213,7 @@ class WMTClient {
                   <div class="ftp-tree">
                     <div class="ftp-pane-head" id="ftp-tree-head" title="FTP files — click to make this pane active">☁ FTP</div>
                     <ul class="ftp-list" id="ftp-filelist"></ul>
-                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-tree-xfer" title="Tick the checkbox on each FTP file you want, then click to copy them to your current local folder" disabled>Check a box, then copy → Local</button></div>
+                    <div class="ftp-pane-foot" style="display:none"><button class="ftp-xfer-btn" id="ftp-tree-xfer" title="Tick the checkbox on each FTP file you want, then click to copy them to your current local folder" disabled>Check a box, then copy ← Local</button></div>
                   </div>
                   <div class="ftp-divider" id="ftp-divider" title="Drag to resize the file pane"></div>
                   <div id="ftp-goto-pop" class="ftp-pop" style="display:none">
