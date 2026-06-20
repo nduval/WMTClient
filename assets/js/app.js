@@ -3240,10 +3240,12 @@ class WMTClient {
         };
         place(curVnum, 0, 0);
         const q = [curVnum], seen = new Set([curVnum]);
-        while (q.length) {
+        const MAX_ROOMS = 80;   // big areas (Pinnacle = 774 rooms) → draw a clean local neighborhood, BFS-nearest first
+        while (q.length && pos.size < MAX_ROOMS) {
             const v = q.shift(), p = pos.get(v);
             for (const ex of (adj.get(v) || [])) {
                 if (seen.has(ex.to) || !DIR[ex.dir]) continue;
+                if (pos.size >= MAX_ROOMS) break;
                 seen.add(ex.to); place(ex.to, p.x + DIR[ex.dir][0], p.y + DIR[ex.dir][1]); q.push(ex.to);
             }
         }
@@ -3302,6 +3304,8 @@ class WMTClient {
             if (v !== curVnum) { g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v)); }
             svg.appendChild(g);
         }
+        const footer = document.getElementById('map-footer');
+        if (footer) footer.textContent = `${graph.name}: ${pos.size}${graph.rooms.size > pos.size ? ' of ' + graph.rooms.size : ''} rooms near you`;
     }
 
     // Click-to-walk: BFS shortest path over in-area exits, then send each step's command.
