@@ -3116,10 +3116,19 @@ class WMTClient {
         const title = document.getElementById('map-title');
         if (title) title.textContent = `${ctx.room.area} — ${ctx.room.name}`;
 
-        // Real area map when we have the graph and know where we are; otherwise the
-        // 1-hop compass fallback.
+        // Real area map when we have the graph and know where we are.
         if (this.mapAreaGraph && this.mapAreaGraph.rooms.has(this.mapCurrentVnum)) {
+            this._mapLastAreaReq = null;
             this._renderAreaMap(svg, this.mapAreaGraph, this.mapCurrentVnum, ctx); return;
+        }
+        // We have a position but no area graph to place it in — the cache was lost (hard
+        // refresh / reconnect) while the server still thinks we have it, so normal same-area
+        // moves don't resend the 774-room graph. Ask once for a forced full context (which
+        // re-includes the area graph); show the compass only until that reply lands.
+        if (this.mapCurrentVnum != null && this._mapLastAreaReq !== this.mapCurrentVnum
+            && this.connection && this.connection.connected) {
+            this._mapLastAreaReq = this.mapCurrentVnum;
+            this.connection.send('request_map', {});
         }
         const footer = document.getElementById('map-footer');
         if (footer) footer.textContent = 'Exits: ' + (ctx.exits || []).map(e => e.direction).join(', ');
