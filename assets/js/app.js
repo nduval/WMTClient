@@ -3306,10 +3306,18 @@ class WMTClient {
         for (const v of graph.rooms.keys()) adj.set(v, []);
         for (const e of graph.exits) if (adj.has(e.from) && graph.rooms.has(e.to)) adj.get(e.from).push({ to: e.to, dir: (e.dir || '').toLowerCase(), cmd: e.cmd });
 
-        // Place-mode (curVnum == null): we don't know where we are yet, so anchor layout at
-        // the lowest vnum in the area and let the player click their room to place themselves.
+        // Place-mode (curVnum == null): we don't know where we are yet. Anchor layout on a
+        // room whose NAME matches our current room (e.g. "Aegis Global - Level 2") so we draw
+        // the floor/level the player is ACTUALLY on — not some other plane of a big multi-level
+        // area (Aegis is one 525-room DB area spanning many levels). Then click to place.
         let layoutAnchor = (curVnum != null && graph.rooms.has(curVnum)) ? curVnum : null;
-        if (layoutAnchor == null) { for (const v of graph.rooms.keys()) if (layoutAnchor == null || v < layoutAnchor) layoutAnchor = v; }
+        if (layoutAnchor == null) {
+            const myName = this.lastMapContext && this.lastMapContext.room && this.lastMapContext.room.name;
+            let pool = [];
+            if (myName) for (const [v, r] of graph.rooms) if (r.name === myName) pool.push(v);
+            if (!pool.length) pool = [...graph.rooms.keys()];
+            for (const v of pool) if (layoutAnchor == null || v < layoutAnchor) layoutAnchor = v;
+        }
         const placing = (curVnum == null) || this.mapPlaceMode;
 
         // Cardinal-connected component containing the anchor room = the PLANE you're on

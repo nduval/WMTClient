@@ -5788,6 +5788,29 @@ function closeSession(session, reason) {
 }
 
 /**
+ * Normalize a direction token (full word or abbreviation) to its short form, or null.
+ */
+function mapNormDir(s) {
+  if (!s) return null;
+  s = String(s).trim().toLowerCase();
+  const long = { north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw', up: 'u', down: 'd' };
+  if (long[s]) return long[s];
+  return ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw', 'u', 'd'].includes(s) ? s : null;
+}
+
+/**
+ * Record the last movement direction we sent to the MUD. In areas with no room IDs
+ * and duplicate room names + a uniform exit grid (Aegis, Mahjongg), the DIRECTION is
+ * the only reliable disambiguator — exactly as tt++'s mapper advances along the exit
+ * you took. Called from every path that writes a final atomic command to the MUD
+ * (typed/alias and trigger/bot), so bot-driven movement tracks too. Cheap: stamps state.
+ */
+function noteOutgoingMovement(session, ec) {
+  const dir = mapNormDir(ec);
+  if (dir) { session._lastMoveDir = dir; session._lastMoveAt = Date.now(); }
+}
+
+/**
  * Full DB exit-direction signature for a room: sorted, comma-joined, lowercased.
  * Used to match a MIP-reported room (which has no vnum in some areas) against
  * candidate rooms in the map DB.
@@ -5817,6 +5840,22 @@ function reckonCurrentRoom(session) {
   const prev = session._mapReckonVnum;
 
   if (prev) {
+    // 0) Direction-primary (the reliable signal): if we just sent a movement command,
+    //    trust the exit we took — this is the ONLY way to disambiguate a uniform grid
+    //    where many neighbors share the same name + exit-signature (Aegis). Consume the
+    //    direction so a later non-move BAD (e.g. `look`) can't re-apply a stale step.
+    if (session._lastMoveDir && (Date.now() - (session._lastMoveAt || 0) < 5000)) {
+      const took = session._lastMoveDir;
+      session._lastMoveDir = null;
+      const de = mapStmts.getExitsByVnum.all(prev).find(e => mapNormDir(e.direction) === took);
+      if (de) {
+        const dest = mapStmts.getRoomByVnum.get(de.to_vnum);
+        if (dest && dest.name === name) return { vnum: dest.vnum, uncertain: false };
+        // dir known but destination name doesn't match (blocked / teleport / unmapped exit) —
+        // fall through to the signature heuristics rather than force a wrong step.
+      }
+    }
+
     // 1) Neighbor-constrained: the new room is a direct graph neighbor of where we were.
     //    (Works across an area boundary too — the id'd room we came from carries the
     //    cross-area exit into the un-id'd area, giving us the entry anchor for free.)
@@ -6872,6 +6911,7 @@ function processLine(session, line) {
           // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: ec });
         } else {
+          noteOutgoingMovement(session, ec);   // map dead-reckoning: trigger/bot-driven movement
           session.mudSocket.write(processEscapes(ec) + '\r\n');
         }
       });
@@ -8110,6 +8150,7 @@ wss.on('connection', (ws, req) => {
                     });
                     writeSessionLog(session, 'mud_event', { event: 'quit' });
                   }
+                  noteOutgoingMovement(session, ec);   // map dead-reckoning: remember a movement direction
                   session.mudSocket.write(processEscapes(ec) + '\r\n');
                 }
                 return 'ok';
