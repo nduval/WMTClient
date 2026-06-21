@@ -3070,41 +3070,44 @@ class WMTClient {
         if (!svg || this._mapZoomPanInit) return;
         this._mapZoomPanInit = true;
         const rectOf = () => svg.getBoundingClientRect();
-        const rerender = () => {
-            if (this._mapRerafScheduled) return;
-            this._mapRerafScheduled = true;
-            requestAnimationFrame(() => { this._mapRerafScheduled = false; if (this._mapRerender) this._mapRerender(); });
+        // Read the viewBox straight off the SVG (works for ANY rendered view — area map,
+        // compass, place-mode — and never depends on render-time state being set).
+        const getVB = () => {
+            const a = (svg.getAttribute('viewBox') || '0 0 400 400').split(/[\s,]+/).map(Number);
+            return { x: a[0] || 0, y: a[1] || 0, w: a[2] || 400, h: a[3] || 400 };
+        };
+        const applyVB = (vb) => {
+            svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);   // instant visual zoom/pan
+            if (this._mapVBArea) { this._mapUserVB = vb; this._mapUserVBArea = this._mapVBArea; }   // persist across re-renders
+            clearTimeout(this._mapReTO);   // refresh culling shortly after interaction stops (for big floors)
+            this._mapReTO = setTimeout(() => { if (this._mapRerender) this._mapRerender(); }, 150);
         };
 
         svg.addEventListener('wheel', (e) => {
-            if (!this._mapVB) return;
             e.preventDefault();
-            const r = rectOf(), vb = this._mapVB;
+            const r = rectOf(), vb = getVB();
             const fracX = (e.clientX - r.left) / r.width, fracY = (e.clientY - r.top) / r.height;
             const px = vb.x + fracX * vb.w, py = vb.y + fracY * vb.h;     // svg point under cursor
             const f = e.deltaY < 0 ? 0.85 : 1.18;                         // wheel up = zoom in
-            const nw = Math.max(60, Math.min(vb.w * f, 8000)), nh = nw * (vb.h / vb.w);
-            this._mapUserVB = { x: px - fracX * nw, y: py - fracY * nh, w: nw, h: nh };
-            this._mapUserVBArea = this._mapVBArea;
-            rerender();
+            const nw = Math.max(40, Math.min(vb.w * f, 12000)), nh = nw * (vb.h / vb.w || 1);
+            applyVB({ x: px - fracX * nw, y: py - fracY * nh, w: nw, h: nh });
         }, { passive: false });
 
         let dragging = false, lastX = 0, lastY = 0;
         svg.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return;
             dragging = true; this._mapDidDrag = false; lastX = e.clientX; lastY = e.clientY;
+            svg.style.cursor = 'grabbing';
         });
         window.addEventListener('mousemove', (e) => {
-            if (!dragging || !this._mapVB) return;
+            if (!dragging) return;
             const dx = e.clientX - lastX, dy = e.clientY - lastY;
             if (Math.abs(dx) + Math.abs(dy) > 3) this._mapDidDrag = true;
-            const r = rectOf(), vb = this._mapVB;
-            this._mapUserVB = { x: vb.x - dx / r.width * vb.w, y: vb.y - dy / r.height * vb.h, w: vb.w, h: vb.h };
-            this._mapUserVBArea = this._mapVBArea;
+            const r = rectOf(), vb = getVB();
             lastX = e.clientX; lastY = e.clientY;
-            rerender();
+            applyVB({ x: vb.x - dx / r.width * vb.w, y: vb.y - dy / r.height * vb.h, w: vb.w, h: vb.h });
         });
-        window.addEventListener('mouseup', () => { if (dragging) { dragging = false; setTimeout(() => { this._mapDidDrag = false; }, 0); } });
+        window.addEventListener('mouseup', () => { if (dragging) { dragging = false; svg.style.cursor = ''; setTimeout(() => { this._mapDidDrag = false; }, 0); } });
         svg.addEventListener('dblclick', (e) => { e.preventDefault(); this._mapUserVB = null; if (this._mapRerender) this._mapRerender(); });   // reset to auto-fit
     }
 
