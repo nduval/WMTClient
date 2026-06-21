@@ -3416,6 +3416,17 @@ class WMTClient {
             ln.setAttribute('x2', cx(e.to)); ln.setAttribute('y2', cy(e.to));
             ln.setAttribute('class', 'map-area-edge');
             svg.appendChild(ln);
+            // Door / flagged exit → a short perpendicular bar at the edge midpoint (tt++-style).
+            if (e.fl) {
+                const mx = (cx(e.from) + cx(e.to)) / 2, my = (cy(e.from) + cy(e.to)) / 2;
+                const dx = cx(e.to) - cx(e.from), dy = cy(e.to) - cy(e.from);
+                const len = Math.hypot(dx, dy) || 1, px = -dy / len * 3, py = dx / len * 3;
+                const door = document.createElementNS(NS, 'line');
+                door.setAttribute('x1', mx + px); door.setAttribute('y1', my + py);
+                door.setAttribute('x2', mx - px); door.setAttribute('y2', my - py);
+                door.setAttribute('class', 'map-door');
+                svg.appendChild(door);
+            }
         }
 
         // Named (non-compass, non-vertical) exits: portal/out/enter/leave/in/door/climb/etc.
@@ -3485,14 +3496,17 @@ class WMTClient {
             rect.setAttribute('width', BOX); rect.setAttribute('height', BOX); rect.setAttribute('rx', 4);
             if (v === curVnum) rect.setAttribute('filter', 'url(#map-glow)');
             g.appendChild(rect);
-            const ttl = document.createElementNS(NS, 'title'); ttl.textContent = room.name || ('#' + v); g.appendChild(ttl);
+            const ttl = document.createElementNS(NS, 'title');
+            let tip = room.name || ('#' + v);
+            if (room.desc) tip += '\n' + room.desc;        // hover shows the room description
+            ttl.textContent = tip; g.appendChild(ttl);
 
             // POI marker (colored dot) + label for this room, if it's a point of interest.
             const pois = poiByVnum.get(v);
             if (pois && pois.length) {
                 const pri = pois[0];
                 const color = POI_COLOR[pri.category] || POI_COLOR.misc;
-                ttl.textContent = (room.name || ('#' + v)) + ' — ' + pois.map(pp => `${pp.label} [${pp.category}]`).join('; ');
+                ttl.textContent += '\n★ ' + pois.map(pp => `${pp.label} [${pp.category}]`).join('; ');
                 const dot = document.createElementNS(NS, 'circle');
                 dot.setAttribute('cx', sx(p.x) + BOX - 3); dot.setAttribute('cy', sy(p.y) + 3); dot.setAttribute('r', 3);
                 dot.setAttribute('fill', color); dot.setAttribute('class', 'map-poi-dot');
@@ -3526,7 +3540,9 @@ class WMTClient {
         if (footer && !placing) footer.textContent = `${graph.name}: ${comp.size} rooms on this level` + (this.mapUncertain ? ' · approximate position' : '');
     }
 
-    // Click-to-walk: BFS shortest path over in-area exits, then send each step's command.
+    // Click-to-walk: WEIGHTED shortest path (Dijkstra) over in-area exits — respects each
+    // exit's cost so it routes AROUND high-weight "avoid" exits (weight 100/1000) — then
+    // sends each step's command.
     _mapWalkTo(target, thenCmd) {
         const graph = this.mapAreaGraph, cur = this.mapCurrentVnum;
         if (!graph || cur == null) return;
@@ -3534,9 +3550,21 @@ class WMTClient {
         if (target !== cur) {
             const adj = new Map();
             for (const v of graph.rooms.keys()) adj.set(v, []);
-            for (const e of graph.exits) if (adj.has(e.from)) adj.get(e.from).push({ to: e.to, cmd: e.cmd || e.dir });
-            const prev = new Map(), q = [cur], seen = new Set([cur]);
-            while (q.length) { const v = q.shift(); if (v === target) break; for (const ex of (adj.get(v) || [])) { if (seen.has(ex.to)) continue; seen.add(ex.to); prev.set(ex.to, { from: v, cmd: ex.cmd }); q.push(ex.to); } }
+            for (const e of graph.exits) if (adj.has(e.from)) adj.get(e.from).push({ to: e.to, cmd: e.cmd || e.dir, w: e.w || 1 });
+            const dist = new Map([[cur, 0]]), prev = new Map();
+            const pq = [{ v: cur, d: 0 }];
+            while (pq.length) {
+                let mi = 0; for (let i = 1; i < pq.length; i++) if (pq[i].d < pq[mi].d) mi = i;
+                const { v, d } = pq.splice(mi, 1)[0];
+                if (v === target) break;
+                if (d > (dist.has(v) ? dist.get(v) : Infinity)) continue;
+                for (const ex of (adj.get(v) || [])) {
+                    const nd = d + (ex.w || 1);
+                    if (nd < (dist.has(ex.to) ? dist.get(ex.to) : Infinity)) {
+                        dist.set(ex.to, nd); prev.set(ex.to, { from: v, cmd: ex.cmd }); pq.push({ v: ex.to, d: nd });
+                    }
+                }
+            }
             if (!prev.has(target)) { const f = document.getElementById('map-footer'); if (f) f.textContent = 'No known path to that room.'; return; }
             let v = target; while (v !== cur) { const p = prev.get(v); if (!p) break; steps.unshift(p.cmd); v = p.from; }
         }

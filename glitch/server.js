@@ -142,8 +142,8 @@ try {
     mapStmts.getExitsByVnum = mapDb.prepare('SELECT to_vnum, direction, command, weight FROM exits WHERE from_vnum = ?');
     mapStmts.getRoomByName = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE');
     mapStmts.getRoomByNameArea = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE AND area = ? COLLATE NOCASE');
-    mapStmts.getAreaRooms = mapDb.prepare('SELECT vnum, name, terrain FROM rooms WHERE area = ? COLLATE NOCASE');
-    mapStmts.getAreaExits = mapDb.prepare('SELECT e.from_vnum, e.to_vnum, e.direction, e.command FROM exits e JOIN rooms r ON r.vnum = e.from_vnum WHERE r.area = ? COLLATE NOCASE');
+    mapStmts.getAreaRooms = mapDb.prepare('SELECT vnum, name, terrain, description FROM rooms WHERE area = ? COLLATE NOCASE');
+    mapStmts.getAreaExits = mapDb.prepare('SELECT e.from_vnum, e.to_vnum, e.direction, e.command, e.weight, e.exit_flags FROM exits e JOIN rooms r ON r.vnum = e.from_vnum WHERE r.area = ? COLLATE NOCASE');
     mapStmts.getAreaLocations = mapDb.prepare('SELECT l.vnum, l.name, l.category, l.description FROM locations l JOIN rooms r ON r.vnum = l.vnum WHERE r.area = ? COLLATE NOCASE');
     mapStmts.searchRooms = mapDb.prepare('SELECT vnum, name, area FROM rooms WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
     mapStmts.searchLocations = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
@@ -5884,6 +5884,22 @@ function buildAreaLocations(area) {
 }
 
 /**
+ * Build the full area graph the client caches + renders: rooms (with a truncated
+ * description for hover), exits (with weight for routing + exit_flags for doors), and
+ * curated POIs. One builder so the room-change and place-mode paths stay identical.
+ */
+function buildAreaGraph(area) {
+  const areaRooms = mapStmts.getAreaRooms.all(area);
+  const areaExits = mapStmts.getAreaExits.all(area);
+  return {
+    name: area,
+    rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain, desc: r.description ? String(r.description).slice(0, 200) : '' })),
+    exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command, w: e.weight || 1, fl: e.exit_flags || 0 })),
+    locations: buildAreaLocations(area)
+  };
+}
+
+/**
  * Send map context to client when room changes.
  * Includes current room info + neighbors from map DB.
  */
@@ -5938,14 +5954,7 @@ function sendMapContext(session, vnum, force, uncertain) {
     // same-area moves just carry currentVnum and move the "you are here" marker.
     if (session._lastMapArea !== room.area) {
       session._lastMapArea = room.area;
-      const areaRooms = mapStmts.getAreaRooms.all(room.area);
-      const areaExits = mapStmts.getAreaExits.all(room.area);
-      msg.area = {
-        name: room.area,
-        rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain })),
-        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command })),
-        locations: buildAreaLocations(room.area)
-      };
+      msg.area = buildAreaGraph(room.area);
     }
 
     if (uncertain) msg.uncertain = true;
@@ -5968,15 +5977,8 @@ function sendUnmappedWithArea(session, roomName) {
     const area = candidates[0] ? candidates[0].area : '';
     const msg = { type: 'map_context', unmapped: true, room: { name: roomName || '', area } };
     if (area) {
-      const areaRooms = mapStmts.getAreaRooms.all(area);
-      const areaExits = mapStmts.getAreaExits.all(area);
       msg.placeable = true;   // client: render greyed + enable click-to-place
-      msg.area = {
-        name: area,
-        rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain })),
-        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command })),
-        locations: buildAreaLocations(area)
-      };
+      msg.area = buildAreaGraph(area);
       session._lastMapArea = area;
     }
     sendToClient(session, msg);

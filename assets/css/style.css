@@ -3538,6 +3538,12 @@ body {
     pointer-events: none;
     opacity: 0.92;
 }
+/* Door / flagged exit: perpendicular bar across the connecting edge. */
+.map-door {
+    stroke: #d0d7de;
+    stroke-width: 1.4;
+    pointer-events: none;
+}
 
 .map-footer {
     padding: 4px 10px;
