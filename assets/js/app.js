@@ -3325,7 +3325,18 @@ class WMTClient {
             let pool = [];
             if (myName) for (const [v, r] of graph.rooms) if (r.name === myName) pool.push(v);
             if (!pool.length) pool = [...graph.rooms.keys()];
-            for (const v of pool) if (layoutAnchor == null || v < layoutAnchor) layoutAnchor = v;
+            // Anchor on the room whose cardinal-connected component is LARGEST — i.e. the actual
+            // walkable floor — instead of the lowest vnum, which may be an isolated entry vestibule
+            // or vertical shaft (renders as a single room; the Aegis Hidden Level bug).
+            const compCache = new Set(); let best = null, bestSize = -1;
+            for (const c of pool) {
+                if (compCache.has(c)) continue;
+                const comp = new Set([c]); const q = [c];
+                while (q.length) { const x = q.shift(); for (const ex of (adj.get(x) || [])) { if (DIR[ex.dir] && !comp.has(ex.to)) { comp.add(ex.to); q.push(ex.to); } } }
+                for (const x of comp) compCache.add(x);
+                if (comp.size > bestSize) { bestSize = comp.size; best = c; }
+            }
+            layoutAnchor = best != null ? best : pool[0];
         }
         const placing = (curVnum == null) || this.mapPlaceMode;
 
