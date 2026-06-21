@@ -3507,6 +3507,25 @@ body {
     pointer-events: none;
     opacity: 0.85;
 }
+/* Named/odd exits (portal, out, enter, leave…): in-area dashed link + label, and
+   off-grid stub labels. Distinct from the solid compass edges so they read as special. */
+.map-area-special {
+    stroke: #c9a227;
+    stroke-width: 1.6;
+    stroke-dasharray: 4 3;
+    opacity: 0.75;
+}
+.map-special-label {
+    fill: #e8c75a;
+    font-size: 6px;
+    text-anchor: middle;
+}
+.map-stub-label {
+    fill: #9fb3d1;
+    font-size: 6px;
+    text-anchor: middle;
+}
+.map-special-label:hover, .map-stub-label:hover { fill: #fff6cf; }
 
 .map-footer {
     padding: 4px 10px;

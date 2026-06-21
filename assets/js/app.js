@@ -3418,6 +3418,56 @@ class WMTClient {
             svg.appendChild(ln);
         }
 
+        // Named (non-compass, non-vertical) exits: portal/out/enter/leave/in/door/climb/etc.
+        // In-area (both rooms on this grid) → a dashed labeled LINK (e.g. the Mahjongg portal);
+        // off-grid / off-area → a clickable labeled STUB on the room ("→ out"). u/d are drawn
+        // separately as ▲▼ glyphs. Clicking a link/stub sends that exit's command.
+        const VERT = new Set(['u', 'd', 'up', 'down']);
+        const namedDrawn = new Set();
+        const stubs = new Map();   // from-vnum -> Map(label -> command)
+        const sendExit = (cmd) => { if (cmd && this.connection) this.connection.sendCommand(cmd); };
+        for (const e of graph.exits) {
+            const d = (e.dir || '').toLowerCase();
+            if (DIR[d] || VERT.has(d)) continue;
+            if (!pos.has(e.from) || !inView(pos.get(e.from))) continue;
+            const label = (e.dir || e.cmd || '?').toLowerCase();
+            const cmd = e.cmd || e.dir;
+            if (pos.has(e.to)) {
+                const k = e.from < e.to ? 'L' + e.from + '-' + e.to : 'L' + e.to + '-' + e.from;
+                if (namedDrawn.has(k)) continue; namedDrawn.add(k);
+                if (!inView(pos.get(e.to))) continue;
+                const ln = document.createElementNS(NS, 'line');
+                ln.setAttribute('x1', cx(e.from)); ln.setAttribute('y1', cy(e.from));
+                ln.setAttribute('x2', cx(e.to)); ln.setAttribute('y2', cy(e.to));
+                ln.setAttribute('class', 'map-area-special');
+                svg.appendChild(ln);
+                const tx = document.createElementNS(NS, 'text');
+                tx.setAttribute('x', (cx(e.from) + cx(e.to)) / 2); tx.setAttribute('y', (cy(e.from) + cy(e.to)) / 2 - 2);
+                tx.setAttribute('class', 'map-special-label'); tx.textContent = label;
+                tx.style.cursor = 'pointer'; tx.addEventListener('click', (ev) => { ev.stopPropagation(); sendExit(cmd); });
+                const tt = document.createElementNS(NS, 'title'); tt.textContent = `${label} → (in-area)`; tx.appendChild(tt);
+                svg.appendChild(tx);
+            } else {
+                if (!stubs.has(e.from)) stubs.set(e.from, new Map());
+                stubs.get(e.from).set(label, cmd);
+            }
+        }
+        // off-grid stub labels (capped to keep it readable; full list in the room tooltip)
+        for (const [fromV, labels] of stubs) {
+            const p = pos.get(fromV); if (!p || !inView(p)) continue;
+            let i = 0;
+            for (const [label, cmd] of labels) {
+                if (i >= 2) break;
+                const tx = document.createElementNS(NS, 'text');
+                tx.setAttribute('x', sx(p.x) + BOX / 2); tx.setAttribute('y', sy(p.y) + BOX + 7 + i * 7);
+                tx.setAttribute('class', 'map-stub-label'); tx.textContent = '→' + label;
+                tx.style.cursor = 'pointer'; tx.addEventListener('click', (ev) => { ev.stopPropagation(); sendExit(cmd); });
+                const tt = document.createElementNS(NS, 'title'); tt.textContent = `exit: ${label}`; tx.appendChild(tt);
+                svg.appendChild(tx);
+                i++;
+            }
+        }
+
         // rooms
         for (const [v, p] of pos) {
             if (!inView(p)) continue;
