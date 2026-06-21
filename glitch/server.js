@@ -144,6 +144,7 @@ try {
     mapStmts.getRoomByNameArea = mapDb.prepare('SELECT vnum, name, area, terrain FROM rooms WHERE name = ? COLLATE NOCASE AND area = ? COLLATE NOCASE');
     mapStmts.getAreaRooms = mapDb.prepare('SELECT vnum, name, terrain FROM rooms WHERE area = ? COLLATE NOCASE');
     mapStmts.getAreaExits = mapDb.prepare('SELECT e.from_vnum, e.to_vnum, e.direction, e.command FROM exits e JOIN rooms r ON r.vnum = e.from_vnum WHERE r.area = ? COLLATE NOCASE');
+    mapStmts.getAreaLocations = mapDb.prepare('SELECT l.vnum, l.name, l.category, l.description FROM locations l JOIN rooms r ON r.vnum = l.vnum WHERE r.area = ? COLLATE NOCASE');
     mapStmts.searchRooms = mapDb.prepare('SELECT vnum, name, area FROM rooms WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
     mapStmts.searchLocations = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name LIKE ? COLLATE NOCASE LIMIT 20');
     mapStmts.getLocation = mapDb.prepare('SELECT name, category, vnum, description FROM locations WHERE name = ? COLLATE NOCASE');
@@ -5868,6 +5869,21 @@ function reckonCurrentRoom(session) {
 }
 
 /**
+ * Curated points-of-interest for an area (the `locations` table: shops, mobs, crafting,
+ * clans, eq, area entrances…). Returns [{vnum, category, label}] — label is the human
+ * description (falls back to the slug name). The client overlays these on the area map.
+ */
+function buildAreaLocations(area) {
+  try {
+    return mapStmts.getAreaLocations.all(area).map(l => ({
+      vnum: l.vnum,
+      category: (l.category || 'misc').toLowerCase(),
+      label: (l.description && l.description.trim()) || l.name
+    }));
+  } catch (e) { return []; }
+}
+
+/**
  * Send map context to client when room changes.
  * Includes current room info + neighbors from map DB.
  */
@@ -5927,7 +5943,8 @@ function sendMapContext(session, vnum, force, uncertain) {
       msg.area = {
         name: room.area,
         rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain })),
-        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command }))
+        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command })),
+        locations: buildAreaLocations(room.area)
       };
     }
 
@@ -5957,7 +5974,8 @@ function sendUnmappedWithArea(session, roomName) {
       msg.area = {
         name: area,
         rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain })),
-        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command }))
+        exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command })),
+        locations: buildAreaLocations(area)
       };
       session._lastMapArea = area;
     }

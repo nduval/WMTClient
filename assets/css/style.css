@@ -3526,6 +3526,18 @@ body {
     text-anchor: middle;
 }
 .map-special-label:hover, .map-stub-label:hover { fill: #fff6cf; }
+/* POI overlay: curated locations (shops/mobs/crafting/clans/…), color set inline per category. */
+.map-poi-dot {
+    stroke: #0d1117;
+    stroke-width: 0.6;
+    pointer-events: none;
+}
+.map-poi-label {
+    font-size: 5.5px;
+    text-anchor: middle;
+    pointer-events: none;
+    opacity: 0.92;
+}
 
 .map-footer {
     padding: 4px 10px;

@@ -3072,7 +3072,7 @@ class WMTClient {
         if (ctx.area) {
             const rooms = new Map();
             for (const r of (ctx.area.rooms || [])) rooms.set(r.vnum, r);
-            this.mapAreaGraph = { name: ctx.area.name, rooms, exits: ctx.area.exits || [] };
+            this.mapAreaGraph = { name: ctx.area.name, rooms, exits: ctx.area.exits || [], locations: ctx.area.locations || [] };
         }
         this.lastMapContext = ctx;
 
@@ -3468,6 +3468,12 @@ class WMTClient {
             }
         }
 
+        // POI overlay: curated locations (shops/mobs/crafting/clans/eq/area entrances) keyed
+        // by room vnum, color-coded by category. From the map DB `locations` table.
+        const POI_COLOR = { shop: '#3fb950', crafting: '#d29922', mob: '#f85149', clan: '#a371f7', eq: '#e3b341', item: '#39c5cf', area: '#58a6ff', misc: '#8b949e' };
+        const poiByVnum = new Map();
+        for (const l of (graph.locations || [])) { if (!poiByVnum.has(l.vnum)) poiByVnum.set(l.vnum, []); poiByVnum.get(l.vnum).push(l); }
+
         // rooms
         for (const [v, p] of pos) {
             if (!inView(p)) continue;
@@ -3480,6 +3486,23 @@ class WMTClient {
             if (v === curVnum) rect.setAttribute('filter', 'url(#map-glow)');
             g.appendChild(rect);
             const ttl = document.createElementNS(NS, 'title'); ttl.textContent = room.name || ('#' + v); g.appendChild(ttl);
+
+            // POI marker (colored dot) + label for this room, if it's a point of interest.
+            const pois = poiByVnum.get(v);
+            if (pois && pois.length) {
+                const pri = pois[0];
+                const color = POI_COLOR[pri.category] || POI_COLOR.misc;
+                ttl.textContent = (room.name || ('#' + v)) + ' — ' + pois.map(pp => `${pp.label} [${pp.category}]`).join('; ');
+                const dot = document.createElementNS(NS, 'circle');
+                dot.setAttribute('cx', sx(p.x) + BOX - 3); dot.setAttribute('cy', sy(p.y) + 3); dot.setAttribute('r', 3);
+                dot.setAttribute('fill', color); dot.setAttribute('class', 'map-poi-dot');
+                g.appendChild(dot);
+                const pl = document.createElementNS(NS, 'text');
+                pl.setAttribute('x', sx(p.x) + BOX / 2); pl.setAttribute('y', sy(p.y) - 2);
+                pl.setAttribute('class', 'map-poi-label'); pl.setAttribute('fill', color);
+                pl.textContent = this._truncate(String(pri.label).replace(/^[^:]+:\s*/, ''), 16);
+                g.appendChild(pl);
+            }
             const vd = vert.get(v);
             const addGlyph = (txt, yy, cmd, tip) => {
                 const t = document.createElementNS(NS, 'text');
