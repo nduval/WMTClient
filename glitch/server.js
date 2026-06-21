@@ -14,7 +14,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const ftp = require('basic-ftp');   // wizard FTP file editor — see project_ftp_wizard_editor
-const { normDir: mapNormDir, sigOf: mapSigOf, reckonRoom } = require('./maplib');   // map dead-reckoning (unit-tested in test_map_reckon.js)
+const { normDir: mapNormDir, sigOf: mapSigOf, reckonRoom, initCandidates: mapInitCandidates, narrowCandidates: mapNarrowCandidates } = require('./maplib');   // map dead-reckoning (unit-tested in test_map_reckon.js)
 
 let Database;
 try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
@@ -5850,6 +5850,7 @@ function reckonCurrentRoom(session) {
     getExits: (v) => mapStmts.getExitsByVnum.all(v),
     getRoomsByName: (n) => mapStmts.getRoomByName.all(n),
   };
+  const moveToken = session._lastMoveDir || session._lastMoveCmd || null;
   const res = reckonRoom(
     map,
     {
@@ -5860,12 +5861,37 @@ function reckonCurrentRoom(session) {
     },
     { name, mipSig }
   );
+
+  let out = res;
+  if (res) {
+    session._mapCandidates = null;   // placed → stop narrowing
+  } else {
+    // AUTO-ANCHOR BY WALKING: reckon couldn't pin us (uniform grid / teleport / secret-door
+    // entry). Track every room we COULD be in and eliminate impossibilities each move until
+    // the set collapses to one — then lock on, no click-to-place needed.
+    let cands = session._mapCandidates;
+    if (movedRecently && moveToken && cands && cands.length) {
+      const narrowed = mapNarrowCandidates(map, cands, moveToken, name, mipSig);
+      cands = narrowed.length ? narrowed : mapInitCandidates(map, name, mipSig);   // lost the trail → reseed
+    } else if (!cands || !cands.length) {
+      cands = mapInitCandidates(map, name, mipSig);
+    }   // else (a `look`): keep the narrowed set intact
+    if (cands.length > 400) cands = cands.slice(0, 400);   // pathological guard
+    session._mapCandidates = cands;
+    if (cands.length === 1) {
+      session._mapReckonVnum = cands[0];
+      session._mapCandidates = null;
+      out = { vnum: cands[0], uncertain: false };
+    }
+  }
+
   if (MAP_ENABLED_USERS.has(session.userId)) {
-    console.log(`[MAP-RECKON] prev=${session._mapReckonVnum} moved=${movedRecently} dir=${session._lastMoveDir || session._lastMoveCmd || '-'} name="${name}" mipSig="${mipSig}" -> ${res ? res.vnum + (res.uncertain ? '(uncertain)' : '') : 'NULL'}`);
+    const cn = (!res && session._mapCandidates) ? ` cands=${session._mapCandidates.length}` : '';
+    console.log(`[MAP-RECKON] prev=${session._mapReckonVnum} moved=${movedRecently} dir=${moveToken || '-'} name="${name}" mipSig="${mipSig}" -> ${out ? out.vnum + (out.uncertain ? '(uncertain)' : '') : 'NULL'}${cn}`);
   }
   // Consume the one-shot movement signal so a following `look` isn't treated as a move.
   if (movedRecently) { session._lastMoveDir = null; session._lastMoveCmd = null; session._lastMoveAt = 0; }
-  return res;
+  return out;
 }
 
 /**
@@ -7754,6 +7780,8 @@ wss.on('connection', (ws, req) => {
           const v = parseInt(data.vnum, 10);
           if (!Number.isFinite(v) || !mapStmts.getRoomByVnum.get(v)) break;
           session._mapReckonVnum = v;
+          session._mapCandidates = null;   // manual placement is authoritative — stop narrowing
+          session._lastMoveDir = null; session._lastMoveCmd = null; session._lastMoveAt = 0;
           sendMapContext(session, v, true);
           break;
         }

@@ -3545,6 +3545,9 @@ class WMTClient {
             } else if (v !== curVnum) {
                 g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v));         // walk there
             }
+            // Right-click ANY room → set it as your location. Always available, so a WRONG
+            // placement (confidently mis-tracked) can be corrected without entering place-mode.
+            g.addEventListener('contextmenu', (ev) => { ev.preventDefault(); ev.stopPropagation(); this._mapSetPosition(v); });
             svg.appendChild(g);
         }
         const footer = document.getElementById('map-footer');
