@@ -14,6 +14,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const ftp = require('basic-ftp');   // wizard FTP file editor — see project_ftp_wizard_editor
+const { normDir: mapNormDir, sigOf: mapSigOf, reckonRoom } = require('./maplib');   // map dead-reckoning (unit-tested in test_map_reckon.js)
 
 let Database;
 try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
@@ -5788,17 +5789,6 @@ function closeSession(session, reason) {
 }
 
 /**
- * Normalize a direction token (full word or abbreviation) to its short form, or null.
- */
-function mapNormDir(s) {
-  if (!s) return null;
-  s = String(s).trim().toLowerCase();
-  const long = { north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw', up: 'u', down: 'd' };
-  if (long[s]) return long[s];
-  return ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw', 'u', 'd'].includes(s) ? s : null;
-}
-
-/**
  * Record the last movement direction we sent to the MUD. In areas with no room IDs
  * and duplicate room names + a uniform exit grid (Aegis, Mahjongg), the DIRECTION is
  * the only reliable disambiguator — exactly as tt++'s mapper advances along the exit
@@ -5811,87 +5801,29 @@ function noteOutgoingMovement(session, ec) {
 }
 
 /**
- * Full DB exit-direction signature for a room: sorted, comma-joined, lowercased.
- * Used to match a MIP-reported room (which has no vnum in some areas) against
- * candidate rooms in the map DB.
- */
-function roomExitSig(vnum) {
-  return mapStmts.getExitsByVnum.all(vnum)
-    .map(e => (e.direction || '').toLowerCase()).sort().join(',');
-}
-
-/**
  * Dead-reckon the current room when MIP reports a room NAME + exits but NO vnum
- * (e.g. Mahjongg: 70 rooms all named "## Mahjongg ##"). The room we just entered
- * must be a direct neighbor of where we were (session._mapReckonVnum) — match it
- * by name + exit-signature. This is tt++'s model (it advances along the exit you
- * took); we derive the destination from MIP's data + the static graph instead of
- * parsing keystrokes, so it works for bot/trigger movement too.
- *
- * Returns { vnum, uncertain } or null when we genuinely can't place it. `uncertain`
- * is set when several identical candidates fit (open-grid ambiguity) — the client
- * uses it to avoid overriding a known-exact optimistic step and to dim the marker.
+ * (Mahjongg, Aegis). Thin wrapper: builds a map accessor from the SQLite statements +
+ * the session's reckon state, delegates to the pure, unit-tested reckonRoom() in
+ * maplib.js, then consumes the one-shot move signal. See tests/sandbox/test_map_reckon.js.
  */
 function reckonCurrentRoom(session) {
   if (!mapDb || !session.mipStats) return null;
   const name = session.mipStats.room || '';
-  const mipSig = (session.mipStats.exits || '').split(/,\s*/)
-    .map(s => s.trim().toLowerCase()).filter(Boolean).sort().join(',');
-  const prev = session._mapReckonVnum;
-  // CRITICAL: only treat a room update as a MOVE if a movement command was sent just
-  // before it. A `look` (or combat re-display) re-sends the same room with no preceding
-  // move — without this gate, in a uniform grid every look walks the marker to a
-  // same-fingerprint neighbor and bounces (Nathan: orange↔green on every look).
-  const movedRecently = session._lastMoveAt && (Date.now() - session._lastMoveAt < 5000);
-
-  if (prev) {
-    const prevRoom = mapStmts.getRoomByVnum.get(prev);
-
-    if (!movedRecently) {
-      // No movement → this is the SAME room being re-displayed. Stay put.
-      if (prevRoom && prevRoom.name === name) return { vnum: prev, uncertain: false };
-      // Name changed with no move we captured → teleport/forced move; fall through to global match.
-    } else {
-      // We moved. Consume the one-shot move signal so the next look isn't seen as a move.
-      const took = session._lastMoveDir;
-      session._lastMoveDir = null;
-      session._lastMoveAt = 0;
-
-      // 0) Direction-primary (the reliable signal): trust the exit we took. This is the
-      //    only way to disambiguate a uniform grid where neighbors share name + exit-sig.
-      if (took) {
-        const de = mapStmts.getExitsByVnum.all(prev).find(e => mapNormDir(e.direction) === took);
-        if (de) {
-          const dest = mapStmts.getRoomByVnum.get(de.to_vnum);
-          if (dest && dest.name === name) return { vnum: dest.vnum, uncertain: false };
-          // dir known but destination name mismatches (blocked / teleport / unmapped exit) —
-          // fall through to the signature heuristics rather than force a wrong step.
-        }
-      }
-
-      // 1) Neighbor-constrained: the new room is a direct graph neighbor of where we were.
-      //    (Works across an area boundary too — the id'd room we came from carries the
-      //    cross-area exit into the un-id'd area, giving us the entry anchor for free.)
-      const nbrVnums = [...new Set(mapStmts.getExitsByVnum.all(prev).map(e => e.to_vnum))];
-      const nbrs = nbrVnums.map(v => mapStmts.getRoomByVnum.get(v)).filter(Boolean);
-      const hit = nbrs.filter(r => r.name === name && roomExitSig(r.vnum) === mipSig);
-      if (hit.length === 1) return { vnum: hit[0].vnum, uncertain: false };
-      if (hit.length > 1) return { vnum: hit[0].vnum, uncertain: true };
-
-      // Moved but can't resolve the destination (blocked, or dest not a graph neighbor) —
-      // hold our last position rather than jump, but flag it uncertain.
-      if (prevRoom && prevRoom.name === name) return { vnum: prev, uncertain: true };
-    }
-  }
-
-  // 4) No anchor / teleport (recall, flee out of area): area-wide unique match.
-  const byName = mapStmts.getRoomByName.all(name);
-  if (byName.length === 1) return { vnum: byName[0].vnum, uncertain: false };
-  if (byName.length > 1 && mipSig) {
-    const m = byName.filter(r => roomExitSig(r.vnum) === mipSig);
-    if (m.length === 1) return { vnum: m[0].vnum, uncertain: false };
-  }
-  return null;
+  const mipSig = mapSigOf((session.mipStats.exits || '').split(/,\s*/).map(s => s.trim()).filter(Boolean));
+  const movedRecently = !!(session._lastMoveAt && (Date.now() - session._lastMoveAt < 5000));
+  const map = {
+    getRoom: (v) => mapStmts.getRoomByVnum.get(v),
+    getExits: (v) => mapStmts.getExitsByVnum.all(v),
+    getRoomsByName: (n) => mapStmts.getRoomByName.all(n),
+  };
+  const res = reckonRoom(
+    map,
+    { prevVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null, lastMoveDir: session._lastMoveDir || null, movedRecently },
+    { name, mipSig }
+  );
+  // Consume the one-shot movement signal so a following `look` isn't treated as a move.
+  if (movedRecently) { session._lastMoveDir = null; session._lastMoveAt = 0; }
+  return res;
 }
 
 /**

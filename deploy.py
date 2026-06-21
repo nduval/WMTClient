@@ -124,21 +124,29 @@ def deploy_lightsail(target='server', force_bridge=False):
         print("bridge.js deployed and service restarted.")
         return True
 
-    # Default: deploy server.js
+    # Default: deploy server.js (+ its local modules). server.js requires ./maplib,
+    # so both must land before the restart or the service crash-loops on a missing module.
     print("\n=== Deploying server.js to Lightsail (SSH) ===")
     local_file = BASE_DIR / 'glitch' / 'server.js'
     if not local_file.exists():
         print("ERROR: glitch/server.js not found")
         return False
+    server_modules = ['server.js', 'maplib.js']   # local require()d files that ship with server.js
+    for m in server_modules:
+        mp = BASE_DIR / 'glitch' / m
+        if not mp.exists():
+            print(f"ERROR: glitch/{m} not found")
+            return False
+        result = subprocess.run(
+            f'scp -i "{ssh_key}" "{mp}" ubuntu@{host}:/tmp/{m}',
+            shell=True, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"SCP failed ({m}): {result.stderr}")
+            return False
+    cp_cmds = ' && '.join(f'sudo cp /tmp/{m} /opt/wmt/{m} && sudo chown wmt:wmt /opt/wmt/{m}' for m in server_modules)
     result = subprocess.run(
-        f'scp -i "{ssh_key}" "{local_file}" ubuntu@{host}:/tmp/server.js',
-        shell=True, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print(f"SCP failed: {result.stderr}")
-        return False
-    result = subprocess.run(
-        f'{ssh_cmd} "sudo cp /tmp/server.js /opt/wmt/server.js && sudo chown wmt:wmt /opt/wmt/server.js && sudo systemctl restart wmt-server"',
+        f'{ssh_cmd} "{cp_cmds} && sudo systemctl restart wmt-server"',
         shell=True, capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -181,6 +189,20 @@ def deploy_test_server():
     )
     if result.returncode != 0:
         print(f"  SCP failed: {result.stderr.strip()}")
+        return False
+
+    # server.js requires ./maplib — push it too (and it's require()d by test_map_reckon.js).
+    _maplib_local = BASE_DIR / 'glitch' / 'maplib.js'
+    if _maplib_local.exists():
+        r = subprocess.run(
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_maplib_local}" ubuntu@{host}:/tmp/maplib.js',
+            shell=True, capture_output=True, text=True
+        )
+        if r.returncode != 0:
+            print(f"  SCP failed (maplib.js): {r.stderr.strip()}")
+            return False
+    else:
+        print("  ERROR: glitch/maplib.js not found")
         return False
 
     # Push any repo-tracked test scripts so sandbox runs the version we
@@ -262,6 +284,8 @@ def deploy_test_server():
     patch_lines = [
         'sudo cp /tmp/server.js /opt/wmt/server.js',
         'sudo chown wmt:wmt /opt/wmt/server.js',
+        'sudo cp /tmp/maplib.js /opt/wmt/maplib.js',
+        'sudo chown wmt:wmt /opt/wmt/maplib.js',
         'sudo systemctl restart wmt-server',
     ]
     patch_content = '#!/bin/bash\nset -e\n' + '\n'.join(patch_lines) + '\n'
@@ -371,6 +395,11 @@ def run_test_suites():
         # a fresh login otherwise fires them into the prompt → "Invalid character
         # in position N" → broken login). elminster 2026-06-14. Negative-controlled.
         ('MipNamePromptGuard', 'test_mip_nameprompt_guard.js'),
+        # Map dead-reckoning (glitch/maplib.js): proves ID-less uniform-grid areas
+        # (Mahjongg/Aegis) track by the direction moved, that `look` HOLDS position
+        # (no orange↔green bounce), + blocked/cold-start/ambiguous/boundary cases.
+        # Synthetic grids always run; also walks the real 3k_map.db if present.
+        ('MapReckon', 'test_map_reckon.js'),
     ]
 
     total_passed = 0
