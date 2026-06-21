@@ -3319,31 +3319,48 @@ class WMTClient {
         // room whose NAME matches our current room (e.g. "Aegis Global - Level 2") so we draw
         // the floor/level the player is ACTUALLY on — not some other plane of a big multi-level
         // area (Aegis is one 525-room DB area spanning many levels). Then click to place.
+        // A "floor" must NOT cross a room-NAME boundary when the name is shared (a level):
+        // Aegis links levels via CARDINAL directions (an `e`/`w` whose command is `scan eye`/
+        // `exit`), which would otherwise fuse Hidden Level + Level 7 + … into one jumbled plane.
+        // For normal areas every room is uniquely named, so this restriction is a no-op there.
+        const nameCounts = new Map();
+        for (const r of graph.rooms.values()) nameCounts.set(r.name, (nameCounts.get(r.name) || 0) + 1);
+        const compOf = (start) => {
+            const nm = (graph.rooms.get(start) || {}).name;
+            const shared = nm && nameCounts.get(nm) > 1;
+            const set = new Set([start]); const q = [start];
+            while (q.length) {
+                const v = q.shift();
+                for (const ex of (adj.get(v) || [])) {
+                    if (!DIR[ex.dir] || set.has(ex.to)) continue;
+                    if (shared && (graph.rooms.get(ex.to) || {}).name !== nm) continue;   // don't cross level boundary
+                    set.add(ex.to); q.push(ex.to);
+                }
+            }
+            return set;
+        };
+
         let layoutAnchor = (curVnum != null && graph.rooms.has(curVnum)) ? curVnum : null;
         if (layoutAnchor == null) {
             const myName = this.lastMapContext && this.lastMapContext.room && this.lastMapContext.room.name;
             let pool = [];
             if (myName) for (const [v, r] of graph.rooms) if (r.name === myName) pool.push(v);
             if (!pool.length) pool = [...graph.rooms.keys()];
-            // Anchor on the room whose cardinal-connected component is LARGEST — i.e. the actual
-            // walkable floor — instead of the lowest vnum, which may be an isolated entry vestibule
-            // or vertical shaft (renders as a single room; the Aegis Hidden Level bug).
-            const compCache = new Set(); let best = null, bestSize = -1;
+            // Anchor on the room whose (same-floor) component is LARGEST — the actual walkable
+            // floor — not the lowest vnum (which may be an isolated vestibule / vertical shaft).
+            const seen = new Set(); let best = null, bestSize = -1;
             for (const c of pool) {
-                if (compCache.has(c)) continue;
-                const comp = new Set([c]); const q = [c];
-                while (q.length) { const x = q.shift(); for (const ex of (adj.get(x) || [])) { if (DIR[ex.dir] && !comp.has(ex.to)) { comp.add(ex.to); q.push(ex.to); } } }
-                for (const x of comp) compCache.add(x);
-                if (comp.size > bestSize) { bestSize = comp.size; best = c; }
+                if (seen.has(c)) continue;
+                const cc = compOf(c);
+                for (const x of cc) seen.add(x);
+                if (cc.size > bestSize) { bestSize = cc.size; best = c; }
             }
             layoutAnchor = best != null ? best : pool[0];
         }
         const placing = (curVnum == null) || this.mapPlaceMode;
 
-        // Cardinal-connected component containing the anchor room = the PLANE you're on
-        // (sewers/towers are separate components reached via u/d, and aren't drawn here).
-        const comp = new Set([layoutAnchor]);
-        { const cq = [layoutAnchor]; while (cq.length) { const v = cq.shift(); for (const ex of (adj.get(v) || [])) { if (DIR[ex.dir] && !comp.has(ex.to)) { comp.add(ex.to); cq.push(ex.to); } } } }
+        // The plane you're on = the same-floor cardinal component of the anchor.
+        const comp = compOf(layoutAnchor);
 
         // STABLE layout: anchor at the LOWEST vnum in the component (deterministic), so moving
         // around the plane keeps every room fixed — only the highlight + viewport move (no reshuffle).
