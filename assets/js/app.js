@@ -3537,6 +3537,18 @@ class WMTClient {
         const namedDrawn = new Set();
         const stubs = new Map();   // from-vnum -> Map(label -> command)
         const sendExit = (cmd) => { if (cmd && this.connection) this.connection.sendCommand(cmd); };
+        // Count each named exit across the floor: a near-universal one (Section Z "pause game"
+        // is on every room) is an area-wide escape, not a meaningful map link — hide it as clutter.
+        const namedRooms = new Map();
+        for (const e of graph.exits) {
+            const d = (e.dir || '').toLowerCase();
+            if (DIR[d] || VERT.has(d) || !comp.has(e.from)) continue;
+            const lb = (e.dir || e.cmd || '?').toLowerCase();
+            if (!namedRooms.has(lb)) namedRooms.set(lb, new Set());
+            namedRooms.get(lb).add(e.from);
+        }
+        const universalCut = Math.max(4, comp.size * 0.5);
+        const isUniversalExit = (lb) => (namedRooms.get(lb) ? namedRooms.get(lb).size : 0) >= universalCut;
         for (const e of graph.exits) {
             const d = (e.dir || '').toLowerCase();
             if (DIR[d] || VERT.has(d)) continue;
@@ -3545,6 +3557,7 @@ class WMTClient {
             if (/^home\b/.test(d) || /^home\b/.test((e.cmd || '').toLowerCase()) || (e.cmd || '').toLowerCase() === '.gohome') continue;
             if (!pos.has(e.from) || !inView(pos.get(e.from))) continue;
             const label = (e.dir || e.cmd || '?').toLowerCase();
+            if (isUniversalExit(label)) continue;   // area-wide escape (e.g. "pause game") — clutter
             const cmd = e.cmd || e.dir;
             if (pos.has(e.to)) {
                 const k = e.from < e.to ? 'L' + e.from + '-' + e.to : 'L' + e.to + '-' + e.from;
