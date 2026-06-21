@@ -3062,6 +3062,52 @@ class WMTClient {
         });
     }
 
+    // Mouse zoom (wheel) + pan (drag) for the map SVG. Operates on the effective viewBox
+    // (this._mapVB) set during render; stores the result as a per-area user override
+    // (this._mapUserVB) so it survives re-renders, and resets on area change or double-click.
+    initMapZoomPan() {
+        const svg = document.getElementById('map-svg');
+        if (!svg || this._mapZoomPanInit) return;
+        this._mapZoomPanInit = true;
+        const rectOf = () => svg.getBoundingClientRect();
+        const rerender = () => {
+            if (this._mapRerafScheduled) return;
+            this._mapRerafScheduled = true;
+            requestAnimationFrame(() => { this._mapRerafScheduled = false; if (this._mapRerender) this._mapRerender(); });
+        };
+
+        svg.addEventListener('wheel', (e) => {
+            if (!this._mapVB) return;
+            e.preventDefault();
+            const r = rectOf(), vb = this._mapVB;
+            const fracX = (e.clientX - r.left) / r.width, fracY = (e.clientY - r.top) / r.height;
+            const px = vb.x + fracX * vb.w, py = vb.y + fracY * vb.h;     // svg point under cursor
+            const f = e.deltaY < 0 ? 0.85 : 1.18;                         // wheel up = zoom in
+            const nw = Math.max(60, Math.min(vb.w * f, 8000)), nh = nw * (vb.h / vb.w);
+            this._mapUserVB = { x: px - fracX * nw, y: py - fracY * nh, w: nw, h: nh };
+            this._mapUserVBArea = this._mapVBArea;
+            rerender();
+        }, { passive: false });
+
+        let dragging = false, lastX = 0, lastY = 0;
+        svg.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            dragging = true; this._mapDidDrag = false; lastX = e.clientX; lastY = e.clientY;
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging || !this._mapVB) return;
+            const dx = e.clientX - lastX, dy = e.clientY - lastY;
+            if (Math.abs(dx) + Math.abs(dy) > 3) this._mapDidDrag = true;
+            const r = rectOf(), vb = this._mapVB;
+            this._mapUserVB = { x: vb.x - dx / r.width * vb.w, y: vb.y - dy / r.height * vb.h, w: vb.w, h: vb.h };
+            this._mapUserVBArea = this._mapVBArea;
+            lastX = e.clientX; lastY = e.clientY;
+            rerender();
+        });
+        window.addEventListener('mouseup', () => { if (dragging) { dragging = false; setTimeout(() => { this._mapDidDrag = false; }, 0); } });
+        svg.addEventListener('dblclick', (e) => { e.preventDefault(); this._mapUserVB = null; if (this._mapRerender) this._mapRerender(); });   // reset to auto-fit
+    }
+
     renderMap(ctx) {
         if (!this.mapWindowOpen) return;
         const svg = document.getElementById('map-svg');
@@ -3073,6 +3119,7 @@ class WMTClient {
             const rooms = new Map();
             for (const r of (ctx.area.rooms || [])) rooms.set(r.vnum, r);
             this.mapAreaGraph = { name: ctx.area.name, rooms, exits: ctx.area.exits || [], locations: ctx.area.locations || [] };
+            if (this._mapUserVBArea && this._mapUserVBArea !== ctx.area.name) this._mapUserVB = null;   // reset zoom/pan on a new area
         }
         this.lastMapContext = ctx;
 
@@ -3424,8 +3471,15 @@ class WMTClient {
             vbX = Math.max(minX, Math.min(pcx - vbW / 2, maxX - vbW));
             vbY = Math.max(minY, Math.min(pcy - vbH / 2, maxY - vbH));
         }
-        svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`);
-        const inView = (p) => (sx(p.x) + BOX) >= vbX - GAP && sx(p.x) <= vbX + vbW + GAP && (sy(p.y) + BOX) >= vbY - GAP && sy(p.y) <= vbY + vbH + GAP;
+        // User zoom/pan override (mouse wheel / drag) takes over the viewport for this area
+        // until reset (double-click) or area change; otherwise use the auto-fit/follow box.
+        let vb = { x: vbX, y: vbY, w: vbW, h: vbH };
+        if (this._mapUserVB && this._mapUserVBArea === graph.name) vb = this._mapUserVB;
+        this._mapVB = vb;                                   // current effective box (handlers mutate via this)
+        this._mapVBArea = graph.name;
+        this._mapRerender = () => this._renderAreaMap(svg, graph, curVnum, ctx);   // wheel/drag re-render hook
+        svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+        const inView = (p) => (sx(p.x) + BOX) >= vb.x - GAP && sx(p.x) <= vb.x + vb.w + GAP && (sy(p.y) + BOX) >= vb.y - GAP && sy(p.y) <= vb.y + vb.h + GAP;
 
         const defs = document.createElementNS(NS, 'defs');
         defs.innerHTML = '<filter id="map-glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
@@ -3468,6 +3522,9 @@ class WMTClient {
         for (const e of graph.exits) {
             const d = (e.dir || '').toLowerCase();
             if (DIR[d] || VERT.has(d)) continue;
+            // Hide per-player exits that aren't real for everyone: personal/shared homes
+            // ("home", "home 134", ".goHome") clutter Pinnacle but aren't universal exits.
+            if (/^home\b/.test(d) || /^home\b/.test((e.cmd || '').toLowerCase()) || (e.cmd || '').toLowerCase() === '.gohome') continue;
             if (!pos.has(e.from) || !inView(pos.get(e.from))) continue;
             const label = (e.dir || e.cmd || '?').toLowerCase();
             const cmd = e.cmd || e.dir;
@@ -3558,9 +3615,9 @@ class WMTClient {
             if (vd && vd.up) addGlyph('▲', sy(p.y) + 7, vd.upCmd, 'Go up from here');
             if (vd && vd.down) addGlyph('▼', sy(p.y) + BOX - 2, vd.downCmd, 'Go down from here (e.g. to the sewers)');
             if (placing) {
-                g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapSetPosition(v));   // "I am here"
+                g.style.cursor = 'pointer'; g.addEventListener('click', () => { if (!this._mapDidDrag) this._mapSetPosition(v); });   // "I am here"
             } else if (v !== curVnum) {
-                g.style.cursor = 'pointer'; g.addEventListener('click', () => this._mapWalkTo(v));         // walk there
+                g.style.cursor = 'pointer'; g.addEventListener('click', () => { if (!this._mapDidDrag) this._mapWalkTo(v); });         // walk there
             }
             // Right-click ANY room → set it as your location. Always available, so a WRONG
             // placement (confidently mis-tracked) can be corrected without entering place-mode.
@@ -4181,6 +4238,7 @@ class WMTClient {
         document.getElementById('map-toggle-btn')?.addEventListener('click', () => this.toggleMapWindow());
         document.getElementById('map-close-btn')?.addEventListener('click', () => this.toggleMapWindow());
         this.initMapDragging();
+        this.initMapZoomPan();
 
         // Overflow menu: single entry point for settings, dock position, float, popout
         document.getElementById('chat-overflow-btn')?.addEventListener('click', (e) => {
