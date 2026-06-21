@@ -3369,21 +3369,36 @@ class WMTClient {
         // room whose NAME matches our current room (e.g. "Aegis Global - Level 2") so we draw
         // the floor/level the player is ACTUALLY on — not some other plane of a big multi-level
         // area (Aegis is one 525-room DB area spanning many levels). Then click to place.
-        // A "floor" must NOT cross a room-NAME boundary when the name is shared (a level):
-        // Aegis links levels via CARDINAL directions (an `e`/`w` whose command is `scan eye`/
-        // `exit`), which would otherwise fuse Hidden Level + Level 7 + … into one jumbled plane.
-        // For normal areas every room is uniquely named, so this restriction is a no-op there.
+        // A "floor" is the cardinal component, but we must NOT cross a LEVEL boundary. A level
+        // boundary is a THIN bridge (≤3 cardinal exits) between two LARGE (≥30-room) same-name
+        // blocks — e.g. Aegis "Hidden Level"↔"Level 5" is a single secret-door exit. We DO cross
+        // dense links (Pinnacle's musty/stale/damp mine shafts share 30–78 exits = one space) and
+        // any boundary involving a small block (Pinnacle streets, gates). So Pinnacle stays whole
+        // and Aegis splits per level. Thresholds from real data.
+        const LEVEL_MIN = 30, BRIDGE_MAX = 3;
         const nameCounts = new Map();
         for (const r of graph.rooms.values()) nameCounts.set(r.name, (nameCounts.get(r.name) || 0) + 1);
+        const interBlock = new Map();   // "nameAnameB" (sorted) -> # cardinal exits between the blocks
+        for (const e of graph.exits) {
+            if (!DIR[(e.dir || '').toLowerCase()]) continue;
+            const a = (graph.rooms.get(e.from) || {}).name, b = (graph.rooms.get(e.to) || {}).name;
+            if (a == null || b == null || a === b) continue;
+            const k = a < b ? a + '' + b : b + '' + a;
+            interBlock.set(k, (interBlock.get(k) || 0) + 1);
+        }
+        const isLevelBoundary = (an, bn) => {
+            if (an === bn) return false;
+            if ((nameCounts.get(an) || 0) < LEVEL_MIN || (nameCounts.get(bn) || 0) < LEVEL_MIN) return false;
+            const k = an < bn ? an + '' + bn : bn + '' + an;
+            return (interBlock.get(k) || 0) <= BRIDGE_MAX;
+        };
         const compOf = (start) => {
-            const nm = (graph.rooms.get(start) || {}).name;
-            const shared = nm && nameCounts.get(nm) > 1;
             const set = new Set([start]); const q = [start];
             while (q.length) {
-                const v = q.shift();
+                const v = q.shift(); const vn = (graph.rooms.get(v) || {}).name;
                 for (const ex of (adj.get(v) || [])) {
                     if (!DIR[ex.dir] || set.has(ex.to)) continue;
-                    if (shared && (graph.rooms.get(ex.to) || {}).name !== nm) continue;   // don't cross level boundary
+                    if (isLevelBoundary(vn, (graph.rooms.get(ex.to) || {}).name)) continue;   // thin level bridge — don't cross
                     set.add(ex.to); q.push(ex.to);
                 }
             }
