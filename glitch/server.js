@@ -5796,10 +5796,27 @@ function closeSession(session, reason) {
  * (typed/alias and trigger/bot), so bot-driven movement tracks too. Cheap: stamps state.
  */
 function noteOutgoingMovement(session, ec) {
-  const dir = mapNormDir(ec);
+  if (!ec) return;
+  const raw = String(ec).trim().toLowerCase();
+  if (!raw) return;
+  const dir = mapNormDir(raw);
+  let moveCmd = null;
   if (dir) {
-    session._lastMoveDir = dir; session._lastMoveAt = Date.now();
-    if (MAP_ENABLED_USERS.has(session.userId)) console.log(`[MAP-MOVE] captured dir=${dir} (from "${String(ec).slice(0, 40)}")`);
+    moveCmd = raw;
+  } else if (mapDb && session._mapReckonVnum != null) {
+    // Non-compass command: is it a NAMED exit (command or direction) of our current room?
+    // (portal, enter, climb, grasp…). Only then treat it as a move — so combat commands
+    // (kill, cast) are NOT mistaken for movement.
+    try {
+      const exits = mapStmts.getExitsByVnum.all(session._mapReckonVnum);
+      if (exits.some(e => (e.command || '').toLowerCase() === raw || (e.direction || '').toLowerCase() === raw)) moveCmd = raw;
+    } catch (e) { /* non-fatal */ }
+  }
+  if (moveCmd) {
+    session._lastMoveDir = dir;        // compass short form, or null for a named exit
+    session._lastMoveCmd = moveCmd;    // raw command (identifies named exits like "portal")
+    session._lastMoveAt = Date.now();
+    if (MAP_ENABLED_USERS.has(session.userId)) console.log(`[MAP-MOVE] captured ${dir || moveCmd} (from "${String(ec).slice(0, 40)}")`);
   }
 }
 
@@ -5834,14 +5851,19 @@ function reckonCurrentRoom(session) {
   };
   const res = reckonRoom(
     map,
-    { prevVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null, lastMoveDir: session._lastMoveDir || null, movedRecently },
+    {
+      prevVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null,
+      lastMoveDir: session._lastMoveDir || null,
+      lastMoveCmd: session._lastMoveCmd || null,
+      movedRecently,
+    },
     { name, mipSig }
   );
   if (MAP_ENABLED_USERS.has(session.userId)) {
-    console.log(`[MAP-RECKON] prev=${session._mapReckonVnum} moved=${movedRecently} dir=${session._lastMoveDir || '-'} name="${name}" mipSig="${mipSig}" -> ${res ? res.vnum + (res.uncertain ? '(uncertain)' : '') : 'NULL'}`);
+    console.log(`[MAP-RECKON] prev=${session._mapReckonVnum} moved=${movedRecently} dir=${session._lastMoveDir || session._lastMoveCmd || '-'} name="${name}" mipSig="${mipSig}" -> ${res ? res.vnum + (res.uncertain ? '(uncertain)' : '') : 'NULL'}`);
   }
   // Consume the one-shot movement signal so a following `look` isn't treated as a move.
-  if (movedRecently) { session._lastMoveDir = null; session._lastMoveAt = 0; }
+  if (movedRecently) { session._lastMoveDir = null; session._lastMoveCmd = null; session._lastMoveAt = 0; }
   return res;
 }
 

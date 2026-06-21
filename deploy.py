@@ -405,6 +405,7 @@ def run_test_suites():
     total_passed = 0
     total_failed = 0
     details = []
+    failure_output = {}   # label -> captured stdout+stderr, so a failure is never lost
 
     for label, script in suites:
         try:
@@ -417,6 +418,7 @@ def run_test_suites():
             )
         except subprocess.TimeoutExpired:
             details.append((label, script, 0, 0, 'TIMEOUT'))
+            failure_output[label] = '(timed out after 60s — no output captured)'
             total_failed += 1
             continue
 
@@ -440,12 +442,22 @@ def run_test_suites():
         total_failed += failed
         status = 'PASS' if failed == 0 else 'FAIL'
         details.append((label, script, passed, failed, status))
+        if failed > 0:
+            failure_output[label] = output   # keep the actual assertion text for diagnosis
 
     # Print summary table
     for label, script, passed, failed, status in details:
         icon = 'OK' if status == 'PASS' else ('FAIL' if status == 'FAIL' else '??')
         pad_label = f"{label} ({script}):".ljust(45)
         print(f"  {pad_label} {passed:>2} passed, {failed} failed  {icon}")
+
+    # Dump the full output of any failing suite so a failure is fully diagnosable from a
+    # single run — no need to re-run hoping to re-capture it. (A failure must never be lost.)
+    for label, script, passed, failed, status in details:
+        if status != 'PASS' and label in failure_output:
+            print(f"\n----- FAILURE OUTPUT: {label} ({script}) -----")
+            print(failure_output[label].strip()[-4000:])
+            print(f"----- end {label} -----")
 
     total = total_passed + total_failed
     print(f"  {'':45} {'---':>10}")
