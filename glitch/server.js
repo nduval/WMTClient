@@ -5797,7 +5797,10 @@ function closeSession(session, reason) {
  */
 function noteOutgoingMovement(session, ec) {
   const dir = mapNormDir(ec);
-  if (dir) { session._lastMoveDir = dir; session._lastMoveAt = Date.now(); }
+  if (dir) {
+    session._lastMoveDir = dir; session._lastMoveAt = Date.now();
+    if (MAP_ENABLED_USERS.has(session.userId)) console.log(`[MAP-MOVE] captured dir=${dir} (from "${String(ec).slice(0, 40)}")`);
+  }
 }
 
 /**
@@ -5821,6 +5824,9 @@ function reckonCurrentRoom(session) {
     { prevVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null, lastMoveDir: session._lastMoveDir || null, movedRecently },
     { name, mipSig }
   );
+  if (MAP_ENABLED_USERS.has(session.userId)) {
+    console.log(`[MAP-RECKON] prev=${session._mapReckonVnum} moved=${movedRecently} dir=${session._lastMoveDir || '-'} name="${name}" mipSig="${mipSig}" -> ${res ? res.vnum + (res.uncertain ? '(uncertain)' : '') : 'NULL'}`);
+  }
   // Consume the one-shot movement signal so a following `look` isn't treated as a move.
   if (movedRecently) { session._lastMoveDir = null; session._lastMoveAt = 0; }
   return res;
