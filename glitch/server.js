@@ -2848,7 +2848,7 @@ async function restorePersistentSessions() {
             } else if (ec.startsWith('#')) {
               sendToClient(session, { type: 'client_command', command: ec });
             } else if (session.mudSocket && !session.mudSocket.destroyed) {
-              session.mudSocket.write(processEscapes(ec) + '\r\n');
+              mudSendExpanded(session, ec);
             }
           });
         }, fireDelay);
@@ -5048,7 +5048,7 @@ function startTicker(session, ticker) {
           // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: cmd });
         } else {
-          session.mudSocket.write(processEscapes(cmd) + '\r\n');
+          mudSendExpanded(session, cmd);
         }
       });
     }
@@ -5801,6 +5801,19 @@ function noteOutgoingMovement(session, ec) {
     session._lastMoveDir = dir; session._lastMoveAt = Date.now();
     if (MAP_ENABLED_USERS.has(session.userId)) console.log(`[MAP-MOVE] captured dir=${dir} (from "${String(ec).slice(0, 40)}")`);
   }
+}
+
+/**
+ * Write a fully-expanded PLAIN command to the MUD, capturing any movement direction for
+ * map dead-reckoning first. EVERY command-dispatch path (typed/alias, trigger, #if branch,
+ * #delay timer, #N repeat) must funnel through here — otherwise bot movement gated behind
+ * #if (`#if {clear} {secwalk}`) writes the direction without it being captured, and the
+ * map can't track the move (it holds at the last room). Mirrors the prior inline write.
+ */
+function mudSendExpanded(session, ec) {
+  if (!session.mudSocket || session.mudSocket.destroyed) return;
+  noteOutgoingMovement(session, ec);
+  session.mudSocket.write(processEscapes(ec) + '\r\n');
 }
 
 /**
@@ -6856,8 +6869,7 @@ function processLine(session, line) {
           // #var/#math already processed during expansion for sequential side effects
           sendToClient(session, { type: 'client_command', command: ec });
         } else {
-          noteOutgoingMovement(session, ec);   // map dead-reckoning: trigger/bot-driven movement
-          session.mudSocket.write(processEscapes(ec) + '\r\n');
+          mudSendExpanded(session, ec);   // map dead-reckoning: trigger/bot-driven movement
         }
       });
     }
@@ -8095,8 +8107,7 @@ wss.on('connection', (ws, req) => {
                     });
                     writeSessionLog(session, 'mud_event', { event: 'quit' });
                   }
-                  noteOutgoingMovement(session, ec);   // map dead-reckoning: remember a movement direction
-                  session.mudSocket.write(processEscapes(ec) + '\r\n');
+                  mudSendExpanded(session, ec);   // map dead-reckoning: remember a movement direction
                 }
                 return 'ok';
               };
@@ -8455,7 +8466,7 @@ wss.on('connection', (ws, req) => {
                     // #var/#math already processed during expansion for sequential side effects
                     sendToClient(session, { type: 'client_command', command: ec });
                   } else {
-                    session.mudSocket.write(processEscapes(ec) + '\r\n');
+                    mudSendExpanded(session, ec);
                   }
                 });
               }
@@ -8910,7 +8921,7 @@ function executeRepeat(count, body, session) {
   const subCmds = parseCommands(cmd);
   for (let i = 0; i < count; i++) {
     subCmds.forEach(sc => {
-      session.mudSocket.write(processEscapes(sc) + '\r\n');
+      mudSendExpanded(session, sc);
     });
   }
 }
@@ -10534,7 +10545,7 @@ function serverProcessInlineCommand(cmd, session) {
             } else if (ec.startsWith('#')) {
               sendToClient(session, { type: 'client_command', command: ec });
             } else if (session.mudSocket && !session.mudSocket.destroyed) {
-              session.mudSocket.write(processEscapes(ec) + '\r\n');
+              mudSendExpanded(session, ec);
             }
           });
           break;
@@ -10603,7 +10614,7 @@ function serverProcessInlineCommand(cmd, session) {
             } else if (ec.startsWith('#')) {
               sendToClient(session, { type: 'client_command', command: ec });
             } else if (session.mudSocket && !session.mudSocket.destroyed) {
-              session.mudSocket.write(processEscapes(ec) + '\r\n');
+              mudSendExpanded(session, ec);
             }
           });
         }
@@ -10678,7 +10689,7 @@ function serverProcessInlineCommand(cmd, session) {
           } else if (ec.startsWith('#')) {
             sendToClient(session, { type: 'client_command', command: ec });
           } else if (session.mudSocket && !session.mudSocket.destroyed) {
-            session.mudSocket.write(processEscapes(ec) + '\r\n');
+            mudSendExpanded(session, ec);
           }
         });
       }, delayMs);
