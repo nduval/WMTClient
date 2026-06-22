@@ -5801,23 +5801,22 @@ function noteOutgoingMovement(session, ec) {
   const raw = String(ec).trim().toLowerCase();
   if (!raw) return;
   const dir = mapNormDir(raw);
-  let moveCmd = null;
+  let token = null;
   if (dir) {
-    moveCmd = raw;
-  } else if (mapDb && session._mapReckonVnum != null) {
-    // Non-compass command: is it a NAMED exit (command or direction) of our current room?
-    // (portal, enter, climb, grasp…). Only then treat it as a move — so combat commands
-    // (kill, cast) are NOT mistaken for movement.
-    try {
-      const exits = mapStmts.getExitsByVnum.all(session._mapReckonVnum);
-      if (exits.some(e => (e.command || '').toLowerCase() === raw || (e.direction || '').toLowerCase() === raw)) moveCmd = raw;
-    } catch (e) { /* non-fatal */ }
-  }
-  if (moveCmd) {
-    session._lastMoveDir = dir;        // compass short form, or null for a named exit
-    session._lastMoveCmd = moveCmd;    // raw command (identifies named exits like "portal")
-    session._lastMoveAt = Date.now();
-    if (MAP_ENABLED_USERS.has(session.userId)) console.log(`[MAP-MOVE] captured ${dir || moveCmd} (from "${String(ec).slice(0, 40)}")`);
+    token = dir;                         // compass: store the normalized direction
+  } else if (session._areaExitCmds ? session._areaExitCmds.has(raw) : !raw.includes(' ')) {
+    token = raw;                         // a NAMED exit (bridge/enter/path/scan eye…). Once we know the
+  }                                      // area's exit set, filter to it; before that, take single words
+  //                                        (filters multi-word combat like "kill zombie"/"cast heal").
+  // (anything else — kill/cast/say/etc. — is NOT a movement and is ignored.)
+  if (token) {
+    // QUEUE every move in order. The reckoner pairs each MIP room update with the OLDEST move
+    // — so a fast alias burst (moves outrunning room updates) is followed step-by-step instead
+    // of losing all but the last direction. Cap + age-drop keep it bounded.
+    if (!session._moveQueue) session._moveQueue = [];
+    session._moveQueue.push({ token, at: Date.now() });
+    if (session._moveQueue.length > 64) session._moveQueue = session._moveQueue.slice(-64);
+    if (MAP_ENABLED_USERS.has(session.userId)) console.log(`[MAP-MOVE] queued ${token} (q=${session._moveQueue.length})`);
   }
 }
 
@@ -5850,24 +5849,20 @@ function reckonCurrentRoom(session) {
     getRoomsByName: (n) => mapStmts.getRoomByName.all(n),
   };
   // Thin adapter over the pure reckon brain (maplib.reckonNext) — see test_map_reckon.js for the
-  // full Aegis-walker simulation (fast moves / blocked exits / teleports).
+  // full Aegis-walker simulation (fast bursts / blocked exits / teleports).
   const st = reckonNext(map, {
     reckonVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null,
     candidates: session._mapCandidates || null,
-    lastMoveDir: session._lastMoveDir || null,
-    lastMoveCmd: session._lastMoveCmd || null,
-    lastMoveAt: session._lastMoveAt || 0,
+    moveQueue: session._moveQueue || [],
   }, { name, mipSig, roomVnum: session.mipStats.roomVnum || null, now: Date.now() });
 
   session._mapReckonVnum = st.reckonVnum != null ? st.reckonVnum : session._mapReckonVnum;
   session._mapCandidates = st.candidates;
-  session._lastMoveDir = st.lastMoveDir;
-  session._lastMoveCmd = st.lastMoveCmd;
-  session._lastMoveAt = st.lastMoveAt;
+  session._moveQueue = st.moveQueue || [];
 
   if (MAP_ENABLED_USERS.has(session.userId)) {
     const cn = (st.vnum == null && st.candidates) ? ` cands=${st.candidates.length}` : '';
-    console.log(`[MAP-RECKON] reckon=${session._mapReckonVnum} name="${name}" mipSig="${mipSig}" -> ${st.vnum != null ? st.vnum : 'NULL'}${cn}`);
+    console.log(`[MAP-RECKON] reckon=${session._mapReckonVnum} name="${name}" mipSig="${mipSig}" q=${session._moveQueue.length} -> ${st.vnum != null ? st.vnum : 'NULL'}${cn}`);
   }
   return st.vnum != null ? { vnum: st.vnum, uncertain: st.uncertain } : null;
 }
@@ -5892,6 +5887,17 @@ function buildAreaLocations(area) {
  * description for hover), exits (with weight for routing + exit_flags for doors), and
  * curated POIs. One builder so the room-change and place-mode paths stay identical.
  */
+// The set of named commands/directions that are real EXITS in an area — used to decide which
+// outgoing commands to queue as movement (so "bridge"/"enter"/"scan eye" count, "kill zombie" doesn't).
+function areaExitCmdSet(areaGraph) {
+  const s = new Set();
+  for (const e of (areaGraph && areaGraph.exits) || []) {
+    if (e.cmd) s.add(String(e.cmd).toLowerCase());
+    if (e.dir) s.add(String(e.dir).toLowerCase());
+  }
+  return s;
+}
+
 function buildAreaGraph(area) {
   const areaRooms = mapStmts.getAreaRooms.all(area);
   const areaExits = mapStmts.getAreaExits.all(area);
@@ -5959,6 +5965,7 @@ function sendMapContext(session, vnum, force, uncertain) {
     if (session._lastMapArea !== room.area) {
       session._lastMapArea = room.area;
       msg.area = buildAreaGraph(room.area);
+      session._areaExitCmds = areaExitCmdSet(msg.area);   // which named commands count as moves here
     }
 
     if (uncertain) msg.uncertain = true;
@@ -5983,6 +5990,7 @@ function sendUnmappedWithArea(session, roomName) {
     if (area) {
       msg.placeable = true;   // client: render greyed + enable click-to-place
       msg.area = buildAreaGraph(area);
+      session._areaExitCmds = areaExitCmdSet(msg.area);
       session._lastMapArea = area;
     }
     // Auto-anchor candidate set (narrowing as you walk) — client highlights these so place-mode
@@ -7762,7 +7770,7 @@ wss.on('connection', (ws, req) => {
           if (!Number.isFinite(v) || !mapStmts.getRoomByVnum.get(v)) break;
           session._mapReckonVnum = v;
           session._mapCandidates = null;   // manual placement is authoritative — stop narrowing
-          session._lastMoveDir = null; session._lastMoveCmd = null; session._lastMoveAt = 0;
+          session._moveQueue = [];         // drop any pending moves; we're authoritatively here now
           sendMapContext(session, v, true);
           break;
         }
