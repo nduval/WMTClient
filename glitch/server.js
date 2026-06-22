@@ -182,6 +182,13 @@ function loadMapOverrides() {
   } catch (e) { console.error('map_overrides.json load failed:', e.message); }
 }
 loadMapOverrides();
+// Hot-reload: edit/push map_overrides.json and it re-applies within ~5s — no wmt-server restart,
+// so "Byron's map is wrong here" fixes are zero-disruption. (Re-render happens on the next move.)
+try {
+  fs.watchFile(path.join(__dirname, 'map_overrides.json'), { interval: 5000 }, (cur) => {
+    if (cur && cur.nlink !== 0) { console.log('map_overrides.json changed — reloading'); loadMapOverrides(); }
+  });
+} catch (e) { /* non-fatal */ }
 // Effective exits for a room = base DB exits minus hidden + added. Used by reckon AND rendering.
 function mapEffectiveExits(vnum) {
   let ex = mapStmts.getExitsByVnum.all(vnum);
