@@ -14,7 +14,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const ftp = require('basic-ftp');   // wizard FTP file editor — see project_ftp_wizard_editor
-const { normDir: mapNormDir, sigOf: mapSigOf, reckonRoom, initCandidates: mapInitCandidates, narrowCandidates: mapNarrowCandidates } = require('./maplib');   // map dead-reckoning (unit-tested in test_map_reckon.js)
+const { normDir: mapNormDir, sigOf: mapSigOf, reckonNext } = require('./maplib');   // map dead-reckoning (unit-tested in test_map_reckon.js)
 
 let Database;
 try { Database = require('better-sqlite3'); } catch (e) { Database = null; }
@@ -5844,54 +5844,32 @@ function reckonCurrentRoom(session) {
   if (!mapDb || !session.mipStats) return null;
   const name = session.mipStats.room || '';
   const mipSig = mapSigOf((session.mipStats.exits || '').split(/,\s*/).map(s => s.trim()).filter(Boolean));
-  const movedRecently = !!(session._lastMoveAt && (Date.now() - session._lastMoveAt < 5000));
   const map = {
     getRoom: (v) => mapStmts.getRoomByVnum.get(v),
     getExits: (v) => mapStmts.getExitsByVnum.all(v),
     getRoomsByName: (n) => mapStmts.getRoomByName.all(n),
   };
-  const moveToken = session._lastMoveDir || session._lastMoveCmd || null;
-  const res = reckonRoom(
-    map,
-    {
-      prevVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null,
-      lastMoveDir: session._lastMoveDir || null,
-      lastMoveCmd: session._lastMoveCmd || null,
-      movedRecently,
-    },
-    { name, mipSig }
-  );
+  // Thin adapter over the pure reckon brain (maplib.reckonNext) — see test_map_reckon.js for the
+  // full Aegis-walker simulation (fast moves / blocked exits / teleports).
+  const st = reckonNext(map, {
+    reckonVnum: session._mapReckonVnum != null ? session._mapReckonVnum : null,
+    candidates: session._mapCandidates || null,
+    lastMoveDir: session._lastMoveDir || null,
+    lastMoveCmd: session._lastMoveCmd || null,
+    lastMoveAt: session._lastMoveAt || 0,
+  }, { name, mipSig, roomVnum: session.mipStats.roomVnum || null, now: Date.now() });
 
-  let out = res;
-  if (res) {
-    session._mapCandidates = null;   // placed → stop narrowing
-  } else {
-    // AUTO-ANCHOR BY WALKING: reckon couldn't pin us (uniform grid / teleport / secret-door
-    // entry). Track every room we COULD be in and eliminate impossibilities each move until
-    // the set collapses to one — then lock on, no click-to-place needed.
-    let cands = session._mapCandidates;
-    if (movedRecently && moveToken && cands && cands.length) {
-      const narrowed = mapNarrowCandidates(map, cands, moveToken, name, mipSig);
-      cands = narrowed.length ? narrowed : mapInitCandidates(map, name, mipSig);   // lost the trail → reseed
-    } else if (!cands || !cands.length) {
-      cands = mapInitCandidates(map, name, mipSig);
-    }   // else (a `look`): keep the narrowed set intact
-    if (cands.length > 400) cands = cands.slice(0, 400);   // pathological guard
-    session._mapCandidates = cands;
-    if (cands.length === 1) {
-      session._mapReckonVnum = cands[0];
-      session._mapCandidates = null;
-      out = { vnum: cands[0], uncertain: false };
-    }
-  }
+  session._mapReckonVnum = st.reckonVnum != null ? st.reckonVnum : session._mapReckonVnum;
+  session._mapCandidates = st.candidates;
+  session._lastMoveDir = st.lastMoveDir;
+  session._lastMoveCmd = st.lastMoveCmd;
+  session._lastMoveAt = st.lastMoveAt;
 
   if (MAP_ENABLED_USERS.has(session.userId)) {
-    const cn = (!res && session._mapCandidates) ? ` cands=${session._mapCandidates.length}` : '';
-    console.log(`[MAP-RECKON] prev=${session._mapReckonVnum} moved=${movedRecently} dir=${moveToken || '-'} name="${name}" mipSig="${mipSig}" -> ${out ? out.vnum + (out.uncertain ? '(uncertain)' : '') : 'NULL'}${cn}`);
+    const cn = (st.vnum == null && st.candidates) ? ` cands=${st.candidates.length}` : '';
+    console.log(`[MAP-RECKON] reckon=${session._mapReckonVnum} name="${name}" mipSig="${mipSig}" -> ${st.vnum != null ? st.vnum : 'NULL'}${cn}`);
   }
-  // Consume the one-shot movement signal so a following `look` isn't treated as a move.
-  if (movedRecently) { session._lastMoveDir = null; session._lastMoveCmd = null; session._lastMoveAt = 0; }
-  return out;
+  return st.vnum != null ? { vnum: st.vnum, uncertain: st.uncertain } : null;
 }
 
 /**
