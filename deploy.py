@@ -400,6 +400,10 @@ def run_test_suites():
         # (no orange↔green bounce), + blocked/cold-start/ambiguous/boundary cases.
         # Synthetic grids always run; also walks the real 3k_map.db if present.
         ('MapReckon', 'test_map_reckon.js'),
+        # Map sweep: walks EVERY area in the real 3k_map.db through the reckon brain (cold-start +
+        # fast burst) and asserts the hard invariant MUD-wide — NEVER confidently in the wrong room
+        # (0 drift) + burst-from-anchor ends exact. Skips cleanly if the map db isn't on the box.
+        ('MapSweep', 'map_sweep.js'),
     ]
 
     total_passed = 0
