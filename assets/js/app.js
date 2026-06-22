@@ -3371,9 +3371,20 @@ class WMTClient {
         const DIR = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0], ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1] };
 
         // adjacency (in-area only)
+        // Layout adjacency is UNDIRECTED for compass exits: if A --sw--> B exists, the layout can
+        // also step B --ne--> A. Without this, asymmetric/one-way seams (e.g. Celestial: you enter
+        // the Atrium via the NAMED exit `light`, but only `Atrium --sw--> Threshold` is compass) leave
+        // the destination unreachable from the anchor → it never gets positioned and the view stays
+        // stuck on the entry room. (Reverse edges are for SPATIAL placement only, not navigation.)
+        const OPP = { n: 's', s: 'n', e: 'w', w: 'e', ne: 'sw', sw: 'ne', nw: 'se', se: 'nw' };
         const adj = new Map();
         for (const v of graph.rooms.keys()) adj.set(v, []);
-        for (const e of graph.exits) if (adj.has(e.from) && graph.rooms.has(e.to)) adj.get(e.from).push({ to: e.to, dir: (e.dir || '').toLowerCase(), cmd: e.cmd });
+        for (const e of graph.exits) {
+            if (!adj.has(e.from) || !graph.rooms.has(e.to)) continue;
+            const d = (e.dir || '').toLowerCase();
+            adj.get(e.from).push({ to: e.to, dir: d, cmd: e.cmd });
+            if (OPP[d] && adj.has(e.to)) adj.get(e.to).push({ to: e.from, dir: OPP[d], cmd: null });   // reverse, layout-only
+        }
 
         // Place-mode (curVnum == null): we don't know where we are yet. Anchor layout on a
         // room whose NAME matches our current room (e.g. "Aegis Global - Level 2") so we draw
