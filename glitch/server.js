@@ -161,6 +161,35 @@ try {
   console.error('Map database failed to load:', e.message);
 }
 
+// WMT-specific corrections layered over the base map (glitch/map_overrides.json) — applied at
+// SERVE time so they survive a map re-pull (which overwrites the base DB). See the file's _doc.
+let mapHiddenExits = new Set();        // "vnum|dir"
+const mapAddedExits = new Map();       // vnum -> [{direction, command, to_vnum, weight, exit_flags}]
+function loadMapOverrides() {
+  try {
+    const p = path.join(__dirname, 'map_overrides.json');
+    if (!fs.existsSync(p)) return;
+    const o = JSON.parse(fs.readFileSync(p, 'utf8'));
+    mapHiddenExits = new Set();
+    mapAddedExits.clear();
+    for (const h of (o.hideExits || [])) if (h && h.vnum != null && h.dir) mapHiddenExits.add(h.vnum + '|' + String(h.dir).toLowerCase());
+    for (const a of (o.addExits || [])) if (a && a.from != null && a.dir && a.to != null) {
+      if (!mapAddedExits.has(a.from)) mapAddedExits.set(a.from, []);
+      mapAddedExits.get(a.from).push({ direction: String(a.dir).toLowerCase(), command: a.cmd || a.dir, to_vnum: a.to, weight: 1, exit_flags: 0 });
+    }
+    let added = 0; for (const v of mapAddedExits.values()) added += v.length;
+    console.log(`Map overrides loaded: ${mapHiddenExits.size} hidden exits, ${added} added exits`);
+  } catch (e) { console.error('map_overrides.json load failed:', e.message); }
+}
+loadMapOverrides();
+// Effective exits for a room = base DB exits minus hidden + added. Used by reckon AND rendering.
+function mapEffectiveExits(vnum) {
+  let ex = mapStmts.getExitsByVnum.all(vnum);
+  if (mapHiddenExits.size) ex = ex.filter(e => !mapHiddenExits.has(vnum + '|' + String(e.direction || '').toLowerCase()));
+  const add = mapAddedExits.get(vnum);
+  return add ? ex.concat(add) : ex;
+}
+
 // Prepared statements (created once, reused for performance)
 const dbStmts = {};
 if (wmtDb) {
@@ -5845,7 +5874,7 @@ function reckonCurrentRoom(session) {
   const mipSig = mapSigOf((session.mipStats.exits || '').split(/,\s*/).map(s => s.trim()).filter(Boolean));
   const map = {
     getRoom: (v) => mapStmts.getRoomByVnum.get(v),
-    getExits: (v) => mapStmts.getExitsByVnum.all(v),
+    getExits: (v) => mapEffectiveExits(v),   // applies WMT overrides (hidden/added exits)
     getRoomsByName: (n) => mapStmts.getRoomByName.all(n),
   };
   // Thin adapter over the pure reckon brain (maplib.reckonNext) — see test_map_reckon.js for the
@@ -5900,11 +5929,16 @@ function areaExitCmdSet(areaGraph) {
 
 function buildAreaGraph(area) {
   const areaRooms = mapStmts.getAreaRooms.all(area);
-  const areaExits = mapStmts.getAreaExits.all(area);
+  const areaRoomVnums = new Set(areaRooms.map(r => r.vnum));
+  // Apply WMT overrides: drop hidden exits, add added exits for rooms in this area.
+  let areaExits = mapStmts.getAreaExits.all(area);
+  if (mapHiddenExits.size) areaExits = areaExits.filter(e => !mapHiddenExits.has(e.from_vnum + '|' + String(e.direction || '').toLowerCase()));
+  const exits = areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command, w: e.weight || 1, fl: e.exit_flags || 0 }));
+  for (const [vn, exs] of mapAddedExits) if (areaRoomVnums.has(vn)) for (const ex of exs) exits.push({ from: vn, to: ex.to_vnum, dir: ex.direction, cmd: ex.command, w: 1, fl: 0 });
   return {
     name: area,
     rooms: areaRooms.map(r => ({ vnum: r.vnum, name: r.name, terrain: r.terrain, desc: r.description ? String(r.description).slice(0, 200) : '' })),
-    exits: areaExits.map(e => ({ from: e.from_vnum, to: e.to_vnum, dir: e.direction, cmd: e.command, w: e.weight || 1, fl: e.exit_flags || 0 })),
+    exits,
     locations: buildAreaLocations(area)
   };
 }

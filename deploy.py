@@ -131,7 +131,7 @@ def deploy_lightsail(target='server', force_bridge=False):
     if not local_file.exists():
         print("ERROR: glitch/server.js not found")
         return False
-    server_modules = ['server.js', 'maplib.js']   # local require()d files that ship with server.js
+    server_modules = ['server.js', 'maplib.js', 'map_overrides.json']   # local files that ship with server.js
     for m in server_modules:
         mp = BASE_DIR / 'glitch' / m
         if not mp.exists():
@@ -204,6 +204,14 @@ def deploy_test_server():
     else:
         print("  ERROR: glitch/maplib.js not found")
         return False
+
+    # Push map_overrides.json (server reads it at load for WMT map corrections)
+    _ovr_local = BASE_DIR / 'glitch' / 'map_overrides.json'
+    if _ovr_local.exists():
+        subprocess.run(
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_ovr_local}" ubuntu@{host}:/tmp/map_overrides.json',
+            shell=True, capture_output=True, text=True
+        )
 
     # Push any repo-tracked test scripts so sandbox runs the version we
     # commit. Test files live in tests/sandbox/ and target /opt/wmt/tests/.
@@ -286,6 +294,7 @@ def deploy_test_server():
         'sudo chown wmt:wmt /opt/wmt/server.js',
         'sudo cp /tmp/maplib.js /opt/wmt/maplib.js',
         'sudo chown wmt:wmt /opt/wmt/maplib.js',
+        '[ -f /tmp/map_overrides.json ] && sudo cp /tmp/map_overrides.json /opt/wmt/map_overrides.json && sudo chown wmt:wmt /opt/wmt/map_overrides.json || true',
         'sudo systemctl restart wmt-server',
     ]
     patch_content = '#!/bin/bash\nset -e\n' + '\n'.join(patch_lines) + '\n'
