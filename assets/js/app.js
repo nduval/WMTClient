@@ -3204,14 +3204,22 @@ class WMTClient {
         return ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw', 'u', 'd'].includes(d) ? d : null;
     }
 
-    // Optimistic dead-reckoning step (see the sendCommand hook). Only fires for a bare
-    // single direction whose exit exists in the cached graph from where we are.
+    // Optimistic dead-reckoning step (see the sendCommand hook). Fires for a bare direction OR a
+    // NAMED exit (e.g. `light`, `enter`) whose exit exists in the cached graph from where we are.
+    // Named exits used to NOT step optimistically (only compass dirs did), so a named move waited a
+    // full server reckon round-trip ("light is slow") AND a fast `light;e` showed `e` from the OLD
+    // room first, then snapped — because `e` stepped optimistically while `light` hadn't. Matching
+    // named exits here makes named moves instant and keeps multi-command order correct.
     _mapOptimisticStep(rawCmd) {
         if (!this.mapWindowOpen || !this.mapAreaGraph || this.mapCurrentVnum == null) return;
         const dir = this._normDir(rawCmd);
-        if (!dir) return;
-        const ex = (this.mapAreaGraph.exits || []).find(e =>
-            e.from === this.mapCurrentVnum && this._normDir(e.dir) === dir && this.mapAreaGraph.rooms.has(e.to));
+        const raw = String(rawCmd || '').trim().toLowerCase();
+        const exits = this.mapAreaGraph.exits || [];
+        let ex = dir ? exits.find(e =>
+            e.from === this.mapCurrentVnum && this._normDir(e.dir) === dir && this.mapAreaGraph.rooms.has(e.to)) : null;
+        // Named exit: match the typed command against the exit's command (or recorded direction name).
+        if (!ex && raw) ex = exits.find(e => e.from === this.mapCurrentVnum && this.mapAreaGraph.rooms.has(e.to) &&
+            ((e.cmd && String(e.cmd).trim().toLowerCase() === raw) || (e.dir && String(e.dir).trim().toLowerCase() === raw)));
         if (!ex) return;
         this.mapCurrentVnum = ex.to;
         this._mapOptimistic = true;
@@ -3365,23 +3373,29 @@ class WMTClient {
 
     // Real area map: lay the whole area out as a grid by walking exit directions from the
     // current room, draw rooms + connecting edges, glow "you are here", click a room to walk.
-    _renderAreaMap(svg, graph, curVnum) {
+    _renderAreaMap(svg, graph, curVnum, ctx = {}) {
         const NS = 'http://www.w3.org/2000/svg';
         svg.innerHTML = '';
         const DIR = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0], ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1] };
 
-        // adjacency (in-area only)
-        // Layout adjacency is UNDIRECTED for compass exits: if A --sw--> B exists, the layout can
-        // also step B --ne--> A. Without this, asymmetric/one-way seams (e.g. Celestial: you enter
-        // the Atrium via the NAMED exit `light`, but only `Atrium --sw--> Threshold` is compass) leave
-        // the destination unreachable from the anchor → it never gets positioned and the view stays
-        // stuck on the entry room. (Reverse edges are for SPATIAL placement only, not navigation.)
+        // adjacency (in-area only) — TWO graphs, on purpose:
+        //  • dadj (DIRECTED, exits as stored) defines floor IDENTITY via compOf(). Keeping it
+        //    directed means a small entry vestibule stays its OWN small map and you TRANSITION to
+        //    the big floor when you cross the seam — they are NOT glued into one blob. (Celestial:
+        //    from "Threshold of Destiny" you see the 3-room vestibule; go `light` → the 38-room floor.)
+        //  • adj (UNDIRECTED for compass exits: A --sw--> B also lets the layout step B --ne--> A) is
+        //    used ONLY to POSITION a floor's rooms. A floor is weakly-connected, so undirected
+        //    placement can always reach every room from the anchor — fixing asymmetric seams (enter
+        //    via the NAMED exit `light`, return via compass `sw`) where a purely directional walk
+        //    from the anchor stranded most of the floor and the view collapsed onto the entry room.
+        //    Reverse edges are for SPATIAL placement only, never navigation.
         const OPP = { n: 's', s: 'n', e: 'w', w: 'e', ne: 'sw', sw: 'ne', nw: 'se', se: 'nw' };
-        const adj = new Map();
-        for (const v of graph.rooms.keys()) adj.set(v, []);
+        const dadj = new Map(), adj = new Map();
+        for (const v of graph.rooms.keys()) { dadj.set(v, []); adj.set(v, []); }
         for (const e of graph.exits) {
-            if (!adj.has(e.from) || !graph.rooms.has(e.to)) continue;
+            if (!dadj.has(e.from) || !graph.rooms.has(e.to)) continue;
             const d = (e.dir || '').toLowerCase();
+            dadj.get(e.from).push({ to: e.to, dir: d, cmd: e.cmd });
             adj.get(e.from).push({ to: e.to, dir: d, cmd: e.cmd });
             if (OPP[d] && adj.has(e.to)) adj.get(e.to).push({ to: e.from, dir: OPP[d], cmd: null });   // reverse, layout-only
         }
@@ -3417,7 +3431,7 @@ class WMTClient {
             const set = new Set([start]); const q = [start];
             while (q.length) {
                 const v = q.shift(); const vn = (graph.rooms.get(v) || {}).name;
-                for (const ex of (adj.get(v) || [])) {
+                for (const ex of (dadj.get(v) || [])) {   // DIRECTED: floor identity, so seams stay separate maps
                     if (!DIR[ex.dir] || set.has(ex.to)) continue;
                     if (isLevelBoundary(vn, (graph.rooms.get(ex.to) || {}).name)) continue;   // thin level bridge — don't cross
                     set.add(ex.to); q.push(ex.to);
