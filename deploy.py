@@ -413,6 +413,12 @@ def run_test_suites():
         # fast burst) and asserts the hard invariant MUD-wide — NEVER confidently in the wrong room
         # (0 drift) + burst-from-anchor ends exact. Skips cleanly if the map db isn't on the box.
         ('MapSweep', 'map_sweep.js'),
+        # Map layout sweep: for EVERY area, proves the CLIENT floor-layout invariant — floor identity
+        # is the directed compass component (so an entry vestibule stays its own small map and you
+        # TRANSITION across a seam), and the floor's rooms ALWAYS fully position via undirected
+        # placement from the anchor. Catches the 2026-06-22 "footer says 38 rooms but only 1–3 drawn"
+        # bug (asymmetric seams like Celestial `light` in / `sw` out) MUD-wide. Skips if no map db.
+        ('MapLayoutSweep', 'map_layout_sweep.js'),
     ]
 
     total_passed = 0
