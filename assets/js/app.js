@@ -6117,7 +6117,7 @@ class WMTClient {
         const path = this._ftp && this._ftp.curFile;
         if (!isLocal && !path) { document.getElementById('ftp-edit-status').textContent = 'Open a file first, then click Compare to pin it as the base.'; return; }
         const label = isLocal ? this._local.curName : this._ftpBaseName(path);
-        this._ftpCmp = { baseLabel: label, baseText: this._ftpEditorValue() };
+        this._ftpCmp = { baseLabel: label, baseText: this._ftpEditorValue(), baseSrc: isLocal ? 'local' : 'ftp', basePath: isLocal ? (this._local.curName || label) : path };
         this._ftpUpdateCompareUI();
         document.getElementById('ftp-edit-status').textContent = 'Pinned “' + label + '” — open another file to compare.';
     }
@@ -6140,8 +6140,10 @@ class WMTClient {
         host.style.display = ''; host.classList.toggle('ftp-light', !!this._ftpLight);
         document.getElementById('ftp-cmp-bar').style.display = '';
         // Left pane = the file you opened (EDITABLE); right pane = the pinned base (read-only reference).
-        document.getElementById('ftp-cmp-left').textContent = '✎ ' + (cmp.rightLabel || '(file)') + ' — editable';
-        document.getElementById('ftp-cmp-right').textContent = '🔒 📌 ' + cmp.baseLabel + ' — read-only reference';
+        // Show SOURCE (FTP/Local) + full path on each side so the two are never confused.
+        const sideDesc = (src, path, label) => (src === 'local' ? '🖥 Local' : '☁ FTP') + ': ' + (path || label || '(file)');
+        document.getElementById('ftp-cmp-left').textContent = '✎ EDITING  ' + sideDesc(cmp.rightSrc, cmp.rightPath, cmp.rightLabel);
+        document.getElementById('ftp-cmp-right').textContent = '🔒 REFERENCE (read-only)  ' + sideDesc(cmp.baseSrc, cmp.basePath, cmp.baseLabel);
         // Snapshot the pre-compare header + dirty state ONCE so exit can restore it verbatim.
         if (!cmp._snap) cmp._snap = {
             fn: (document.getElementById('ftp-filename') || {}).textContent || '',
@@ -6164,7 +6166,12 @@ class WMTClient {
         this._ftpMergeView.editor().on('change', () => { this._ftpCmpDirty = true; this._ftpUpdateSaveBtn('dirty'); });
         const sz = (cm) => { if (cm) { cm.setSize('100%', '100%'); cm.refresh(); } };
         sz(this._ftpMergeView.editor());
-        if (this._ftpMergeView.rightOriginal) sz(this._ftpMergeView.rightOriginal());
+        if (this._ftpMergeView.rightOriginal) {
+            const ro = this._ftpMergeView.rightOriginal();
+            if (ro) ro.setOption('readOnly', 'nocursor');   // reference pane: read-only AND no caret (only the editable side blinks)
+            sz(ro);
+        }
+        this._ftpMergeView.editor().focus();   // land focus in the editable pane so the caret shows immediately
         this._ftpUpdateSaveBtn('clean');
         document.getElementById('ftp-edit-status').textContent = '';
     }
@@ -6603,7 +6610,7 @@ class WMTClient {
         .ftp-edit-wrap .CodeMirror { flex:1; min-width:0; height:100%; background:#0b0b14; color:#d6d6e0; font-family:var(--font-mono); font-size:13px; line-height:1.4; }
         .ftp-edit-wrap .CodeMirror-gutters { background:#0b0b14; border-right:1px solid var(--border-color); }
         .ftp-edit-wrap .CodeMirror-linenumber { color:#5a5a78; }
-        .ftp-edit-wrap .CodeMirror-cursor { border-left:1px solid #d6d6e0; }
+        .ftp-edit-wrap .CodeMirror-cursor { border-left:2px solid #ffd24a; }
         .ftp-edit-wrap .CodeMirror-selected { background:#2a2a44 !important; }
         .ftp-edit-wrap .CodeMirror-activeline-background { background:rgba(255,255,255,.03); }
         .ftp-edit-wrap .CodeMirror-matchingbracket { color:#fff !important; background:#3a3a66; border-bottom:1px solid #89ddff; }
@@ -6614,7 +6621,7 @@ class WMTClient {
         .ftp-edit-wrap.ftp-light .CodeMirror { background:#ffffff; color:#1a1a2e; }
         .ftp-edit-wrap.ftp-light .CodeMirror-gutters { background:#f3f3f7; border-right:1px solid #d7d7e0; }
         .ftp-edit-wrap.ftp-light .CodeMirror-linenumber { color:#9a9ab0; }
-        .ftp-edit-wrap.ftp-light .CodeMirror-cursor { border-left:1px solid #1a1a2e; }
+        .ftp-edit-wrap.ftp-light .CodeMirror-cursor { border-left:2px solid #0040ff; }
         .ftp-edit-wrap.ftp-light .CodeMirror-selected { background:#cfe2ff !important; }
         .ftp-edit-wrap.ftp-light .CodeMirror-activeline-background { background:rgba(0,0,0,.04); }
         .ftp-edit-wrap.ftp-light .CodeMirror-matchingbracket { color:#000 !important; background:#cfe2ff; border-bottom:1px solid #0b7285; }
@@ -6658,6 +6665,12 @@ class WMTClient {
         .ftp-merge.ftp-light .CodeMirror { background:#ffffff; color:#1a1a2e; }
         .ftp-merge.ftp-light .CodeMirror-gutters { background:#f3f3f7; border-right:1px solid #d7d7e0; }
         .ftp-merge.ftp-light .CodeMirror-linenumber { color:#9a9ab0; }
+        /* Compare panes inherit CM's default (black, invisible-on-dark) caret — give the editable
+           pane a bright, blinking 2px caret so it's obvious you can type. The read-only pane has none. */
+        .ftp-merge .CodeMirror-cursor { border-left:2px solid #ffd24a !important; }
+        .ftp-merge.ftp-light .CodeMirror-cursor { border-left:2px solid #0040ff !important; }
+        .ftp-merge .CodeMirror-cursors { visibility:hidden; }
+        .ftp-merge .CodeMirror-focused .CodeMirror-cursors { visibility:visible; }
         /* ── Editor power-addons (fold / search markers / trailing-space / outline / maximize) ── */
         .ftp-outline { background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; font-size:.8em; max-width:190px; padding:2px 4px; cursor:pointer; }
         .ftp-edit-wrap .cm-trailingspace { background:rgba(255,90,90,.22); border-radius:2px; }
