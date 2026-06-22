@@ -3170,6 +3170,12 @@ class WMTClient {
         const title = document.getElementById('map-title');
         if (title) title.textContent = `${ctx.room.area} — ${ctx.room.name}`;
 
+        // FOLLOW THE PLAYER: when the current room changes (you moved), drop any zoom/pan override
+        // so the view re-centers on you. (A persisted override otherwise locks the viewport on the
+        // old spot — the map re-renders but looks "stuck" as you walk.) Zoom/pan persists only while
+        // you stay put (looking around).
+        if (this.mapCurrentVnum !== this._mapLastCur) { this._mapUserVB = null; this._mapLastCur = this.mapCurrentVnum; }
+
         // Real area map when we have the graph and know where we are.
         if (this.mapAreaGraph && this.mapAreaGraph.rooms.has(this.mapCurrentVnum)) {
             this._mapLastAreaReq = null;
@@ -3631,11 +3637,15 @@ class WMTClient {
                 dot.setAttribute('cx', sx(p.x) + BOX - 3); dot.setAttribute('cy', sy(p.y) + 3); dot.setAttribute('r', 3);
                 dot.setAttribute('fill', color); dot.setAttribute('class', 'map-poi-dot');
                 g.appendChild(dot);
-                const pl = document.createElementNS(NS, 'text');
-                pl.setAttribute('x', sx(p.x) + BOX / 2); pl.setAttribute('y', sy(p.y) - 2);
-                pl.setAttribute('class', 'map-poi-label'); pl.setAttribute('fill', color);
-                pl.textContent = this._truncate(String(pri.label).replace(/^[^:]+:\s*/, ''), 16);
-                g.appendChild(pl);
+                // Text label for real POIs (shop/mob/crafting/…). Skip 'area' POIs — those just
+                // name the area you're in (redundant with the title) and crowd the top; the dot stays.
+                if (pri.category !== 'area') {
+                    const pl = document.createElementNS(NS, 'text');
+                    pl.setAttribute('x', sx(p.x) + BOX / 2); pl.setAttribute('y', sy(p.y) - 2);
+                    pl.setAttribute('class', 'map-poi-label'); pl.setAttribute('fill', color);
+                    pl.textContent = this._truncate(String(pri.label).replace(/^[^:]+:\s*/, ''), 16);
+                    g.appendChild(pl);
+                }
             }
             const vd = vert.get(v);
             const addGlyph = (txt, yy, cmd, tip) => {
