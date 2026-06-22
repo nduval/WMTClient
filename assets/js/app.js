@@ -3135,11 +3135,14 @@ class WMTClient {
             this.mapUncertain = false;
             const t = document.getElementById('map-title');
             if (t) t.textContent = (ctx.room && ctx.room.area) ? ctx.room.area : 'Map';
+            this._mapCandidates = (ctx.candidates && ctx.candidates.length) ? new Set(ctx.candidates) : null;
             if (ctx.placeable && this.mapAreaGraph && this.mapAreaGraph.rooms.size) {
                 this.mapPlaceMode = true;
                 this._renderAreaMap(svg, this.mapAreaGraph, null, ctx);
                 const f = document.getElementById('map-footer');
-                if (f) f.textContent = "Can't pinpoint you here — click your current room to place yourself.";
+                if (f) f.textContent = this._mapCandidates
+                    ? `Narrowing — ${this._mapCandidates.size} possible room${this._mapCandidates.size === 1 ? '' : 's'} (highlighted). Walk once more, or click yours.`
+                    : "Can't pinpoint you here — click your current room to place yourself.";
             } else {
                 this.mapPlaceMode = false;
                 svg.innerHTML = ''; svg.setAttribute('viewBox', '0 0 400 400');
@@ -3161,6 +3164,7 @@ class WMTClient {
             this._mapOptimistic = false;
             this.mapUncertain = !!ctx.uncertain;
             this.mapPlaceMode = false;
+            this._mapCandidates = null;   // placed → no longer narrowing
         }
 
         const title = document.getElementById('map-title');
@@ -3606,7 +3610,7 @@ class WMTClient {
             if (!inView(p)) continue;
             const room = graph.rooms.get(v) || {};
             const g = document.createElementNS(NS, 'g');
-            g.setAttribute('class', 'map-area-room' + (v === curVnum ? ' current' : '') + (v === curVnum && this.mapUncertain ? ' uncertain' : '') + (placing ? ' placing' : ''));
+            g.setAttribute('class', 'map-area-room' + (v === curVnum ? ' current' : '') + (v === curVnum && this.mapUncertain ? ' uncertain' : '') + (placing ? ' placing' : '') + (placing && this._mapCandidates && this._mapCandidates.has(v) ? ' candidate' : ''));
             const rect = document.createElementNS(NS, 'rect');
             rect.setAttribute('x', sx(p.x)); rect.setAttribute('y', sy(p.y));
             rect.setAttribute('width', BOX); rect.setAttribute('height', BOX); rect.setAttribute('rx', 4);

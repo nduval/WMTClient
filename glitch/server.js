@@ -6007,6 +6007,9 @@ function sendUnmappedWithArea(session, roomName) {
       msg.area = buildAreaGraph(area);
       session._lastMapArea = area;
     }
+    // Auto-anchor candidate set (narrowing as you walk) — client highlights these so place-mode
+    // is "pick from the 2-3 possibilities" instead of "find your room among the whole floor".
+    if (session._mapCandidates && session._mapCandidates.length) msg.candidates = session._mapCandidates;
     sendToClient(session, msg);
   } catch (e) {
     // Non-fatal

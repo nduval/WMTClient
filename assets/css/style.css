@@ -3500,6 +3500,13 @@ body {
     stroke: #b6ffb6;
     opacity: 1;
 }
+/* Auto-anchor candidates: the few rooms you could be in (narrowing as you walk). */
+.map-area-room.candidate rect {
+    fill: #4a3a12;
+    stroke: #ffd95a;
+    stroke-width: 2;
+    opacity: 1;
+}
 .map-vglyph {
     fill: #cdd6f4;
     font-size: 7px;
