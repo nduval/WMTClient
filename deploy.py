@@ -419,6 +419,11 @@ def run_test_suites():
         # placement from the anchor. Catches the 2026-06-22 "footer says 38 rooms but only 1–3 drawn"
         # bug (asymmetric seams like Celestial `light` in / `sw` out) MUD-wide. Skips if no map db.
         ('MapLayoutSweep', 'map_layout_sweep.js'),
+        # Named/one-way/vertical exit TRACKING: walks Celestial's Aeonos floor (enter/out/swim/up +
+        # the map_overrides one-way swim 53915->53587) through the real reckon brain and asserts the
+        # map follows every transition — incl. Nathan's "up from the Depths brings you back". Guards
+        # the transition model for sections connected by non-compass exits. Skips if no map db.
+        ('NamedExitTracking', 'test_named_exit_tracking.js'),
     ]
 
     total_passed = 0
