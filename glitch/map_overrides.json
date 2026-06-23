@@ -1,0 +1,15 @@
+{
+  "_doc": "WMT-specific corrections layered over Byron's 3k_shared.map (the base 3k_map.db, which is fully regenerated/overwritten on each map pull). These overrides are applied SERVER-SIDE at load — they survive a re-pull and are versioned here. Edit + redeploy server (or hot-reload) to apply.",
+  "_schema": {
+    "hideExits": "[{vnum, dir, note}] — drop a bogus/broken/non-navigational exit so it's neither drawn nor followed (e.g. an in-game action mis-recorded as an exit).",
+    "addExits": "[{from, dir, to, cmd?, note}] — add or rewire a connection the base map gets wrong.",
+    "_": "Room-name and POI overrides can be added later; kept to exits for now."
+  },
+  "hideExits": [
+    { "vnum": 53583, "dir": "light", "note": "Celestial Zodiacs 'Shrine of Celestial Grace' (E of Threshold): light/leave are in Byron's map but NOT in-game (Nathan 2026-06-22) — artifact." },
+    { "vnum": 53583, "dir": "leave", "note": "see above" }
+  ],
+  "addExits": [
+    { "from": 53915, "dir": "swim", "to": 53587, "cmd": "swim", "note": "Celestial Zodiacs Aeonos floor: after killing Aeonos, a 2nd 'swim' from 'The Depths of the Reflecting Pool' (53915) is a ONE-WAY return to 'The Atrium' (53587, the 'light' main entrance). Byron's map only records 53915 up->53914 (Aeonos); the swim return is missing. Path is 53914 --swim--> 53915 --swim--> 53587. Nathan 2026-06-22." }
+  ]
+}
