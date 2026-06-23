@@ -3153,6 +3153,18 @@ class WMTClient {
         }
 
         const cur = (ctx.currentVnum != null) ? ctx.currentVnum : (ctx.room && ctx.room.vnum);
+        if (window && window.MAP_DEBUG) console.log('[MAP-CTX] cur=', cur, 'mapCur=', this.mapCurrentVnum,
+            'opt=', this._mapOptimistic, 'uncertain=', !!ctx.uncertain, 'seen=', this._mapOptimisticSeen ? [...this._mapOptimisticSeen] : null);
+
+        // STALE-BEHIND suppression: ignore a server update pointing at a room we JUST optimistically
+        // left (a pre-move MIP refresh arriving behind our prediction). Applying it snaps the marker
+        // back then forward (the W→E→W bounce). Bounded grace (2.5s) so a genuinely blocked move
+        // (we predicted forward but never actually left) still snaps back instead of sticking.
+        if (this._mapOptimisticSeen && this._mapOptimisticSeen.has(cur)
+            && cur !== this.mapCurrentVnum && (Date.now() - (this._mapOptimisticAt || 0)) < 2500) {
+            if (window && window.MAP_DEBUG) console.log('[MAP-CTX] suppress stale-behind ->', cur);
+            return;
+        }
 
         // If the server is only DEAD-RECKONING (uncertain) and we already hold a confident
         // optimistic position from a direction you typed, keep ours — a guess must never
@@ -3161,7 +3173,9 @@ class WMTClient {
             && this.mapAreaGraph && this.mapAreaGraph.rooms.has(this.mapCurrentVnum);
         if (!keepOptimistic) {
             this.mapCurrentVnum = cur;
-            this._mapOptimistic = false;
+            this._mapOptimistic = false;   // server caught up/corrected; _mapOptimisticSeen lingers for the
+                                           // grace window (resets at the next optimistic burst) so a stray
+                                           // out-of-order stale update can't re-trigger the bounce.
             this.mapUncertain = !!ctx.uncertain;
             this.mapPlaceMode = false;
             this._mapCandidates = null;   // placed → no longer narrowing
@@ -3221,10 +3235,19 @@ class WMTClient {
         if (!ex && raw) ex = exits.find(e => e.from === this.mapCurrentVnum && this.mapAreaGraph.rooms.has(e.to) &&
             ((e.cmd && String(e.cmd).trim().toLowerCase() === raw) || (e.dir && String(e.dir).trim().toLowerCase() === raw)));
         if (!ex) return;
+        // Remember the room(s) we optimistically LEAVE this burst. A MIP refresh for the room we
+        // just left can land AFTER our prediction (the server reckons the old room while its move
+        // queue is still draining); applying it would snap the marker backward then forward again
+        // — the W→E→W bounce. We suppress those briefly in renderMap (bounded, so a truly blocked
+        // move still recovers).
+        if (!this._mapOptimistic) this._mapOptimisticSeen = new Set();
+        this._mapOptimisticSeen.add(this.mapCurrentVnum);
+        this._mapOptimisticAt = Date.now();
         this.mapCurrentVnum = ex.to;
         this._mapOptimistic = true;
         this.mapUncertain = false;
         this.mapPlaceMode = false;
+        if (window && window.MAP_DEBUG) console.log('[MAP-OPT]', raw || dir, 'step ->', ex.to, 'left', [...this._mapOptimisticSeen]);
         const svg = document.getElementById('map-svg');
         if (svg) this._renderAreaMap(svg, this.mapAreaGraph, this.mapCurrentVnum, this.lastMapContext || {});
     }
