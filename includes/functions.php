@@ -1598,23 +1598,16 @@ function requireAuth(): void {
     $sessionCookie = $_COOKIE[SESSION_NAME] ?? 'NOT SET';
     @file_put_contents($logFile, "[$timestamp] requireAuth called: uri=$uri, cookie=$sessionCookie\n", FILE_APPEND | LOCK_EX);
 
-    if (session_status() === PHP_SESSION_NONE) {
+    // Single source of truth for session setup (custom save path, strict mode, 7-day
+    // gc, cookie params) lives in initSession(). Call it instead of a divergent inline
+    // copy that previously did NOT set the custom save path / strict mode — every API
+    // endpoint and app.php already call initSession() before requireAuth(), so this is
+    // normally a no-op, but it guarantees the SAME session config on every code path.
+    if (function_exists('initSession')) {
+        initSession();
+    } elseif (session_status() === PHP_SESSION_NONE) {
+        // Defensive fallback (auth.php is always loaded before requireAuth in practice).
         session_name(SESSION_NAME);
-
-        // Delete any old cookies with /api/ path (legacy bug fix)
-        if (isset($_COOKIE[SESSION_NAME])) {
-            setcookie(SESSION_NAME, '', time() - 3600, '/api/');
-        }
-
-        // Always use root path for cookies to ensure they work across all pages
-        session_set_cookie_params([
-            'lifetime' => SESSION_LIFETIME,
-            'path' => '/',
-            'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
-            'httponly' => true,
-            'samesite' => 'Lax'
-        ]);
-
         session_start();
     }
 

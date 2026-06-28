@@ -8139,7 +8139,15 @@ class WMTClient {
         this.renderScriptsSidebar();
     }
 
-    showSaveError(msg) {
+    showSaveError(msg, authExpired = false) {
+        // Saving triggers/aliases/tickers fires several requests at once, so one expired
+        // session produces a BURST of 401s. Dedupe the auth-expired banner within a short
+        // window so the user sees ONE message + ONE recovery action, not seven.
+        if (authExpired) {
+            const now = Date.now();
+            if (this._lastAuthExpiredAt && (now - this._lastAuthExpiredAt) < 3000) return;
+            this._lastAuthExpiredAt = now;
+        }
         // Show persistent banner at top of output so save failures can't be missed
         let banner = document.getElementById('save-error-banner');
         if (!banner) {
@@ -8154,9 +8162,31 @@ class WMTClient {
                 document.body.prepend(banner);
             }
         }
-        banner.innerHTML = `<span>${msg}</span>` +
-            `<button onclick="this.parentNode.remove()" style="background:none;border:1px solid rgba(255,255,255,0.5);` +
-            `color:#fff;cursor:pointer;padding:2px 8px;border-radius:3px;margin-left:12px;font-size:12px;">Dismiss</button>`;
+        banner.textContent = '';
+        const text = document.createElement('span');
+        text.textContent = msg;
+        banner.appendChild(text);
+        const btnWrap = document.createElement('span');
+        btnWrap.style.cssText = 'white-space:nowrap;';
+        const btnCss = 'background:none;border:1px solid rgba(255,255,255,0.5);color:#fff;cursor:pointer;' +
+            'padding:2px 8px;border-radius:3px;margin-left:8px;font-size:12px;';
+        if (authExpired) {
+            // Clean recovery: logout() clears the (httponly, JS-unreadable) server session +
+            // cookie, then navigates to index.php — so the next login starts with NO dead
+            // cookie to fight. That dead cookie was the "click login, nothing happens, click
+            // again, works" trap. One button, reliable first-try re-login.
+            const login = document.createElement('button');
+            login.textContent = 'Log in again';
+            login.style.cssText = btnCss;
+            login.addEventListener('click', () => this.logout());
+            btnWrap.appendChild(login);
+        }
+        const dismiss = document.createElement('button');
+        dismiss.textContent = 'Dismiss';
+        dismiss.style.cssText = btnCss;
+        dismiss.addEventListener('click', () => banner.remove());
+        btnWrap.appendChild(dismiss);
+        banner.appendChild(btnWrap);
     }
 
     async saveTriggers() {
@@ -8168,7 +8198,7 @@ class WMTClient {
                 body: JSON.stringify({ triggers: this.triggers })
             });
             if (!res.ok) {
-                this.showSaveError(`Triggers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`);
+                this.showSaveError(`Triggers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`, res.status === 401);
                 return;
             }
             this.sendFilteredTriggersAndAliases();
@@ -8710,7 +8740,7 @@ class WMTClient {
                 body: JSON.stringify({ aliases: this.aliases })
             });
             if (!res.ok) {
-                this.showSaveError(`Aliases NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`);
+                this.showSaveError(`Aliases NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`, res.status === 401);
                 return;
             }
             this.sendFilteredTriggersAndAliases();
@@ -8733,7 +8763,7 @@ class WMTClient {
                 body: JSON.stringify({ tickers: this.tickers })
             });
             if (!res.ok) {
-                this.showSaveError(`Tickers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`);
+                this.showSaveError(`Tickers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`, res.status === 401);
                 return;
             }
             this.sendFilteredTriggersAndAliases();

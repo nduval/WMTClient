@@ -597,11 +597,19 @@ function initSession(): void {
         // Default gc_maxlifetime is 24 minutes — far too short for a MUD client
         ini_set('session.gc_maxlifetime', SESSION_LIFETIME);
 
-        // Delete any old cookies with /api/ path (legacy bug fix)
-        // Old code set cookies with path=/api/ which take precedence over path=/
-        if (isset($_COOKIE[SESSION_NAME])) {
-            setcookie(SESSION_NAME, '', time() - 3600, '/api/');
-        }
+        // Strict mode: never ADOPT an unknown session id supplied by the request
+        // cookie. If the cookie points at a session that session_regenerate_id() or GC
+        // deleted, PHP issues a FRESH id instead of re-creating that id as an empty
+        // session. Without this, a browser that kept a stale/dead cookie kept getting
+        // its dead id resurrected as an empty (user_id NOT SET) session → a PERMANENT
+        // "session expired" 401 loop. With strict mode it gets one fresh empty session
+        // and a clean re-login sticks. (2026-06-27 double-login investigation.)
+        ini_set('session.use_strict_mode', '1');
+
+        // NOTE: the old per-request `setcookie(SESSION_NAME,'',-3600,'/api/')` legacy
+        // clear was removed here — no code sets a path=/api/ session cookie anymore, so
+        // it was vestigial, and emitting it on EVERY request (incl. the login response)
+        // added Set-Cookie churn that helped the regenerated login cookie lose the race.
 
         // Always use root path for cookies to ensure they work across all pages
         session_set_cookie_params([

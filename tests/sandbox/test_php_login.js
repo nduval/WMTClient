@@ -122,6 +122,24 @@ async function main() {
     if (realCookies.length === 1) ok('T4: exactly one non-empty wmt_session cookie on re-login');
     else bad('T4: single clean cookie', `non-empty wmt_session cookies=${realCookies.length}: ${JSON.stringify(r3.headers['set-cookie'])}`);
 
+    // T6: no legacy path=/api/ cookie-clear churn on a cookie-carrying request. The old
+    // per-request `setcookie(wmt_session,'',-3600,'/api/')` was removed (#1) — it emitted an
+    // extra Set-Cookie on every request incl. the login response, helping the regenerated
+    // login cookie lose the race. r3 carried a cookie, so the OLD code would have emitted it.
+    const apiPathCookies = (r3.headers['set-cookie'] || []).filter(l => /path=\/api\//i.test(l));
+    if (apiPathCookies.length === 0) ok('T6: no path=/api/ cookie churn on a cookie-carrying request');
+    else bad('T6: no /api/ cookie churn', JSON.stringify(apiPathCookies));
+
+    // T7: session.use_strict_mode (#2) — an UNKNOWN session id from the cookie must NOT be
+    // adopted (which would resurrect a dead id as an empty session = the permanent DENIED
+    // loop). With strict mode PHP discards it and issues a FRESH id (new Set-Cookie).
+    const bogusId = 'deadbeefdeadbeefdeadbeefdeadbeef';
+    const r7 = await req('GET', '/api/auth.php?action=check', { jar: { wmt_session: bogusId } });
+    const freshIssued = (r7.headers['set-cookie'] || [])
+      .filter(l => /^wmt_session=/.test(l) && !/expires=Thu, 01 Jan 1970/i.test(l) && !new RegExp('^wmt_session=' + bogusId).test(l));
+    if (freshIssued.length >= 1) ok('T7: strict mode issues a fresh id for an unknown cookie (no resurrection)');
+    else bad('T7: strict mode', 'no fresh id issued — use_strict_mode off? ' + JSON.stringify(r7.headers['set-cookie']));
+
     // T5: loop with a persistent jar — every login sticks
     let stuck = 0; const N = 20;
     for (let i = 0; i < N; i++) { await login(jar); const c = await check(jar); if (/"logged_in":true/.test(c.body)) stuck++; }
