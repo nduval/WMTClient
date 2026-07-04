@@ -636,25 +636,47 @@ function startUserSession(string $userId, string $username): void {
     $oldSessionId = session_id();
     authLog("Session initialized: oldSessionId=$oldSessionId");
 
-    // Attempt session regeneration to prevent fixation attacks and clear stale sessions
-    $error = null;
-    set_error_handler(function($errno, $errstr) use (&$error) {
-        $error = $errstr;
-        return true;
-    });
+    // IDEMPOTENT RE-LOGIN — do NOT regenerate if this browser already holds a VALID
+    // session for the SAME user. session_regenerate_id(true) DESTROYS the current
+    // session file; on a second login POST (two tabs, a back-button, or an app.php
+    // "session expired" banner racing a fresh login) that id is the one the browser
+    // is still actively using. Its in-flight/next request carries the pre-regenerate
+    // cookie, hits the now-deleted id, and use_strict_mode (correctly) mints a fresh
+    // EMPTY session → user_id NOT SET → the permanent "need to authenticate" loop the
+    // user sees ("hit login, nothing; hit again, char screen says re-authenticate").
+    // Regeneration exists for session-FIXATION protection, which only matters on the
+    // anonymous→authenticated transition — re-authenticating the same already-logged-in
+    // user is not a privilege change, so keeping the existing id is safe AND is exactly
+    // what stops the loop (the old cookie stays live). PROVEN root of the 2026-07-04
+    // recurrence from IONOS auth.log (login #2 regen'd the id login #1's browser was
+    // using). Different user (account switch) or no current user still regenerates.
+    $currentUserId = $_SESSION['user_id'] ?? null;
+    $sameUserRelogin = ($currentUserId !== null && $currentUserId === $userId);
 
-    $regenerateResult = session_regenerate_id(true);
-
-    restore_error_handler();
-
-    $newSessionId = session_id();
-
-    if (!$regenerateResult) {
-        $lastError = error_get_last();
-        $errorMsg = $error ?? ($lastError['message'] ?? 'unknown');
-        authLog("session_regenerate_id: FAILED old=$oldSessionId new=$newSessionId error=$errorMsg");
+    if ($sameUserRelogin) {
+        $newSessionId = $oldSessionId;
+        authLog("session_regenerate_id: SKIPPED (same-user re-login, keeping id=$oldSessionId)");
     } else {
-        authLog("session_regenerate_id: SUCCESS old=$oldSessionId new=$newSessionId");
+        // Attempt session regeneration to prevent fixation attacks and clear stale sessions
+        $error = null;
+        set_error_handler(function($errno, $errstr) use (&$error) {
+            $error = $errstr;
+            return true;
+        });
+
+        $regenerateResult = session_regenerate_id(true);
+
+        restore_error_handler();
+
+        $newSessionId = session_id();
+
+        if (!$regenerateResult) {
+            $lastError = error_get_last();
+            $errorMsg = $error ?? ($lastError['message'] ?? 'unknown');
+            authLog("session_regenerate_id: FAILED old=$oldSessionId new=$newSessionId error=$errorMsg");
+        } else {
+            authLog("session_regenerate_id: SUCCESS old=$oldSessionId new=$newSessionId");
+        }
     }
 
     // Set session data

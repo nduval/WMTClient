@@ -15,6 +15,11 @@
  *   T4 the regenerating login emits exactly ONE non-empty wmt_session Set-Cookie
  *      (no stale/empty trailing cookie from a reintroduced 2nd lifecycle)
  *   T5 loop x20 (persistent jar) — every login sticks
+ *   T6/T7 no /api/ cookie churn; strict mode issues a fresh id for an unknown cookie
+ *   T8 IDEMPOTENT same-user re-login keeps the session id (does NOT regenerate/destroy
+ *      the in-use session) and the original cookie still authenticates — the durable fix
+ *      for the recurring double-login loop (2026-07-04 root: login #2 regen'd the id the
+ *      browser was still using → strict-mode empty session → "need to authenticate" loop)
  *
  * NOTE: PHP 8.3's session module strips duplicate same-name session cookies, so
  * the original multi-cookie flake does not MANIFEST on this sandbox PHP; this
@@ -114,12 +119,15 @@ async function main() {
     if (/"logged_in":true/.test(c3.body)) ok('T3: cookie-carrying re-login still sticks');
     else bad('T3: cookie-carrying re-login', c3.body.slice(0, 120));
 
-    // T4: the regenerating (cookie-carrying) login emits exactly ONE non-empty
-    // wmt_session path=/ cookie — no stale/empty trailing cookie.
+    // T4: a cookie-carrying same-user re-login emits AT MOST ONE non-empty wmt_session
+    // path=/ cookie — never a stale/empty trailing cookie (the reintroduced-2nd-lifecycle
+    // hazard) and never two competing ids. With the idempotent-relogin fix it emits ZERO
+    // (the id is unchanged, so PHP sends no Set-Cookie); the invariant that matters is
+    // "not ≥2 and no empty clobber", i.e. <= 1.
     const realCookies = (r3.headers['set-cookie'] || [])
       .filter(l => /^wmt_session=/.test(l))
       .filter(l => !/expires=Thu, 01 Jan 1970/i.test(l) && !/^wmt_session=(deleted)?;/.test(l));
-    if (realCookies.length === 1) ok('T4: exactly one non-empty wmt_session cookie on re-login');
+    if (realCookies.length <= 1) ok('T4: no competing/stale wmt_session cookie on re-login (<=1)');
     else bad('T4: single clean cookie', `non-empty wmt_session cookies=${realCookies.length}: ${JSON.stringify(r3.headers['set-cookie'])}`);
 
     // T6: no legacy path=/api/ cookie-clear churn on a cookie-carrying request. The old
@@ -139,6 +147,24 @@ async function main() {
       .filter(l => /^wmt_session=/.test(l) && !/expires=Thu, 01 Jan 1970/i.test(l) && !new RegExp('^wmt_session=' + bogusId).test(l));
     if (freshIssued.length >= 1) ok('T7: strict mode issues a fresh id for an unknown cookie (no resurrection)');
     else bad('T7: strict mode', 'no fresh id issued — use_strict_mode off? ' + JSON.stringify(r7.headers['set-cookie']));
+
+    // T8: IDEMPOTENT same-user re-login must NOT regenerate the session id — the PROVEN
+    // root of the 2026-07-04 recurrence (IONOS auth.log: login #2 called
+    // session_regenerate_id(true), destroying the id login #1's browser was still using →
+    // the browser's next request hit that dead id → use_strict_mode minted a fresh EMPTY
+    // session → user_id NOT SET → the "need to authenticate" loop). The fix keeps the id on
+    // a same-user re-login, so (a) the id is unchanged and (b) the ORIGINAL cookie still
+    // authenticates. Negative-controlled: on the old code s2 !== s1 AND s1 is destroyed.
+    const jar8 = {};
+    await login(jar8);                 // fresh login (anon→auth) — this one DOES regenerate
+    const s1 = jar8.wmt_session;
+    await login(jar8);                 // 2nd login carrying s1 (the double-login POST)
+    const s2 = jar8.wmt_session;       // unchanged on the fix (no Set-Cookie emitted)
+    const idKept = !!s1 && !!s2 && s1 === s2;
+    const c8 = await req('GET', '/api/auth.php?action=check', { jar: { wmt_session: s1 } });
+    const s1StillValid = /"logged_in":true/.test(c8.body);
+    if (idKept && s1StillValid) ok('T8: same-user re-login keeps the id + original cookie still authenticates');
+    else bad('T8: idempotent re-login', `idKept=${idKept} (s1=${s1} s2=${s2}), s1StillValid=${s1StillValid}`);
 
     // T5: loop with a persistent jar — every login sticks
     let stuck = 0; const N = 20;
