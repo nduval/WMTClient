@@ -5663,9 +5663,9 @@ function replayBuffer(session) {
 // Session-only credentials live ONLY in session._ftp.creds (in memory) — never
 // persisted (the persist payloads are explicit and don't include _ftp) and never
 // logged (FTP_CONNECT logs the ftpUser, never the password). A basic-ftp Client is
-// opened lazily and reused across ops for the session. TRIAL: gated to mimic only.
+// opened lazily and reused across ops for the session. Gated to wizards.
 function ftpEditorAllowed(session) {
-  return !!session && session.isWizard && ['mimic', 'crolack', 'turnhold'].includes(effectiveCharName(session).toLowerCase());
+  return !!session && session.isWizard;
 }
 async function ftpEnsureClient(session) {
   const st = session._ftp;

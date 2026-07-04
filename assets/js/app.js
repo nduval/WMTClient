@@ -5166,11 +5166,11 @@ class WMTClient {
     // Server-side proxy does the FTP (basic-ftp → 3k.org:3001). This is the UI:
     // account form → file pane (lazy ftp_list) → line-numbered editor (find/replace)
     // → Save (ftp_put). Password is session-only (never stored); username is opt-in
-    // "Remember name" in localStorage. Gated to mimic for the trial.
+    // "Remember name" in localStorage. Gated to wizards.
     cmdFtpEdit() {
         const cfg = window.WMT_CONFIG || {};
-        if (!(cfg.isWizard && ['mimic', 'crolack', 'turnhold'].includes((cfg.characterName || '').toLowerCase()))) {
-            this.appendOutput('#ftpedit is in trial for mimic, crolack and turnhold only.', 'error');
+        if (!cfg.isWizard) {
+            this.appendOutput('#ftpedit is available to wizards only.', 'error');
             return;
         }
         if (!this.connection || !this.connection.connected) {
