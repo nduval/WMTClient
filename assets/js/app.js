@@ -5169,8 +5169,8 @@ class WMTClient {
     // "Remember name" in localStorage. Gated to mimic for the trial.
     cmdFtpEdit() {
         const cfg = window.WMT_CONFIG || {};
-        if (!(cfg.isWizard && ['mimic', 'crolack'].includes((cfg.characterName || '').toLowerCase()))) {
-            this.appendOutput('#ftpedit is in trial for mimic and crolack only.', 'error');
+        if (!(cfg.isWizard && ['mimic', 'crolack', 'turnhold'].includes((cfg.characterName || '').toLowerCase()))) {
+            this.appendOutput('#ftpedit is in trial for mimic, crolack and turnhold only.', 'error');
             return;
         }
         if (!this.connection || !this.connection.connected) {
