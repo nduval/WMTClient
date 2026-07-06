@@ -262,6 +262,10 @@ class MudConnection {
         return this.send('set_functions', { functions });
     }
 
+    setEvents(events) {
+        return this.send('set_events', { events });
+    }
+
     setMip(enabled, mipId, debug = false) {
         return this.send('set_mip', { enabled, mipId, debug });
     }

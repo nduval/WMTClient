@@ -260,6 +260,17 @@ class MockMudSession {
                 this.sendLine(parts.slice(1).join(' '));
                 break;
 
+            case '__emitline': {
+                // Emit text with an EXPLICIT leading-space count: `__emitline <n> <text>`
+                // → n spaces + text. __emit drops indentation (splits on whitespace) and
+                // the command pipeline collapses runs of spaces, so a literal-indent
+                // approach won't survive; the count does. Used to test indent-delimited
+                // block triggers (e.g. IDEA/BUG/TYPO reports with an indented body).
+                const n = parseInt(parts[1]) || 0;
+                this.sendLine(' '.repeat(n) + parts.slice(2).join(' '));
+                break;
+            }
+
             case '__mip':
                 // Send MIP data: __mip V hp=500,maxhp=500,...
                 this.send(mipData(parts[1] || 'V', parts.slice(2).join(' ')));

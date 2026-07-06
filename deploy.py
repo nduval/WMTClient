@@ -404,6 +404,11 @@ def run_test_suites():
         # a fresh login otherwise fires them into the prompt → "Invalid character
         # in position N" → broken login). elminster 2026-06-14. Negative-controlled.
         ('MipNamePromptGuard', 'test_mip_nameprompt_guard.js'),
+        # Server-side #event dispatch (RECEIVED INPUT) — Phase 1 of the single-owner
+        # variable model. Proves the server fires input-reset events on its own side so
+        # $idle resets where the ticker lives (was: reset ran only in the browser and lost
+        # to the server's ticker → $idle off by tens of minutes). Negative-controlled.
+        ('InputEventDispatch', 'test_input_event_dispatch.js'),
         # Map dead-reckoning (glitch/maplib.js): proves ID-less uniform-grid areas
         # (Mahjongg/Aegis) track by the direction moved, that `look` HOLDS position
         # (no orange↔green bounce), + blocked/cold-start/ambiguous/boundary cases.

@@ -766,6 +766,7 @@ class WMTClient {
         this.sendDiscordPrefsToServer();
         this.syncVariablesToServer();
         this.syncFunctionsToServer();
+        this.syncEventsToServer();
         // Send packet_patch preference to server
         const ppVal = this.preferences.packetPatch ?? 1.0;
         this.connection.send('set_packet_patch', { value: ppVal });
@@ -14507,6 +14508,16 @@ class WMTClient {
     syncFunctionsToServer() {
         if (this.connection) {
             this.connection.setFunctions(this.functions);
+        }
+    }
+
+    // Sync #event handlers to the server so events fire on the AUTHORITATIVE side.
+    // The server dispatches RECEIVED INPUT on genuine input, so input-reset variables
+    // (e.g. $idle via `#EVENT {RECEIVED INPUT}{#var idle 0}`) reset server-side instead
+    // of losing to the server's own ticker value. See job_single_owner_variable_model.
+    syncEventsToServer() {
+        if (this.connection) {
+            this.connection.setEvents(this.eventHandlers || {});
         }
     }
 

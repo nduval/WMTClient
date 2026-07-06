@@ -5093,6 +5093,48 @@ function startTicker(session, ticker) {
 }
 
 /**
+ * Dispatch a TinTin++ #event server-side (e.g. RECEIVED INPUT).
+ *
+ * Runs each registered handler body through the SAME executor tickers use
+ * (expandCommandWithAliases → serverProcessInlineCommand), so inline #var/#math
+ * take effect on the server (session.variables) and push a var_update to the browser.
+ * This is what lets input-reset variables like $idle reset on the AUTHORITATIVE side —
+ * previously `#EVENT {RECEIVED INPUT}{#var idle 0}` ran only in the browser and its reset
+ * lost to the server's own idle-ticker value (the divergence in
+ * job_single_owner_variable_model / bug_serverside_end_idle_active_kick).
+ *
+ * session.events is synced from the client via set_events, shape
+ * { EVENTNAME: [ {body}, ... ] } with upper-cased names. `arg` binds %0/%1 like the client.
+ */
+function dispatchServerEvent(session, eventName, arg) {
+  if (!session || !session.events) return;
+  const handlers = session.events[String(eventName).toUpperCase()];
+  if (!Array.isArray(handlers) || handlers.length === 0) return;
+  for (const h of handlers) {
+    let body = (h && h.body) || '';
+    if (!body) continue;
+    // Bind the event argument to %0/%1 (not %10, %11, …), matching client fireEvent().
+    if (arg !== undefined && arg !== null && arg !== '') {
+      const a = String(arg);
+      body = body.replace(/%0(?!\d)/g, a).replace(/%1(?!\d)/g, a);
+    }
+    const expanded = expandCommandWithAliases(body, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+    expanded.forEach(cmd => {
+      const repeatMatch = cmd.match(/^#(\d+)\s+(.+)$/);
+      if (repeatMatch) {
+        executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+      } else if (cmd.startsWith('#')) {
+        // Inline #var/#math already executed during expansion (server side effect +
+        // var_update push); forward the rest to the browser for its own copy.
+        sendToClient(session, { type: 'client_command', command: cmd });
+      } else if (session.mudSocket && !session.mudSocket.destroyed) {
+        mudSendExpanded(session, cmd);
+      }
+    });
+  }
+}
+
+/**
  * Stop a single ticker's interval
  */
 function stopTicker(session, tickerId) {
@@ -6511,11 +6553,18 @@ function flushPendingBab(session, channel) {
  */
 // ────────────────────────────────────────────────────────────────────────
 // Block triggers — buffer multi-line MUD output that's semantically one
-// thing (e.g. ring identify) so triggers can match patterns spanning
-// MUD-side line wraps. A trigger with both `blockStart` and `blockEnd`
-// regexes becomes a block trigger: its `actions` run on the joined buffer
-// when the end pattern is observed, then the (possibly modified) buffered
-// lines are flushed to the client. Lines outside any block flow normally.
+// thing so triggers can match/forward content spanning MUD-side line wraps.
+// A trigger with `blockStart` becomes a block trigger, in one of two modes:
+//   • explicit-end  (blockStart + blockEnd): buffer until the end pattern is
+//     observed (that end line is included), e.g. ring-identify.
+//   • indent-cont.  (blockStart only): buffer the header plus following indented
+//     (or blank) lines; the first non-indented line ends the block (exclusive)
+//     and passes through normally. Delimited by the text's own indentation, so
+//     no footer pattern is needed — used for IDEA/BUG/TYPO reports.
+// On flush, the trigger's actions run on the joined block: `highlight` re-marks
+// the joined text, and `discord`/`chatmon` forward a tidied copy (see
+// tidyReportBlock). Then the buffered lines are flushed to the client. Lines
+// outside any block flow normally.
 //
 // Per-session state lives in session.activeBlocks: Map<triggerId, {lines, startedAt}>.
 // Stale buffers (no end within BLOCK_TIMEOUT_MS) flush as-is on the next
@@ -6543,13 +6592,59 @@ function compileBlockRegex(pattern, useTinTin) {
   }
 }
 
+// Dedent + reflow an indented report block (IDEA/BUG/TYPO and similar) into a
+// compact message for Discord/ChatMon: the header with its -== ==- rule stripped
+// (and, when it matches the "<TYPE> REPORT : <who> has reported a <kind> at <when>"
+// shape, compacted to "<TYPE> REPORT: <who> @ <when>"), a `File:` line kept on its
+// own, and the MUD-word-wrapped body reflowed back into one paragraph. Leading and
+// trailing blank lines are dropped. Purely cosmetic — the raw lines still render on
+// the player's screen; only the forwarded copy is tidied.
+function tidyReportBlock(buffered) {
+  let ls = buffered.map(l => stripAnsi(l).replace(/\s+$/g, ''));
+  while (ls.length && ls[0].trim() === '') ls.shift();
+  while (ls.length && ls[ls.length - 1].trim() === '') ls.pop();
+  if (!ls.length) return '';
+  let header = ls[0].replace(/^\s*-+=+\s*/, '').replace(/\s*=+-+\s*$/, '').trim();
+  const hm = header.match(/^(.*?REPORT)\s*:\s*(.+?)\s+has reported\s+an?\s+\S+\s+at\s+(.+)$/i);
+  if (hm) header = `${hm[1]}: ${hm[2]} @ ${hm[3]}`;
+  const out = [header];
+  let para = [];
+  const flushPara = () => { if (para.length) { out.push(para.join(' ')); para = []; } };
+  for (let i = 1; i < ls.length; i++) {
+    const t = ls[i].trim();
+    if (t === '') { flushPara(); continue; }
+    if (/^File\s*:/i.test(t)) { flushPara(); out.push(t); continue; }
+    para.push(t);
+  }
+  flushPara();
+  return out.join('\n');
+}
+
 function flushBlockTriggerBuffer(session, trigger, buffered) {
+  // Forward the joined block to Discord/ChatMon (runs ONCE for the whole block,
+  // unlike the per-line path). The message is the tidied block unless the action
+  // carries a `%block` template. Any other action.message (e.g. a leftover
+  // per-line %1 template) is ignored here since %1 captures don't apply to a block.
+  const forwards = (trigger.actions || []).filter(a => a.type === 'discord' || a.type === 'chatmon');
+  if (forwards.length) {
+    const tidied = tidyReportBlock(buffered);
+    for (const action of forwards) {
+      const hasTemplate = action.message && action.message.includes('%block');
+      let msg = hasTemplate ? action.message.replace(/%block/g, tidied) : tidied;
+      msg = substituteUserVariables(msg, session.variables || {}, session.functions || {});
+      if (action.type === 'discord') {
+        if (action.webhookUrl && msg) sendToDiscordWebhook(action.webhookUrl, msg, session.discordUsername);
+      } else {
+        if (msg) sendToClient(session, { type: 'trigger_chatmon', message: msg, channel: action.channel || 'trigger' });
+      }
+    }
+  }
+
   // Apply each highlight action to the joined block. Other action types
   // (command, gag, etc.) are intentionally NOT applied here — block
-  // triggers in this iteration are scoped to highlight only. Adding
-  // command/gag for blocks would require deciding where the side-effect
-  // happens (per-line? once for whole block?) and isn't needed for the
-  // ring-identify case driving this build.
+  // triggers are scoped to highlight (+ the discord/chatmon forwarding above).
+  // Adding command/gag for blocks would require deciding where the side-effect
+  // happens (per-line? once for whole block?) and isn't needed yet.
   let joined = buffered.join('\n');
   const matchRegex = compileBlockRegex(trigger.pattern, true);
 
@@ -6609,28 +6704,59 @@ function processBlockTriggers(session, line) {
     }
   }
 
+  // Indentation of the CURRENT line, computed on the ANSI-stripped text so a
+  // leading color code doesn't hide a leading space. Used by indent-mode blocks.
+  const stripped = stripAnsi(line);
+  const isBlank = stripped.trim() === '';
+  const isIndented = /^[ \t]/.test(stripped);
+
   let consumed = false;
   for (const trigger of session.triggers) {
     if (!trigger || trigger.enabled === false) continue;
-    if (!trigger.blockStart || !trigger.blockEnd) continue;
+    if (!trigger.blockStart) continue;
 
+    // Two block modes:
+    //   explicit-end  (blockStart + blockEnd): buffer until a line matches the end
+    //                 pattern; that end line is INCLUDED in the block.
+    //   indent-cont.  (blockStart only): buffer the header plus following indented
+    //                 (or blank) lines; the first NON-indented line ends the block,
+    //                 is NOT part of it, and passes through normally. Delimited by
+    //                 the text's own structure, so no end pattern is needed — this
+    //                 is what captures IDEA/BUG/TYPO reports (indented body, no footer).
+    const indentMode = !trigger.blockEnd;
     const startRx = compileBlockRegex(trigger.blockStart, true);
-    const endRx   = compileBlockRegex(trigger.blockEnd,   true);
-    if (!startRx || !endRx) continue;
+    if (!startRx) continue;
+    const endRx = indentMode ? null : compileBlockRegex(trigger.blockEnd, true);
+    if (!indentMode && !endRx) continue;
 
     const block = session.activeBlocks.get(trigger.id);
     if (block) {
-      // Active — append and check for end.
-      block.lines.push(line);
-      consumed = true;
-      if (endRx.test(line)) {
-        flushBlockTriggerBuffer(session, trigger, block.lines);
-        session.activeBlocks.delete(trigger.id);
+      if (indentMode) {
+        if (isIndented || isBlank) {
+          block.lines.push(line);
+          consumed = true;
+        } else {
+          // Non-indented line terminates the block (exclusive) — flush what we have
+          // and let this line fall through to the start-check / normal output below.
+          flushBlockTriggerBuffer(session, trigger, block.lines);
+          session.activeBlocks.delete(trigger.id);
+        }
+      } else {
+        // Explicit-end mode: append and check for the end pattern.
+        block.lines.push(line);
+        consumed = true;
+        if (endRx.test(line)) {
+          flushBlockTriggerBuffer(session, trigger, block.lines);
+          session.activeBlocks.delete(trigger.id);
+        }
       }
-    } else if (startRx.test(line)) {
-      // Activate. If end matches the same line, flush immediately (1-line block).
-      if (endRx.test(line)) {
-        flushBlockTriggerBuffer(session, trigger, [line]);
+    }
+
+    // Start check — also reached on the line that just terminated an indent block,
+    // so back-to-back reports each start cleanly.
+    if (!session.activeBlocks.has(trigger.id) && startRx.test(line)) {
+      if (!indentMode && endRx.test(line)) {
+        flushBlockTriggerBuffer(session, trigger, [line]);   // 1-line explicit block
       } else {
         session.activeBlocks.set(trigger.id, { lines: [line], startedAt: now });
       }
@@ -8009,6 +8135,15 @@ wss.on('connection', (ws, req) => {
           if (session.mudSocket && !session.mudSocket.destroyed) {
             writeSessionLog(session, 'input', { cmd: data.command || '' });
 
+            // Fire RECEIVED INPUT server-side so input-reset variables reset on the
+            // authoritative side. Previously this event ran only in the browser and its
+            // $idle reset lost to the server's ticker → $idle climbed to tens of minutes
+            // even while idle. Skip at the name prompt (login typing isn't gameplay input).
+            // See job_single_owner_variable_model.
+            if (!session._atNamePrompt) {
+              dispatchServerEvent(session, 'RECEIVED INPUT', data.command || '');
+            }
+
             // Deferred login audit state machine — see detectMudEvents
             // comment block for the full sequence. Two phases here:
             //   Phase 1: at password prompt → this input IS the password,
@@ -8382,6 +8517,15 @@ wss.on('connection', (ws, req) => {
 
         case 'set_functions':
           session.functions = data.functions || {};
+          break;
+
+        case 'set_events':
+          // TinTin++ #event handlers, synced from the client so events can fire on the
+          // AUTHORITATIVE (server) side. Shape: { EVENTNAME: [ {body}, ... ] } (upper-cased
+          // names, matching the client's this.eventHandlers). Enables server-side
+          // RECEIVED INPUT dispatch → input-reset vars like $idle reset server-side instead
+          // of losing to the server's own ticker value. See job_single_owner_variable_model.
+          session.events = data.events || {};
           break;
 
         case 'set_mip':
@@ -9303,10 +9447,11 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
 
   for (const trigger of sorted) {
     if (!trigger.enabled) continue;
-    // Block triggers (have both blockStart and blockEnd) are handled
-    // by processBlockTriggers, not the per-line pipeline. Skip them
-    // here so their actions don't fire on each individual line.
-    if (trigger.blockStart && trigger.blockEnd) continue;
+    // Block triggers are handled by processBlockTriggers, not the per-line
+    // pipeline. Skip them here so their actions don't fire on each individual
+    // line. A trigger is a block trigger if it has blockStart — with blockEnd
+    // it's an explicit end-pattern block; without, an indent-continuation block.
+    if (trigger.blockStart) continue;
 
     // Check for trigger loop if we have a tracker
     if (loopTracker && trigger.id) {
