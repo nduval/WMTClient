@@ -10585,6 +10585,46 @@ function serverProcessInlineCommand(cmd, session) {
     return true;
   }
 
+  // #var {name[key][key2]} {value} — INDEXED/nested variable SET. The scalar #var below
+  // only matches a bare \w+ name, so an indexed target (e.g. `#VAR {sptracker[spCurrent]}
+  // {$spcur}` in hp.tin) fell through to the client and never took effect server-side —
+  // part of the single-owner parity gap (job_single_owner_variable_model, Phase 2). Stores
+  // nested objects to match the read path's `val[key]` lookups. $var refs inside a bracket
+  // key are resolved (so `#var {x[$i]} {v}` works).
+  const idxVarMatch = trimmed.match(/^#(?:var|variable)\s+\{(\w+(?:\[[^\]]*\])+)\}\s+(.*)/i);
+  if (idxVarMatch) {
+    const fullName = idxVarMatch[1];
+    let value = idxVarMatch[2].trim();
+    if (value.startsWith('{') && value.endsWith('}')) value = value.slice(1, -1);
+    value = substituteUserVariables(value, session.variables || {}, session.functions || {});
+    const parsed = fullName.match(/^(\w+)((?:\[[^\]]*\])+)$/);
+    const base = parsed[1];
+    const resolveKey = (raw) => {
+      let k = raw, iter = 5;
+      while (iter-- > 0) {
+        const before = k;
+        k = k.replace(/\$\{(\w+)\}/g, (m, n) => (session.variables && session.variables[n] !== undefined ? String(session.variables[n]) : m));
+        k = k.replace(/\$(\w+)/g, (m, n) => (session.variables && session.variables[n] !== undefined ? String(session.variables[n]) : m));
+        if (k === before) break;
+      }
+      return k;
+    };
+    const keys = (parsed[2].match(/\[([^\]]*)\]/g) || []).map(b => resolveKey(b.slice(1, -1)));
+    if (!session.variables) session.variables = {};
+    if (typeof session.variables[base] !== 'object' || session.variables[base] === null) session.variables[base] = {};
+    let obj = session.variables[base];
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (typeof obj[keys[i]] !== 'object' || obj[keys[i]] === null) obj[keys[i]] = {};
+      obj = obj[keys[i]];
+    }
+    obj[keys[keys.length - 1]] = value;
+    if (!session._varServerModified) session._varServerModified = {};
+    session._varServerModified[base] = Date.now();
+    // Push the whole base object so the browser's copy matches (var_update replaces the key).
+    sendToClient(session, { type: 'var_update', variables: { [base]: session.variables[base] } });
+    return true;
+  }
+
   // #var {varname} {value}  or  #var varname value  or  #variable ...
   const varMatch = trimmed.match(/^#(?:var|variable)\s+\{?(\w+)\}?\s+(.*)/i);
   if (varMatch) {

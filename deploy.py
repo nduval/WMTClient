@@ -409,6 +409,10 @@ def run_test_suites():
         # $idle resets where the ticker lives (was: reset ran only in the browser and lost
         # to the server's ticker → $idle off by tens of minutes). Negative-controlled.
         ('InputEventDispatch', 'test_input_event_dispatch.js'),
+        # Server-side variable/command engine parity — Phase 2 of the single-owner model.
+        # Grows one case per closed gap (indexed var writes now; ticker-authoring/#list next)
+        # so heal-class trigger bodies run fully server-side against one authoritative store.
+        ('ServerVarEngine', 'test_server_var_engine.js'),
         # Map dead-reckoning (glitch/maplib.js): proves ID-less uniform-grid areas
         # (Mahjongg/Aegis) track by the direction moved, that `look` HOLDS position
         # (no orange↔green bounce), + blocked/cold-start/ambiguous/boundary cases.
