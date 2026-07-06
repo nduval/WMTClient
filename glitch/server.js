@@ -5037,23 +5037,32 @@ function createSession(token) {
  * Update session tickers - clears old intervals and starts new ones for enabled tickers
  */
 function updateSessionTickers(session, tickers) {
+  // Preserve server-authored RUNTIME tickers (created by #ticker in a trigger/event body,
+  // tagged _runtime) that the incoming client set does NOT include — otherwise a client
+  // set_tickers full-replace would wipe a live reset ticker (e.g. the heal $healing/$eheal
+  // timers) mid-flight and re-strand the variable. See job_single_owner_variable_model.
+  const preserved = (session.tickers || []).filter(t =>
+    t && t._runtime && !tickers.some(nt => (nt.id || nt.name) === (t.id || t.name)));
+  const merged = preserved.length ? [...tickers, ...preserved] : tickers;
+
   // Clear all existing intervals
   for (const id in session.tickerIntervals) {
     clearInterval(session.tickerIntervals[id]);
   }
   session.tickerIntervals = {};
 
-  // Store the new tickers array
-  session.tickers = tickers;
+  // Store the merged tickers array
+  session.tickers = merged;
 
   // Start intervals for enabled tickers
-  tickers.forEach(ticker => {
+  merged.forEach(ticker => {
     if (ticker.enabled && ticker.interval > 0) {
       startTicker(session, ticker);
     }
   });
 
-  console.log(`Tickers updated: ${tickers.filter(t => t.enabled).length} active out of ${tickers.length}`);
+  console.log(`Tickers updated: ${merged.filter(t => t.enabled).length} active out of ${merged.length}` +
+    (preserved.length ? ` (+${preserved.length} runtime preserved)` : ''));
 }
 
 /**
@@ -10658,6 +10667,41 @@ function serverProcessInlineCommand(cmd, session) {
     session._varServerModified[varName] = Date.now();
     // Push deletion to client
     sendToClient(session, { type: 'var_update', deleted: [varName] });
+    return true;
+  }
+
+  // #ticker {name} {command} {interval}  — author a server-side ticker at RUNTIME (from a
+  // trigger/event body). Previously #ticker was forwarded to the browser to author; when the
+  // browser raced or was absent the ticker was never created — e.g. the heal reset ticker
+  // `#ticker {healing}{#var healing Off}{5}` never fired → $healing stuck "On" → every heal
+  // gated off (the 2026-07-06 SP-starvation death). Returning true suppresses the
+  // client_command forward (see the handled-gating callers) → the server is the single owner.
+  // Tagged _runtime so a client set_tickers full-replace can't wipe it (updateSessionTickers).
+  const tickerAuthorMatch = trimmed.match(/^#(?:ticker|tick|t)\s+\{([^{}]+)\}\s+\{([\s\S]*)\}\s+\{([^{}]+)\}\s*$/i);
+  if (tickerAuthorMatch) {
+    const name = tickerAuthorMatch[1].trim();
+    const command = tickerAuthorMatch[2];
+    const interval = parseFloat(substituteUserVariables(tickerAuthorMatch[3].trim(), session.variables || {}, session.functions || {})) || 0;
+    if (name && command && interval > 0) {
+      if (!session.tickers) session.tickers = [];
+      stopTicker(session, name);
+      const obj = { id: name, name, command, interval, enabled: true, _runtime: true };
+      const idx = session.tickers.findIndex(t => (t.id || t.name) === name);
+      if (idx >= 0) session.tickers[idx] = obj; else session.tickers.push(obj);
+      startTicker(session, obj);
+    }
+    return true;
+  }
+
+  // #unticker {name}  — remove a ticker (server-authoritative). The heal reset tickers
+  // self-terminate via `#unticker` in their own body, which now runs server-side.
+  const untickerMatch = trimmed.match(/^#unticker\s+\{?([^{}]+?)\}?\s*$/i);
+  if (untickerMatch) {
+    const name = untickerMatch[1].trim();
+    if (name && session.tickers) {
+      stopTicker(session, name);
+      session.tickers = session.tickers.filter(t => (t.id || t.name) !== name);
+    }
     return true;
   }
 
