@@ -10705,6 +10705,71 @@ function serverProcessInlineCommand(cmd, session) {
     return true;
   }
 
+  // #list {var} {option} [args...]  — TinTin++ list ops server-side (was client-only; mutations
+  // forwarded to the browser). Lists are 1-based-keyed objects {1:v,2:v,...} matching the read
+  // path ($list[+N], &list[]). Covers his findtv/findhat usage (create/size) + common ops; unknown
+  // options (sort/order/…) fall through to the client. Part of server-side script parity.
+  const listMatch = trimmed.match(/^#list\s+([\s\S]+)$/i);
+  if (listMatch) {
+    const g = parseBracedArgs(listMatch[1]);
+    if (g.length >= 2) {
+      const varName = g[0];
+      const option = (g[1] || '').toLowerCase();
+      const sub = (s) => substituteUserVariables(s, session.variables || {}, session.functions || {});
+      if (!session.variables) session.variables = {};
+      if (!session._varServerModified) session._varServerModified = {};
+      const toArr = (o) => (typeof o === 'object' && o !== null)
+        ? Object.keys(o).map(k => parseInt(k)).filter(k => !isNaN(k)).sort((a, b) => a - b).map(k => o[k])
+        : (o === undefined ? [] : [o]);
+      const fromArr = (arr) => { const o = {}; arr.forEach((v, i) => { o[i + 1] = v; }); return o; };
+      const resolveIdx = (idx, len) => { const i = parseInt(idx); if (isNaN(i)) return -1; if (i > 0) return i - 1; if (i < 0) return len + i; return -1; };
+      const setVar = (name, value) => { session.variables[name] = value; session._varServerModified[name] = Date.now(); sendToClient(session, { type: 'var_update', variables: { [name]: value } }); };
+      const cur = session.variables[varName];
+      switch (option) {
+        case 'create':
+        case 'add': {
+          const arr = option === 'add' ? toArr(cur) : [];
+          for (let i = 2; i < g.length; i++) sub(g[i]).split(';').forEach(s => { if (s.trim()) arr.push(s.trim()); });
+          setVar(varName, fromArr(arr));
+          return true;
+        }
+        case 'clear': setVar(varName, {}); return true;
+        case 'size': {
+          if (g[2]) setVar(g[2], (typeof cur === 'object' && cur !== null) ? Object.keys(cur).length : (cur !== undefined ? 1 : 0));
+          return true;
+        }
+        case 'get': {
+          const arr = toArr(cur); const idx = resolveIdx(g[2], arr.length);
+          if (g[3]) setVar(g[3], (idx >= 0 && idx < arr.length) ? arr[idx] : '');
+          return true;
+        }
+        case 'find': {
+          const arr = toArr(cur); const item = sub(g[2]); const fi = arr.findIndex(x => x === item);
+          if (g[3]) setVar(g[3], fi >= 0 ? fi + 1 : 0);
+          return true;
+        }
+        case 'delete': {
+          const arr = toArr(cur); const idx = resolveIdx(g[2], arr.length);
+          if (idx >= 0 && idx < arr.length) { arr.splice(idx, 1); setVar(varName, fromArr(arr)); }
+          return true;
+        }
+        case 'insert': {
+          const arr = toArr(cur); let idx = resolveIdx(g[2], arr.length + 1); const item = sub(g[3]);
+          if (idx < 0) idx = 0; if (idx > arr.length) idx = arr.length; arr.splice(idx, 0, item); setVar(varName, fromArr(arr));
+          return true;
+        }
+        case 'set': {
+          const arr = toArr(cur); const idx = resolveIdx(g[2], arr.length); const item = sub(g[3]);
+          if (idx >= 0 && idx < arr.length) { arr[idx] = item; setVar(varName, fromArr(arr)); }
+          return true;
+        }
+        default:
+          return false;   // sort/order/reverse/… — let the client handle (not used in his combat path)
+      }
+    }
+    return false;
+  }
+
   // #ifttt {message}  — fire-and-forget IFTTT Maker webhook (trigger / alias / #read path).
   // Speaker label "wmtclient", message in value3, on the user's 3K event. Consumed even with
   // no key so the command never leaks to the MUD. Typed #ifttt comes via the 'ifttt' WS case.
