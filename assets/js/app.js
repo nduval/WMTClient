@@ -10962,6 +10962,17 @@ class WMTClient {
             }
             await this.saveTickers();
         }
+        // Also send it to the server: tickers authored at RUNTIME by trigger/event
+        // bodies live only server-side, so a typed `#unticker WORLDDROP` (as the
+        // trigger itself instructs) previously matched nothing here and killed
+        // nothing (review F3). The server handles it authoritatively (name match +
+        // wildcards) and only echoes a client_command back when a synced ticker
+        // was removed — a re-sent no-op is not echoed again, so this can't loop.
+        // Skipped during #read bulk loads: the post-read set_tickers sync already
+        // replaces server state, and runtime tickers aren't load-time targets.
+        if (!this._bulkLoading && this.connection && this.connection.connected) {
+            this.connection.sendCommand(`#unticker {${pattern}}`);
+        }
     }
 
     // #delay {seconds} {command} OR #delay {name} {command} {seconds}

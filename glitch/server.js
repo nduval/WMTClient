@@ -5118,12 +5118,19 @@ function createSession(token) {
  */
 function updateSessionTickers(session, tickers) {
   // Preserve server-authored RUNTIME tickers (created by #ticker in a trigger/event body,
-  // tagged _runtime) that the incoming client set does NOT include — otherwise a client
-  // set_tickers full-replace would wipe a live reset ticker (e.g. the heal $healing/$eheal
-  // timers) mid-flight and re-strand the variable. See job_single_owner_variable_model.
-  const preserved = (session.tickers || []).filter(t =>
-    t && t._runtime && !tickers.some(nt => (nt.id || nt.name) === (t.id || t.name)));
-  const merged = preserved.length ? [...tickers, ...preserved] : tickers;
+  // tagged _runtime) across a client set_tickers full-replace — otherwise the replace
+  // would wipe a live reset ticker (e.g. the heal $healing/$eheal timers) mid-flight and
+  // re-strand the variable. A live runtime ticker also SHADOWS a same-NAME incoming
+  // synced ticker (runtime replaced it at author time; re-adding the synced copy would
+  // run both intervals — review F5 double-fire). Compare by NAME: client tickers carry
+  // a random id, runtime tickers use name-as-id. The client's own list and the DB are
+  // untouched — the synced definition just doesn't RUN while the runtime one is live.
+  const tickName = (t) => String((t && (t.name || t.id)) || '');
+  const preserved = (session.tickers || []).filter(t => t && t._runtime);
+  const runtimeNames = new Set(preserved.map(tickName));
+  const merged = preserved.length
+    ? [...tickers.filter(t => !runtimeNames.has(tickName(t))), ...preserved]
+    : tickers;
 
   // Clear existing intervals — EXCEPT live runtime-ticker timers. Re-arming
   // those would reset their phase on every client set_tickers sync (a restored
@@ -10790,23 +10797,49 @@ function serverProcessInlineCommand(cmd, session) {
     const interval = parseFloat(substituteUserVariables(tickerAuthorMatch[3].trim(), session.variables || {}, session.functions || {})) || 0;
     if (name && command && interval > 0) {
       if (!session.tickers) session.tickers = [];
+      // Replace ANY same-NAME ticker, including client-synced ones whose interval
+      // is keyed by their random id — an (id||name) compare missed those, so the
+      // old interval kept running alongside the new one (review F5 double-fire).
+      for (const t of session.tickers) {
+        if (t && String(t.name || t.id || '') === name) stopTicker(session, t.id || t.name);
+      }
       stopTicker(session, name);
+      session.tickers = session.tickers.filter(t => t && String(t.name || t.id || '') !== name);
       const obj = { id: name, name, command, interval, enabled: true, _runtime: true };
-      const idx = session.tickers.findIndex(t => (t.id || t.name) === name);
-      if (idx >= 0) session.tickers[idx] = obj; else session.tickers.push(obj);
+      session.tickers.push(obj);
       startTicker(session, obj);
     }
     return true;
   }
 
-  // #unticker {name}  — remove a ticker (server-authoritative). The heal reset tickers
-  // self-terminate via `#unticker` in their own body, which now runs server-side.
+  // #unticker {name}  — remove ticker(s), server-authoritative. Matches the client's
+  // cmdUnticker semantics (review F4): match by NAME with * / ? wildcards, case-
+  // insensitive. Client-synced tickers carry a random id (ticker_<ts>_<rand>) and
+  // their name in .name — the old exact (id||name) compare could neither wildcard
+  // nor kill those, and stopTicker(name) missed intervals keyed by the random id.
   const untickerMatch = trimmed.match(/^#unticker\s+\{?([^{}]+?)\}?\s*$/i);
   if (untickerMatch) {
-    const name = untickerMatch[1].trim();
-    if (name && session.tickers) {
-      stopTicker(session, name);
-      session.tickers = session.tickers.filter(t => (t.id || t.name) !== name);
+    const pattern = untickerMatch[1].trim();
+    if (pattern && session.tickers && session.tickers.length) {
+      const rx = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+      const matched = session.tickers.filter(t => t && rx.test(String(t.name || t.id || '')));
+      if (matched.length) {
+        let removedSynced = 0;
+        for (const t of matched) {
+          stopTicker(session, t.id || t.name);
+          if (!t._runtime) removedSynced++;
+        }
+        const gone = new Set(matched);
+        session.tickers = session.tickers.filter(t => !gone.has(t));
+        // If a SYNCED (client-defined) ticker was removed, tell the browser to drop
+        // its copy too — otherwise the next set_tickers full-replace resurrects it.
+        // Bounded: a re-sent #unticker that matches nothing removes nothing and is
+        // not forwarded again, so this cannot loop.
+        if (removedSynced > 0) {
+          sendToClient(session, { type: 'client_command', command: `#unticker {${pattern}}` });
+        }
+      }
     }
     return true;
   }
