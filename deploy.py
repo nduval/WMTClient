@@ -16,6 +16,46 @@ from datetime import datetime, timezone
 # Base directory
 BASE_DIR = Path(__file__).parent
 
+# ── Deploy status log + hard command timeouts ────────────────────────────────
+# deploy_status.log is OVERWRITTEN at the start of every run and appended to as
+# the deploy progresses, so an outside observer can always see the current step
+# (the last line) and spot a stall:   tail deploy_status.log
+# run_cmd() wraps every subprocess with a hard timeout: on 2026-07-08 a
+# mid-deploy ssh stalled silently (TCP established, so ConnectTimeout never
+# fired) and hung the run for 10+ minutes with zero output. A stalled command
+# now fails its step loudly (rc=124) and the stall is visible in the log.
+STATUS_FILE = BASE_DIR / 'deploy_status.log'
+_status_t0 = time.time()
+
+def dstatus(msg):
+    """Append a timestamped progress line to deploy_status.log (best-effort)."""
+    try:
+        with open(STATUS_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"+{time.time() - _status_t0:7.1f}s  {msg}\n")
+    except OSError:
+        pass
+
+def dstatus_reset(header):
+    """Start a fresh status log for this run (overwrites the previous run's)."""
+    global _status_t0
+    _status_t0 = time.time()
+    try:
+        ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')
+        STATUS_FILE.write_text(f"deploy started {ts} — {header}\n", encoding='utf-8')
+    except OSError:
+        pass
+
+def run_cmd(cmd, timeout=180, **kw):
+    """subprocess.run with a hard timeout. On expiry: log it, print it, and
+    return rc=124 (coreutils-timeout convention) instead of raising/hanging."""
+    try:
+        return subprocess.run(cmd, timeout=timeout, **kw)
+    except subprocess.TimeoutExpired:
+        snippet = cmd if isinstance(cmd, str) else ' '.join(map(str, cmd))
+        dstatus(f"TIMEOUT after {timeout}s: {snippet[:160]}")
+        print(f"  TIMEOUT after {timeout}s: {snippet[:160]}")
+        return subprocess.CompletedProcess(cmd, 124, stdout='', stderr=f'timeout after {timeout}s')
+
 # Files/folders to deploy to IONOS (PHP client)
 IONOS_DEPLOY_FILES = [
     '.htaccess',
@@ -90,7 +130,7 @@ def deploy_lightsail(target='server', force_bridge=False):
         print("*** Every connected user will experience linkdeath. ***")
 
         # Check how many active sessions bridge is holding
-        check = subprocess.run(
+        check = run_cmd(
             f'{ssh_cmd} "sudo journalctl -u wmt-bridge -n 1 --no-pager -o cat"',
             shell=True, capture_output=True, text=True
         )
@@ -107,14 +147,14 @@ def deploy_lightsail(target='server', force_bridge=False):
         if not local_file.exists():
             print("ERROR: glitch/bridge.js not found")
             return False
-        result = subprocess.run(
+        result = run_cmd(
             f'scp -i "{ssh_key}" "{local_file}" ubuntu@{host}:/tmp/bridge.js',
             shell=True, capture_output=True, text=True
         )
         if result.returncode != 0:
             print(f"SCP failed: {result.stderr}")
             return False
-        result = subprocess.run(
+        result = run_cmd(
             f'{ssh_cmd} "sudo cp /tmp/bridge.js /opt/wmt/bridge.js && sudo chown wmt:wmt /opt/wmt/bridge.js && sudo systemctl restart wmt-bridge"',
             shell=True, capture_output=True, text=True
         )
@@ -127,6 +167,7 @@ def deploy_lightsail(target='server', force_bridge=False):
     # Default: deploy server.js (+ its local modules). server.js requires ./maplib,
     # so both must land before the restart or the service crash-loops on a missing module.
     print("\n=== Deploying server.js to Lightsail (SSH) ===")
+    dstatus("prod: pushing server.js + modules")
     local_file = BASE_DIR / 'glitch' / 'server.js'
     if not local_file.exists():
         print("ERROR: glitch/server.js not found")
@@ -137,7 +178,7 @@ def deploy_lightsail(target='server', force_bridge=False):
         if not mp.exists():
             print(f"ERROR: glitch/{m} not found")
             return False
-        result = subprocess.run(
+        result = run_cmd(
             f'scp -i "{ssh_key}" "{mp}" ubuntu@{host}:/tmp/{m}',
             shell=True, capture_output=True, text=True
         )
@@ -145,7 +186,8 @@ def deploy_lightsail(target='server', force_bridge=False):
             print(f"SCP failed ({m}): {result.stderr}")
             return False
     cp_cmds = ' && '.join(f'sudo cp /tmp/{m} /opt/wmt/{m} && sudo chown wmt:wmt /opt/wmt/{m}' for m in server_modules)
-    result = subprocess.run(
+    dstatus("prod: installing + restarting wmt-server")
+    result = run_cmd(
         f'{ssh_cmd} "{cp_cmds} && sudo systemctl restart wmt-server"',
         shell=True, capture_output=True, text=True
     )
@@ -155,11 +197,12 @@ def deploy_lightsail(target='server', force_bridge=False):
 
     # Verify it started
     time.sleep(2)
-    result = subprocess.run(
+    result = run_cmd(
         f'{ssh_cmd} "systemctl is-active wmt-server"',
         shell=True, capture_output=True, text=True
     )
     status = result.stdout.strip()
+    dstatus(f"prod: wmt-server {status}")
     if status == 'active':
         print("server.js deployed and service running.")
     else:
@@ -183,7 +226,8 @@ def deploy_test_server():
 
     ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
 
-    result = subprocess.run(
+    dstatus("sandbox: pushing server.js")
+    result = run_cmd(
         f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local_file}" ubuntu@{host}:/tmp/server.js',
         shell=True, capture_output=True, text=True
     )
@@ -192,9 +236,10 @@ def deploy_test_server():
         return False
 
     # server.js requires ./maplib — push it too (and it's require()d by test_map_reckon.js).
+    dstatus("sandbox: pushing maplib.js + map_overrides.json")
     _maplib_local = BASE_DIR / 'glitch' / 'maplib.js'
     if _maplib_local.exists():
-        r = subprocess.run(
+        r = run_cmd(
             f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_maplib_local}" ubuntu@{host}:/tmp/maplib.js',
             shell=True, capture_output=True, text=True
         )
@@ -208,7 +253,7 @@ def deploy_test_server():
     # Push map_overrides.json (server reads it at load for WMT map corrections)
     _ovr_local = BASE_DIR / 'glitch' / 'map_overrides.json'
     if _ovr_local.exists():
-        subprocess.run(
+        run_cmd(
             f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_ovr_local}" ubuntu@{host}:/tmp/map_overrides.json',
             shell=True, capture_output=True, text=True
         )
@@ -218,12 +263,13 @@ def deploy_test_server():
     test_dir = BASE_DIR / 'tests' / 'sandbox'
     if test_dir.exists():
         for tf in test_dir.glob('*.js'):
-            r = subprocess.run(
+            dstatus(f"sandbox: pushing test {tf.name}")
+            r = run_cmd(
                 f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{tf}" ubuntu@{host}:/tmp/{tf.name}',
                 shell=True, capture_output=True, text=True
             )
             if r.returncode == 0:
-                subprocess.run(
+                run_cmd(
                     f'{ssh_cmd} "sudo cp /tmp/{tf.name} /opt/wmt/tests/{tf.name} && sudo chown wmt:wmt /opt/wmt/tests/{tf.name}"',
                     shell=True, capture_output=True, text=True
                 )
@@ -234,12 +280,13 @@ def deploy_test_server():
     for cf in ('app.js', 'connection.js'):
         local_cf = BASE_DIR / 'assets' / 'js' / cf
         if local_cf.exists():
-            r = subprocess.run(
+            dstatus(f"sandbox: pushing client {cf}")
+            r = run_cmd(
                 f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local_cf}" ubuntu@{host}:/tmp/{cf}',
                 shell=True, capture_output=True, text=True
             )
             if r.returncode == 0:
-                subprocess.run(
+                run_cmd(
                     f'{ssh_cmd} "sudo mkdir -p /opt/wmt/assets/js && sudo cp /tmp/{cf} /opt/wmt/assets/js/{cf}"',
                     shell=True, capture_output=True, text=True
                 )
@@ -249,12 +296,13 @@ def deploy_test_server():
     # mode, so /opt/wmt/bridge.js is not used by the running sandbox service.
     _bridge_local = BASE_DIR / 'glitch' / 'bridge.js'
     if _bridge_local.exists():
-        r = subprocess.run(
+        dstatus("sandbox: pushing bridge.js")
+        r = run_cmd(
             f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_bridge_local}" ubuntu@{host}:/tmp/bridge.js',
             shell=True, capture_output=True, text=True
         )
         if r.returncode == 0:
-            subprocess.run(
+            run_cmd(
                 f'{ssh_cmd} "sudo cp /tmp/bridge.js /opt/wmt/bridge.js && sudo chown wmt:wmt /opt/wmt/bridge.js"',
                 shell=True, capture_output=True, text=True
             )
@@ -263,14 +311,15 @@ def deploy_test_server():
     # the REAL includes/+config/+api under `php -S` against a throwaway data dir.
     # Pushed to /opt/wmt/phpsrc. The admin key is stripped on the sandbox so the
     # suite uses the JSON user fallback (no prod DB / no secret left on the box).
-    subprocess.run(f'{ssh_cmd} "rm -rf /tmp/phpsrc && mkdir -p /tmp/phpsrc"',
+    dstatus("sandbox: staging phpsrc (includes/config/api)")
+    run_cmd(f'{ssh_cmd} "rm -rf /tmp/phpsrc && mkdir -p /tmp/phpsrc"',
                    shell=True, capture_output=True, text=True)
     php_ok = True
     for d in ('includes', 'config', 'api'):
         ld = BASE_DIR / d
         if not ld.exists():
             continue
-        r = subprocess.run(
+        r = run_cmd(
             f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -r "{ld}" ubuntu@{host}:/tmp/phpsrc/',
             shell=True, capture_output=True, text=True
         )
@@ -278,7 +327,7 @@ def deploy_test_server():
             php_ok = False
             print(f"  WARNING: PHP src push failed for {d}: {r.stderr.strip()}")
     if php_ok:
-        subprocess.run(
+        run_cmd(
             f'{ssh_cmd} "sudo rm -rf /opt/wmt/phpsrc && sudo mkdir -p /opt/wmt/phpsrc '
             f'&& sudo cp -r /tmp/phpsrc/* /opt/wmt/phpsrc/ '
             f'&& sudo rm -f /opt/wmt/phpsrc/config/render_admin_key.php '
@@ -297,15 +346,16 @@ def deploy_test_server():
         '[ -f /tmp/map_overrides.json ] && sudo cp /tmp/map_overrides.json /opt/wmt/map_overrides.json && sudo chown wmt:wmt /opt/wmt/map_overrides.json || true',
         'sudo systemctl restart wmt-server',
     ]
+    dstatus("sandbox: installing + restarting wmt-server")
     patch_content = '#!/bin/bash\nset -e\n' + '\n'.join(patch_lines) + '\n'
     # Write the script locally, SCP it, run it
     patch_file = BASE_DIR / '.deploy_patch.sh'
     patch_file.write_text(patch_content, newline='\n')
-    subprocess.run(
+    run_cmd(
         f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{patch_file}" ubuntu@{host}:/tmp/deploy_patch.sh',
         shell=True, capture_output=True, text=True
     )
-    result = subprocess.run(
+    result = run_cmd(
         f'{ssh_cmd} "bash /tmp/deploy_patch.sh"',
         shell=True, capture_output=True, text=True
     )
@@ -316,11 +366,12 @@ def deploy_test_server():
 
     # Wait for service to start, then verify
     time.sleep(2)
-    result = subprocess.run(
+    result = run_cmd(
         f'{ssh_cmd} "systemctl is-active wmt-server"',
         shell=True, capture_output=True, text=True
     )
     status = result.stdout.strip()
+    dstatus(f"sandbox: wmt-server {status}")
     if status == 'active':
         print("  Test server deployed and running.")
         return True
@@ -440,11 +491,14 @@ def run_test_suites():
     details = []
     failure_output = {}   # label -> captured stdout+stderr, so a failure is never lost
 
-    for label, script in suites:
+    for idx, (label, script) in enumerate(suites, 1):
+        dstatus(f"gate: {label} [{idx}/{len(suites)}]")
         try:
             # sudo -n: tests like test_entity_guard.js need to read /opt/wmt/wmt.db
             # which is root-owned. -n fails fast if sudo would prompt (NOPASSWD
             # is configured for ubuntu on the sandbox).
+            # Keep raw subprocess.run here: this site has its own TimeoutExpired
+            # handler that records an explicit TIMEOUT row for the suite.
             result = subprocess.run(
                 f'{ssh_cmd} "cd /opt/wmt/tests && sudo -n node {script} ws://localhost:3000"',
                 shell=True, capture_output=True, text=True, timeout=60
@@ -496,6 +550,8 @@ def run_test_suites():
     print(f"  {'':45} {'---':>10}")
     print(f"  {'Total:':45} {total_passed:>2}/{total} passed")
 
+    dstatus(f"gate: done — {total_passed} passed, {total_failed} failed")
+
     # Subtract known/accepted failures so they don't block deploy
     unexpected_failures = max(0, total_failed - KNOWN_FAILURES)
     if total_failed > 0 and unexpected_failures == 0:
@@ -511,7 +567,7 @@ def print_prod_db_health():
     ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
     host = '3.14.128.194'
     try:
-        result = subprocess.run(
+        result = run_cmd(
             f'ssh -i "{ssh_key}" -o ConnectTimeout=15 ubuntu@{host} "cat /opt/wmt/db-stats/latest.txt 2>/dev/null"',
             shell=True, capture_output=True, text=True, timeout=30
         )
@@ -545,6 +601,7 @@ def deploy_ionos(only_files=None):
     try:
         # Connect
         print(f"Connecting to {creds['sftp_host']}...")
+        dstatus("ionos: connecting (sftp)")
         transport = paramiko.Transport((creds['sftp_host'], 22))
         transport.connect(username=creds['sftp_user'], password=creds['sftp_pass'])
         sftp = paramiko.SFTPClient.from_transport(transport)
@@ -618,6 +675,7 @@ def deploy_ionos(only_files=None):
                                     sftp.mkdir(path_to_check)
 
                 print(f"  Uploading {remote_path_unix}...")
+                dstatus(f"ionos: uploading {remote_path_unix}")
                 sftp.put(str(local_full), remote_full)
                 uploaded += 1
 
@@ -642,16 +700,18 @@ def deploy_ionos(only_files=None):
         transport.close()
 
         print(f"Uploaded {uploaded} files to IONOS ({skipped} unchanged, skipped).")
+        dstatus(f"ionos: done — {uploaded} uploaded, {skipped} skipped")
         return True
 
     except Exception as e:
         print(f"SFTP Error: {e}")
+        dstatus(f"FAILED: ionos sftp: {e}")
         return False
 
 def git_commit_before_deploy():
     """Auto-commit tracked changes before deploying (for easy rollback)"""
     # Check for any staged or unstaged changes to tracked files
-    result = subprocess.run(
+    result = run_cmd(
         'git status --porcelain',
         shell=True, capture_output=True, text=True, cwd=str(BASE_DIR)
     )
@@ -706,9 +766,10 @@ def git_commit_before_deploy():
     print(f"  Commit message: {msg}")
 
     # Stage tracked changes only (no untracked files)
-    subprocess.run('git add -u', shell=True, cwd=str(BASE_DIR))
+    dstatus("git: auto-commit")
+    run_cmd('git add -u', shell=True, cwd=str(BASE_DIR))
     # Commit
-    result = subprocess.run(
+    result = run_cmd(
         ['git', 'commit', '-m', msg],
         capture_output=True, text=True, cwd=str(BASE_DIR)
     )
@@ -726,7 +787,7 @@ def log_deploy(target, commit_hash, success):
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     status = 'OK' if success else 'FAILED'
     entry = f'{ts} target={target} commit={commit_hash} status={status}'
-    subprocess.run(
+    run_cmd(
         f'{ssh_cmd} "echo \'{entry}\' | sudo tee -a /var/log/wmt/deploy.log > /dev/null"',
         shell=True, capture_output=True, text=True
     )
@@ -758,13 +819,13 @@ def git_changed_files(baseline):
     if not baseline:
         return None
     files = set()
-    r = subprocess.run(f'git diff --name-only {baseline} HEAD',
+    r = run_cmd(f'git diff --name-only {baseline} HEAD',
                        shell=True, capture_output=True, text=True, cwd=str(BASE_DIR))
     if r.returncode != 0:
         return None
     files.update(l.strip() for l in r.stdout.splitlines() if l.strip())
     # Uncommitted tracked changes (staged + unstaged) vs HEAD
-    r2 = subprocess.run('git diff --name-only HEAD',
+    r2 = run_cmd('git diff --name-only HEAD',
                         shell=True, capture_output=True, text=True, cwd=str(BASE_DIR))
     if r2.returncode == 0:
         files.update(l.strip() for l in r2.stdout.splitlines() if l.strip())
@@ -793,6 +854,9 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='(auto) Show what would deploy without changing anything')
 
     args = parser.parse_args()
+    dstatus_reset(f"target={args.target}"
+                  + (' --force' if args.force else '')
+                  + (' --dry-run' if args.dry_run else ''))
 
     if args.list:
         print("Files deployed to IONOS:")
@@ -807,14 +871,17 @@ def main():
     if args.target == 'test':
         if not deploy_test_server():
             print("\n=== Test deploy failed ===")
+            dstatus("FAILED: sandbox deploy")
             sys.exit(1)
         passed, failed, details = run_test_suites()
         print_prod_db_health()
         if failed > 0:
             print(f"\n=== {failed} test(s) failed ===")
+            dstatus(f"FAILED: {failed} test(s) failed")
             sys.exit(1)
         else:
             print(f"\n=== All {passed} tests passed ===")
+            dstatus(f"DONE: all {passed} tests passed")
         return
 
     # Auto-commit tracked changes before deploying (never during a dry-run)
@@ -822,7 +889,7 @@ def main():
         git_commit_before_deploy()
 
     # Get current commit hash for deploy log
-    commit_result = subprocess.run(
+    commit_result = run_cmd(
         'git rev-parse --short HEAD', shell=True,
         capture_output=True, text=True, cwd=str(BASE_DIR)
     )
@@ -845,6 +912,7 @@ def main():
                     print("  --force specified, proceeding to production anyway.")
                 else:
                     print("  Aborting production deploy. Use --force to override.")
+                    dstatus("FAILED: gate blocked production deploy")
                     sys.exit(1)
         else:
             print("\nWARNING: Test sandbox deploy failed.")
@@ -873,11 +941,13 @@ def main():
                     print("  --force specified, proceeding to production anyway.")
                 else:
                     print("  Aborting production deploy. Use --force to override.")
+                    dstatus("FAILED: gate blocked production deploy")
                     sys.exit(1)
         else:
             print("\nWARNING: Test sandbox deploy failed.")
             if not args.force:
                 print("  Aborting production deploy. Use --force to override.")
+                dstatus("FAILED: sandbox deploy blocked production deploy")
                 sys.exit(1)
         if not deploy_lightsail('server'):
             success = False
@@ -935,9 +1005,11 @@ def main():
                 passed, failed, details = run_test_suites()
                 if failed > 0 and not args.force:
                     print(f"\nWARNING: {failed} sandbox test(s) failed. Aborting. Use --force to override.")
+                    dstatus("FAILED: gate blocked production deploy")
                     sys.exit(1)
             elif not args.force:
                 print("\nWARNING: sandbox deploy failed. Aborting. Use --force to override.")
+                dstatus("FAILED: sandbox deploy blocked production deploy")
                 sys.exit(1)
             if not deploy_lightsail('server'):
                 success = False
@@ -952,8 +1024,10 @@ def main():
 
     if success:
         print("\n=== Deployment complete! ===")
+        dstatus("DONE: deployment complete")
     else:
         print("\n=== Deployment had errors ===")
+        dstatus("FAILED: deployment had errors")
         sys.exit(1)
 
 if __name__ == '__main__':

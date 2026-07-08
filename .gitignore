@@ -75,6 +75,8 @@ db_ids.json
 
 # Smart-deploy state (per-machine last-deployed commit for `deploy.py auto`)
 .deploy_state.json
+# Per-run deploy progress log (overwritten each run; tail it to see the current step)
+deploy_status.log
 
 # DB setup/seed scripts (utility, not deployed via deploy.py)
 glitch/setup_db.js

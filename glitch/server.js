@@ -2064,6 +2064,26 @@ function serializeActiveSessions(includeChat) {
           }
         }
       }
+      // Server-authored RUNTIME tickers (#ticker from a trigger/event body — the
+      // heal reset timers) exist ONLY in this process's memory: never in the
+      // client's set, never in the DB (dbSaveTickers stores the client list).
+      // Without riding the persist payload, a deploy/crash silently kills them
+      // and re-strands $healing/$eheal — the 2026-07-06 death class via the
+      // restart path (review F1). remainingMs preserves the timer's phase across
+      // the restart, same idea as delays above.
+      const serializedRuntimeTickers = [];
+      for (const t of (session.tickers || [])) {
+        if (t && t._runtime && t.command && t.interval > 0) {
+          serializedRuntimeTickers.push({
+            id: t.id || t.name,
+            name: t.name || t.id,
+            command: t.command,
+            interval: t.interval,
+            enabled: t.enabled !== false,
+            remainingMs: t._nextFireAt ? Math.max(0, t._nextFireAt - Date.now()) : undefined
+          });
+        }
+      }
       activeSessions.push({
         userId: session.userId,
         characterId: session.characterId,
@@ -2076,11 +2096,63 @@ function serializeActiveSessions(includeChat) {
         chatBuffer: includeChat ? (session.chatBuffer || []) : [],
         variables: session.variables || {},
         delays: serializedDelays,
+        runtimeTickers: serializedRuntimeTickers,
+        // #event handlers are session-only too (set_events, no DB backing).
+        events: (session.events && Object.keys(session.events).length > 0) ? session.events : undefined,
         actualMudChar: session._actualMudChar || null
       });
     }
   }
   return activeSessions;
+}
+
+/**
+ * Re-arm persisted server-authored runtime state — runtime #ticker timers and
+ * #event handlers — on a restored session, OR on an existing session when the
+ * browser reconnected before restore ran (the RESTORE_SKIP_ACTIVE /
+ * RESTORE_SKIP_BROWSER races, which is the NORMAL deploy case: browsers
+ * reconnect in ~2s, restore runs at 3s). Runtime tickers live only in
+ * wmt-server memory, so before this a restart silently killed live heal-reset
+ * timers → $healing/$eheal stuck → heals gated off (review F1, the 2026-07-06
+ * death class via the deploy path). remainingMs preserves the timer's phase,
+ * capped at one full interval.
+ */
+function restoreRuntimeState(session, ps) {
+  let armed = 0;
+  if (Array.isArray(ps.runtimeTickers) && ps.runtimeTickers.length > 0) {
+    if (!session.tickers) session.tickers = [];
+    for (const rt of ps.runtimeTickers) {
+      const id = rt.id || rt.name;
+      if (!id || !rt.command || !(rt.interval > 0)) continue;
+      // Never clobber a ticker this session already runs under the same id
+      // (e.g. the trigger re-authored it after the browser reconnected).
+      if (session.tickerIntervals && session.tickerIntervals[id]) continue;
+      const obj = { id, name: rt.name || id, command: rt.command, interval: rt.interval, enabled: rt.enabled !== false, _runtime: true };
+      const idx = session.tickers.findIndex(t => (t.id || t.name) === id);
+      if (idx >= 0) session.tickers[idx] = obj; else session.tickers.push(obj);
+      if (obj.enabled) {
+        const intervalMs = obj.interval * 1000;
+        const remaining = Math.min(rt.remainingMs != null ? rt.remainingMs : intervalMs, intervalMs);
+        startTicker(session, obj, remaining);
+        armed++;
+      }
+    }
+  }
+  // Restore #event handlers so headless play / queued input can't run before
+  // they re-arm. A reconnecting browser's set_events refreshes them anyway;
+  // only fill in when the session has none.
+  const hasPersistedEvents = ps.events && Object.keys(ps.events).length > 0;
+  if (hasPersistedEvents && (!session.events || Object.keys(session.events).length === 0)) {
+    session.events = ps.events;
+  }
+  if (armed > 0 || hasPersistedEvents) {
+    logSessionEvent('RESTORE_RUNTIME_STATE', {
+      token: (session.token || '').substring(0, 8),
+      char: session.characterName,
+      runtimeTickers: armed,
+      events: hasPersistedEvents ? Object.keys(ps.events).length : 0
+    });
+  }
 }
 
 // ── Local persisted-session store (PRIMARY; synchronous SQLite) ─────────────
@@ -2769,6 +2841,9 @@ async function restorePersistentSessions() {
         if (ps.chatBuffer && ps.chatBuffer.length > 0 && existing.chatBuffer.length === 0) {
           existing.chatBuffer = ps.chatBuffer;
         }
+        // Re-arm runtime tickers/events the restart dropped — the reconnected
+        // session was rebuilt from the browser, which never knows about them.
+        restoreRuntimeState(existing, ps);
         logSessionEvent('RESTORE_SKIP_ACTIVE', {
           token: ps.token.substring(0, 8),
           char: ps.characterName,
@@ -2793,6 +2868,8 @@ async function restorePersistentSessions() {
             } catch (e) { break; }
           }
         }
+        // Same re-arm as above: the browser-first session has no runtime state.
+        restoreRuntimeState(existing, ps);
         logSessionEvent('RESTORE_SKIP_BROWSER', {
           token: ps.token.substring(0, 8),
           char: ps.characterName,
@@ -2900,6 +2977,9 @@ async function restorePersistentSessions() {
         names: ps.delays.map(d => d.name).join(',')
       });
     }
+
+    // Re-arm server-authored runtime tickers + #event handlers (review F1).
+    restoreRuntimeState(session, ps);
 
     let success = false;
 
@@ -5045,18 +5125,24 @@ function updateSessionTickers(session, tickers) {
     t && t._runtime && !tickers.some(nt => (nt.id || nt.name) === (t.id || t.name)));
   const merged = preserved.length ? [...tickers, ...preserved] : tickers;
 
-  // Clear all existing intervals
+  // Clear existing intervals — EXCEPT live runtime-ticker timers. Re-arming
+  // those would reset their phase on every client set_tickers sync (a restored
+  // 61-min heal reset timer must not restart from zero each reconnect).
+  const keepLive = new Set(preserved
+    .filter(t => session.tickerIntervals[t.id || t.name])
+    .map(t => t.id || t.name));
   for (const id in session.tickerIntervals) {
+    if (keepLive.has(id)) continue;
     clearInterval(session.tickerIntervals[id]);
+    delete session.tickerIntervals[id];
   }
-  session.tickerIntervals = {};
 
   // Store the merged tickers array
   session.tickers = merged;
 
-  // Start intervals for enabled tickers
+  // Start intervals for enabled tickers (live runtime timers keep their phase)
   merged.forEach(ticker => {
-    if (ticker.enabled && ticker.interval > 0) {
+    if (ticker.enabled && ticker.interval > 0 && !keepLive.has(ticker.id || ticker.name)) {
       startTicker(session, ticker);
     }
   });
@@ -5068,7 +5154,7 @@ function updateSessionTickers(session, tickers) {
 /**
  * Start a single ticker's interval
  */
-function startTicker(session, ticker) {
+function startTicker(session, ticker, firstFireMs) {
   if (!ticker.id || !ticker.command || ticker.interval <= 0) return;
 
   // Clear existing interval if any
@@ -5078,7 +5164,11 @@ function startTicker(session, ticker) {
 
   const intervalMs = ticker.interval * 1000;
 
-  session.tickerIntervals[ticker.id] = setInterval(() => {
+  const fire = () => {
+    // Stamp the next fire time BEFORE running the body so the persist snapshot
+    // sees the correct phase even mid-body (used by serializeActiveSessions to
+    // carry runtime tickers across a restart — review F1).
+    ticker._nextFireAt = Date.now() + intervalMs;
     // Only execute if MUD is connected
     if (session.mudSocket && !session.mudSocket.destroyed) {
       // TinTin++: substitute variables at fire time (not creation time)
@@ -5098,7 +5188,23 @@ function startTicker(session, ticker) {
         }
       });
     }
-  }, intervalMs);
+  };
+
+  ticker._nextFireAt = Date.now() + (firstFireMs != null ? firstFireMs : intervalMs);
+  if (firstFireMs != null) {
+    // Restore path: honor the remaining time persisted across a restart, then
+    // fall into the normal repeating interval — unless the body removed the
+    // ticker (#unticker self-termination) or something re-armed it meanwhile.
+    const handle = setTimeout(() => {
+      fire();
+      if (session.tickerIntervals[ticker.id] === handle) {
+        session.tickerIntervals[ticker.id] = setInterval(fire, intervalMs);
+      }
+    }, Math.max(50, firstFireMs));
+    session.tickerIntervals[ticker.id] = handle;
+  } else {
+    session.tickerIntervals[ticker.id] = setInterval(fire, intervalMs);
+  }
 }
 
 /**
