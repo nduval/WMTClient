@@ -283,6 +283,20 @@ async function main() {
       m.type === 'var_update' && m.variables && String(m.variables.evtproof) === '2'), 5000);
     if (gotEvt) ok('T6: #event handlers survived the crash-restart (RECEIVED INPUT fired post-restore)');
     else bad('T6: RECEIVED INPUT after restore', `evtproof updates=${JSON.stringify(cB.msgs.filter(m => m.type === 'var_update' && m.variables && 'evtproof' in m.variables).map(m => m.variables.evtproof))} resumeVars=${JSON.stringify(vars.evtproof)}`);
+
+    // --- T7 (review F2 scenario B): a LEGACY full set_variables push from a ----
+    // stale cached client right after restore must NOT wholesale-delete the
+    // restored state. Restored keys carry future-dated _varServerModified
+    // stamps (~30s protection); before the fix the stamps were empty, so this
+    // empty push deleted every restored variable.
+    cB.send('set_variables', { variables: {} });
+    await sleep(400);
+    const preVu = cB.msgs.filter(m => m.type === 'var_update').length;
+    cB.send('command', { command: '#math survchk $teststate+0' });
+    const gotSurv = await waitFor(() => cB.msgs.slice(preVu).some(m =>
+      m.type === 'var_update' && m.variables && String(m.variables.survchk) === '42'), 5000);
+    if (gotSurv) ok('T7: restored variables survived a legacy empty set_variables push (stamp guard)');
+    else bad('T7: restore stamp guard vs legacy push', `survchk updates=${JSON.stringify(cB.msgs.filter(m => m.type === 'var_update' && m.variables && 'survchk' in m.variables).map(m => m.variables.survchk))}`);
     try { cB.ws.close(); } catch (e) {}
 
   } finally {

@@ -766,7 +766,12 @@ class WMTClient {
         this.sendDiscordPrefsToServer();
         this.syncVariablesToServer();
         this.syncFunctionsToServer();
-        this.syncEventsToServer();
+        // set_events is a full replace with no server-side protection: a fresh
+        // page load pushing {} here (before the startup-script #read registers
+        // handlers) wiped the server's handlers (review F2 / audit window 3).
+        // Only push when we actually have handlers; deliberate deletions sync
+        // immediately via cmdUnevent instead.
+        if (Object.keys(this.eventHandlers || {}).length > 0) this.syncEventsToServer();
         // Send packet_patch preference to server
         const ppVal = this.preferences.packetPatch ?? 1.0;
         this.connection.send('set_packet_patch', { value: ppVal });
@@ -12074,6 +12079,9 @@ class WMTClient {
             this.eventHandlers[eventName] = [];
         }
         this.eventHandlers[eventName].push({ body });
+        // Sync immediately so a runtime #event fires server-side right away —
+        // previously it only reached the server on the next bulk push.
+        this.syncEventsToServer();
         this.appendOutput(`Event handler for ${eventName} added.`, 'system');
     }
 
@@ -12087,6 +12095,9 @@ class WMTClient {
         const eventName = args[0].toUpperCase();
         if (this.eventHandlers[eventName]) {
             delete this.eventHandlers[eventName];
+            // Sync immediately: deliberate deletions must reach the server even
+            // though the connect-time bulk push skips an empty handler set.
+            this.syncEventsToServer();
             this.appendOutput(`Event handlers for ${eventName} removed.`, 'system');
         } else {
             this.appendOutput(`No event handlers for ${eventName}.`, 'error');
@@ -13171,6 +13182,7 @@ class WMTClient {
             if (this.variableClasses[name] === classId) {
                 delete this.variables[name];
                 delete this.variableClasses[name];
+                this._queueVarOp('del', name);
                 removed++;
             }
         }
@@ -13217,15 +13229,14 @@ class WMTClient {
             const lastKey = keys[keys.length - 1];
             if (current && typeof current === 'object' && current[lastKey] !== undefined) {
                 delete current[lastKey];
-                this.syncVariablesToServer();
+                this._queueVarOp('set', name);   // base object changed — sync its new shape
                 if (!this._silent) this.appendOutput('#OK: 1 VARIABLE(S) REMOVED.', 'system');
             }
         } else {
             // Wildcard deletion using matchWild
             const matches = Object.keys(this.variables).filter(v => this.matchWild(v, pattern));
             if (matches.length > 0) {
-                matches.forEach(v => { delete this.variables[v]; delete this.variableClasses[v]; });
-                this.syncVariablesToServer();
+                matches.forEach(v => { delete this.variables[v]; delete this.variableClasses[v]; this._queueVarOp('del', v); });
                 if (!this._silent) this.appendOutput(`#OK: ${matches.length} VARIABLE(S) REMOVED.`, 'system');
             }
         }
@@ -14435,7 +14446,7 @@ class WMTClient {
             this.fireEvent('VARIABLE_UPDATE', name);
             this._firingVariableEvent = false;
         }
-        this.syncVariablesToServer();
+        this._queueVarOp('set', name);
     }
 
     // Get a simple variable
@@ -14472,7 +14483,7 @@ class WMTClient {
             this.fireEvent('VARIABLE_UPDATE', name);
             this._firingVariableEvent = false;
         }
-        this.syncVariablesToServer();
+        this._queueVarOp('set', name);
     }
 
     // Get a nested variable value
@@ -14489,30 +14500,68 @@ class WMTClient {
         return val;
     }
 
-    // Debounced sync of variables to server (prevents flooding during loops).
-    // _varSyncTimer is non-null ONLY while a sync is pending, so _flushPendingVarSync
-    // can tell whether there's unsynced variable state to push before a command.
+    // ── Incremental variable sync (Phase 3 step 1 — review F2) ──────────────
+    // The client used to push its ENTIRE variable store (set_variables full
+    // replace) on a 100ms debounce. Any server-authored variable older than the
+    // server's 2s merge window was overwritten by that push, and keys the client
+    // didn't know were DELETED — the divergence class behind the 2026-07-06
+    // death. The client now sends per-key ops (var_ops {set, del}) for exactly
+    // the keys IT wrote, so it can no longer assert state it didn't touch.
+    // Values are read at SEND time (latest wins within the debounce window).
+    // Ops queue while disconnected and flush after resume via the connect-time
+    // syncVariablesToServer() call in sendFilteredTriggersAndAliases.
+    _queueVarOp(kind, name) {
+        if (!this._pendingVarOps) this._pendingVarOps = { set: new Set(), del: new Set() };
+        if (kind === 'set') { this._pendingVarOps.set.add(name); this._pendingVarOps.del.delete(name); }
+        else { this._pendingVarOps.del.add(name); this._pendingVarOps.set.delete(name); }
+        this.syncVariablesToServer();
+    }
+
+    // Queue a 'set' op and return `this` so it can wrap an assignment in place:
+    //   this._touchVar(name).variables[name] = value;
+    _touchVar(name) {
+        this._queueVarOp('set', name);
+        return this;
+    }
+
+    // Arm the debounced flush. The name predates the incremental protocol and is
+    // kept for its many call sites — it no longer pushes the store; it flushes
+    // whatever ops are queued (a no-op when none are).
     syncVariablesToServer() {
         if (this._varSyncTimer) clearTimeout(this._varSyncTimer);
         this._varSyncTimer = setTimeout(() => {
             this._varSyncTimer = null;
-            if (this.connection) {
-                this.connection.setVariables(this.variables);
-            }
+            this._sendVarOps();
         }, 100);
     }
 
-    // Immediately push any pending (debounced) variable sync. Called before sending
-    // a command so variable state reaches the server BEFORE a command that may
-    // substitute it — preventing the server from expanding e.g. `secstep$secstepnumber`
-    // against a variable that hasn't synced yet. Root fix for the recurring bot-start
-    // variable race. See memory: project_var_sync_flush_before_command.
+    // Send the queued per-key ops. Keys deleted since queueing become deletes;
+    // disconnected → ops stay queued for the post-resume flush.
+    _sendVarOps() {
+        if (!this._pendingVarOps) return;
+        if (!this.connection || !this.connection.connected) return;
+        const del = new Set(this._pendingVarOps.del);
+        const set = {};
+        for (const n of this._pendingVarOps.set) {
+            if (this.variables[n] === undefined) del.add(n);
+            else set[n] = this.variables[n];
+        }
+        this._pendingVarOps = null;
+        if (Object.keys(set).length === 0 && del.size === 0) return;
+        this.connection.send('var_ops', { set, del: [...del] });
+    }
+
+    // Immediately push any pending variable ops. Called before sending a command
+    // so variable state reaches the server BEFORE a command that may substitute
+    // it — preventing the server from expanding e.g. `secstep$secstepnumber`
+    // against a variable that hasn't synced yet. Root fix for the recurring
+    // bot-start variable race. See memory: project_var_sync_flush_before_command.
     _flushPendingVarSync() {
         if (this._varSyncTimer) {
             clearTimeout(this._varSyncTimer);
             this._varSyncTimer = null;
-            if (this.connection) this.connection.setVariables(this.variables);
         }
+        this._sendVarOps();
     }
 
     // Sync functions to server for @func{} resolution in triggers/aliases/tickers
@@ -15059,7 +15108,7 @@ class WMTClient {
                 this.appendOutput('Loop exceeded maximum iterations (1000)', 'error');
                 break;
             }
-            this.variables[varName] = String(i);
+            this._touchVar(varName).variables[varName] = String(i);
             this.executeCommandString(commands);
 
             // Check for #break
@@ -15143,7 +15192,7 @@ class WMTClient {
                 break;
             }
             // Preserve objects for nested table access ($var[key])
-            this.variables[varName] = (typeof item === 'object' && item !== null) ? item : String(item);
+            this._touchVar(varName).variables[varName] = (typeof item === 'object' && item !== null) ? item : String(item);
             this.executeCommandString(commands);
 
             // Check for #break
@@ -15174,10 +15223,10 @@ class WMTClient {
         // Helper: ensure variable is an array (stored as object for TinTin++ compatibility)
         const ensureList = () => {
             if (this.variables[varName] === undefined) {
-                this.variables[varName] = {};
+                this._touchVar(varName).variables[varName] = {};
             } else if (typeof this.variables[varName] !== 'object') {
                 // Convert simple value to single-element list
-                this.variables[varName] = { 1: this.variables[varName] };
+                this._touchVar(varName).variables[varName] = { 1: this.variables[varName] };
             }
             return this.variables[varName];
         };
@@ -15220,13 +15269,13 @@ class WMTClient {
                         if (subItem.trim()) arr.push(subItem.trim());
                     });
                 }
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
             case 'clear': {
                 // #list {var} clear
-                this.variables[varName] = {};
+                this._touchVar(varName).variables[varName] = {};
                 break;
             }
 
@@ -15240,7 +15289,7 @@ class WMTClient {
                         if (subItem.trim()) arr.push(subItem.trim());
                     });
                 }
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15255,7 +15304,7 @@ class WMTClient {
                 const idx = resolveIndex(args[2], arr.length);
                 if (idx >= 0 && idx < arr.length) {
                     arr.splice(idx, 1);
-                    this.variables[varName] = fromArray(arr);
+                    this._touchVar(varName).variables[varName] = fromArray(arr);
                 }
                 break;
             }
@@ -15272,7 +15321,7 @@ class WMTClient {
                 const resultVar = args[3];
                 const foundIdx = arr.findIndex(item => item === searchItem);
                 // Return 1-based index, or 0 if not found
-                this.variables[resultVar] = foundIdx >= 0 ? foundIdx + 1 : 0;
+                this._touchVar(resultVar).variables[resultVar] = foundIdx >= 0 ? foundIdx + 1 : 0;
                 break;
             }
 
@@ -15287,9 +15336,9 @@ class WMTClient {
                 const idx = resolveIndex(args[2], arr.length);
                 const resultVar = args[3];
                 if (idx >= 0 && idx < arr.length) {
-                    this.variables[resultVar] = arr[idx];
+                    this._touchVar(resultVar).variables[resultVar] = arr[idx];
                 } else {
-                    this.variables[resultVar] = '';
+                    this._touchVar(resultVar).variables[resultVar] = '';
                 }
                 break;
             }
@@ -15307,7 +15356,7 @@ class WMTClient {
                 if (idx < 0) idx = 0;
                 if (idx > arr.length) idx = arr.length;
                 arr.splice(idx, 0, item);
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15323,7 +15372,7 @@ class WMTClient {
                 const item = this.substituteVariables(args[3]);
                 if (idx >= 0 && idx < arr.length) {
                     arr[idx] = item;
-                    this.variables[varName] = fromArray(arr);
+                    this._touchVar(varName).variables[varName] = fromArray(arr);
                 }
                 break;
             }
@@ -15337,11 +15386,11 @@ class WMTClient {
                 const list = this.variables[varName];
                 const resultVar = args[2];
                 if (typeof list === 'object' && list !== null) {
-                    this.variables[resultVar] = Object.keys(list).length;
+                    this._touchVar(resultVar).variables[resultVar] = Object.keys(list).length;
                 } else if (list !== undefined) {
-                    this.variables[resultVar] = 1;
+                    this._touchVar(resultVar).variables[resultVar] = 1;
                 } else {
-                    this.variables[resultVar] = 0;
+                    this._touchVar(resultVar).variables[resultVar] = 0;
                 }
                 break;
             }
@@ -15362,7 +15411,7 @@ class WMTClient {
                 } else {
                     arr.sort((a, b) => String(a).localeCompare(String(b)));
                 }
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15378,7 +15427,7 @@ class WMTClient {
                     if (!isNaN(numB)) return 1;
                     return String(a).localeCompare(String(b));
                 });
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15387,7 +15436,7 @@ class WMTClient {
                 const list = ensureList();
                 const arr = toArray(list);
                 arr.reverse();
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15400,7 +15449,7 @@ class WMTClient {
                     const j = Math.floor(Math.random() * (i + 1));
                     [arr[i], arr[j]] = [arr[j], arr[i]];
                 }
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15413,7 +15462,7 @@ class WMTClient {
                 const list = ensureList();
                 const arr = toArray(list);
                 const resultVar = args[2];
-                this.variables[resultVar] = arr.join(';');
+                this._touchVar(resultVar).variables[resultVar] = arr.join(';');
                 break;
             }
 
@@ -15425,7 +15474,7 @@ class WMTClient {
                 }
                 const stringVal = this.substituteVariables('$' + args[2]);
                 const arr = stringVal.split(';').map(s => s.trim()).filter(s => s.length > 0);
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15437,7 +15486,7 @@ class WMTClient {
                 }
                 const str = this.substituteVariables(args[2]);
                 const arr = str.split('');
-                this.variables[varName] = fromArray(arr);
+                this._touchVar(varName).variables[varName] = fromArray(arr);
                 break;
             }
 
@@ -15453,7 +15502,7 @@ class WMTClient {
                     // Silently do nothing — TinTin++ doesn't error on missing list in scripts
                     return;
                 }
-                this.variables[varName] = JSON.parse(JSON.stringify(srcVal));
+                this._touchVar(varName).variables[varName] = JSON.parse(JSON.stringify(srcVal));
                 break;
             }
 
@@ -15473,7 +15522,7 @@ class WMTClient {
                         indices.push(idx + 1); // 1-based
                     }
                 });
-                this.variables[resultVar] = fromArray(indices);
+                this._touchVar(resultVar).variables[resultVar] = fromArray(indices);
                 break;
             }
 
@@ -15489,7 +15538,7 @@ class WMTClient {
                 const idx2 = resolveIndex(args[3], arr.length);
                 if (idx1 >= 0 && idx1 < arr.length && idx2 >= 0 && idx2 < arr.length) {
                     [arr[idx1], arr[idx2]] = [arr[idx2], arr[idx1]];
-                    this.variables[varName] = fromArray(arr);
+                    this._touchVar(varName).variables[varName] = fromArray(arr);
                 }
                 break;
             }
@@ -15505,7 +15554,7 @@ class WMTClient {
                 } else {
                     const list = ensureList();
                     const arr = toArray(list);
-                    this.variables[varName] = fromArray(arr);
+                    this._touchVar(varName).variables[varName] = fromArray(arr);
                 }
                 break;
             }
@@ -15518,7 +15567,7 @@ class WMTClient {
                     const num = Number(item);
                     return (!isNaN(num) && String(item).trim() !== '') ? num : item;
                 });
-                this.variables[varName] = fromArray(numerated);
+                this._touchVar(varName).variables[varName] = fromArray(numerated);
                 break;
             }
 
@@ -15532,9 +15581,9 @@ class WMTClient {
                 const arr = toArray(list);
                 const resultVar = args[2];
                 if (arr.length === 1) {
-                    this.variables[resultVar] = arr[0];
+                    this._touchVar(resultVar).variables[resultVar] = arr[0];
                 } else {
-                    this.variables[resultVar] = fromArray(arr);
+                    this._touchVar(resultVar).variables[resultVar] = fromArray(arr);
                 }
                 break;
             }

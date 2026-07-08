@@ -42,9 +42,12 @@ const P = WMTClient.prototype;
 function makeFake() {
   return {
     variables: {}, variableClasses: {}, currentScriptClass: null, _silent: true,
+    _pendingVarOps: null, _varSyncTimer: null,
     appendOutput() {}, syncVariablesToServer() { this._synced = true; },
     parseVariableName: P.parseVariableName,
     setNestedVariable(name, keys, value) { this.variables[name] = value; },
+    _queueVarOp: P._queueVarOp,      // removeVariablesForClass queues per-key deletes (review F2)
+    _touchVar: P._touchVar,
     cmdVar: P.cmdVar,
     removeVariablesForClass: P.removeVariablesForClass,
   };
@@ -77,6 +80,8 @@ check('class var is removed from variables', !('secstepnumber' in f.variables));
 check('class var is removed from variableClasses', !('secstepnumber' in f.variableClasses));
 check('a different class\'s var is untouched', f.variables.othersbots === 7);
 check('an untagged var is untouched', f.variables.globalvar === '5');
+check('the removal queued a per-key delete op (var_ops protocol)',
+  !!(f._pendingVarOps && f._pendingVarOps.del.has('secstepnumber')));
 
 console.log(`=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);

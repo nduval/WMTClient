@@ -46,15 +46,32 @@ def dstatus_reset(header):
         pass
 
 def run_cmd(cmd, timeout=180, **kw):
-    """subprocess.run with a hard timeout. On expiry: log it, print it, and
-    return rc=124 (coreutils-timeout convention) instead of raising/hanging."""
+    """subprocess.run-alike with a hard timeout that kills the CHILD TREE.
+
+    Plain subprocess.run(timeout=) is NOT enough on Windows with shell=True:
+    on expiry Python kills only the shell wrapper, then blocks forever draining
+    output pipes still held open by the orphaned ssh/scp grandchild. That is
+    how the 2026-07-08 overnight run froze for ~21 hours with the timeout never
+    appearing to fire. taskkill /T takes the grandchildren with it, releasing
+    the pipes so the timeout path actually completes and logs.
+    On expiry: logs to the status file and returns rc=124 (coreutils style)."""
+    if kw.pop('capture_output', False):
+        kw['stdout'] = subprocess.PIPE
+        kw['stderr'] = subprocess.PIPE
+    p = subprocess.Popen(cmd, **kw)
     try:
-        return subprocess.run(cmd, timeout=timeout, **kw)
+        out, err = p.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, p.returncode, stdout=out, stderr=err)
     except subprocess.TimeoutExpired:
+        subprocess.run(f'taskkill /F /T /PID {p.pid}', shell=True, capture_output=True)
+        try:
+            out, err = p.communicate(timeout=10)
+        except Exception:
+            out, err = ('', '')
         snippet = cmd if isinstance(cmd, str) else ' '.join(map(str, cmd))
         dstatus(f"TIMEOUT after {timeout}s: {snippet[:160]}")
         print(f"  TIMEOUT after {timeout}s: {snippet[:160]}")
-        return subprocess.CompletedProcess(cmd, 124, stdout='', stderr=f'timeout after {timeout}s')
+        return subprocess.CompletedProcess(cmd, 124, stdout=out or '', stderr=(err or '') + f'\ntimeout after {timeout}s')
 
 # Files/folders to deploy to IONOS (PHP client)
 IONOS_DEPLOY_FILES = [
@@ -122,7 +139,7 @@ def deploy_lightsail(target='server', force_bridge=False):
     """Deploy to Lightsail via SSH"""
     ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
     host = '3.14.128.194'
-    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no ubuntu@{host}'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 ubuntu@{host}'
 
     if target == 'bridge':
         print("\n=== Deploying bridge.js to Lightsail (SSH) ===")
@@ -224,11 +241,11 @@ def deploy_test_server():
         print("  ERROR: glitch/server.js not found")
         return False
 
-    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 ubuntu@{host}'
 
     dstatus("sandbox: pushing server.js")
     result = run_cmd(
-        f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local_file}" ubuntu@{host}:/tmp/server.js',
+        f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{local_file}" ubuntu@{host}:/tmp/server.js',
         shell=True, capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -240,7 +257,7 @@ def deploy_test_server():
     _maplib_local = BASE_DIR / 'glitch' / 'maplib.js'
     if _maplib_local.exists():
         r = run_cmd(
-            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_maplib_local}" ubuntu@{host}:/tmp/maplib.js',
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{_maplib_local}" ubuntu@{host}:/tmp/maplib.js',
             shell=True, capture_output=True, text=True
         )
         if r.returncode != 0:
@@ -254,7 +271,7 @@ def deploy_test_server():
     _ovr_local = BASE_DIR / 'glitch' / 'map_overrides.json'
     if _ovr_local.exists():
         run_cmd(
-            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_ovr_local}" ubuntu@{host}:/tmp/map_overrides.json',
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{_ovr_local}" ubuntu@{host}:/tmp/map_overrides.json',
             shell=True, capture_output=True, text=True
         )
 
@@ -265,7 +282,7 @@ def deploy_test_server():
         for tf in test_dir.glob('*.js'):
             dstatus(f"sandbox: pushing test {tf.name}")
             r = run_cmd(
-                f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{tf}" ubuntu@{host}:/tmp/{tf.name}',
+                f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{tf}" ubuntu@{host}:/tmp/{tf.name}',
                 shell=True, capture_output=True, text=True
             )
             if r.returncode == 0:
@@ -282,7 +299,7 @@ def deploy_test_server():
         if local_cf.exists():
             dstatus(f"sandbox: pushing client {cf}")
             r = run_cmd(
-                f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local_cf}" ubuntu@{host}:/tmp/{cf}',
+                f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{local_cf}" ubuntu@{host}:/tmp/{cf}',
                 shell=True, capture_output=True, text=True
             )
             if r.returncode == 0:
@@ -298,7 +315,7 @@ def deploy_test_server():
     if _bridge_local.exists():
         dstatus("sandbox: pushing bridge.js")
         r = run_cmd(
-            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{_bridge_local}" ubuntu@{host}:/tmp/bridge.js',
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{_bridge_local}" ubuntu@{host}:/tmp/bridge.js',
             shell=True, capture_output=True, text=True
         )
         if r.returncode == 0:
@@ -320,7 +337,7 @@ def deploy_test_server():
         if not ld.exists():
             continue
         r = run_cmd(
-            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -r "{ld}" ubuntu@{host}:/tmp/phpsrc/',
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 -r "{ld}" ubuntu@{host}:/tmp/phpsrc/',
             shell=True, capture_output=True, text=True
         )
         if r.returncode != 0:
@@ -352,7 +369,7 @@ def deploy_test_server():
     patch_file = BASE_DIR / '.deploy_patch.sh'
     patch_file.write_text(patch_content, newline='\n')
     run_cmd(
-        f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{patch_file}" ubuntu@{host}:/tmp/deploy_patch.sh',
+        f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{patch_file}" ubuntu@{host}:/tmp/deploy_patch.sh',
         shell=True, capture_output=True, text=True
     )
     result = run_cmd(
@@ -385,7 +402,7 @@ def run_test_suites():
     print("\n=== Running test suites on sandbox ===")
     ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
     host = '18.225.235.28'
-    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 ubuntu@{host}'
 
     # Known test failures that are accepted and should not block deploy.
     KNOWN_FAILURES = 0
@@ -464,6 +481,10 @@ def run_test_suites():
         # Grows one case per closed gap (indexed var writes now; ticker-authoring/#list next)
         # so heal-class trigger bodies run fully server-side against one authoritative store.
         ('ServerVarEngine', 'test_server_var_engine.js'),
+        # Incremental variable sync (review F2 / Phase 3 step 1): var_ops {set,del}
+        # applies per-key server-side and CANNOT clobber/delete server-authored
+        # state the client didn't touch — the legacy full-store 2s-merge-cliff fix.
+        ('VarOps', 'test_var_ops.js'),
         # Map dead-reckoning (glitch/maplib.js): proves ID-less uniform-grid areas
         # (Mahjongg/Aegis) track by the direction moved, that `look` HOLDS position
         # (no orange↔green bounce), + blocked/cold-start/ambiguous/boundary cases.
@@ -493,19 +514,18 @@ def run_test_suites():
 
     for idx, (label, script) in enumerate(suites, 1):
         dstatus(f"gate: {label} [{idx}/{len(suites)}]")
-        try:
-            # sudo -n: tests like test_entity_guard.js need to read /opt/wmt/wmt.db
-            # which is root-owned. -n fails fast if sudo would prompt (NOPASSWD
-            # is configured for ubuntu on the sandbox).
-            # Keep raw subprocess.run here: this site has its own TimeoutExpired
-            # handler that records an explicit TIMEOUT row for the suite.
-            result = subprocess.run(
-                f'{ssh_cmd} "cd /opt/wmt/tests && sudo -n node {script} ws://localhost:3000"',
-                shell=True, capture_output=True, text=True, timeout=60
-            )
-        except subprocess.TimeoutExpired:
+        # sudo -n: tests like test_entity_guard.js need to read /opt/wmt/wmt.db
+        # which is root-owned. -n fails fast if sudo would prompt (NOPASSWD
+        # is configured for ubuntu on the sandbox).
+        # run_cmd tree-kills on timeout (rc=124) — a wedged ssh can't deadlock
+        # the gate the way the 2026-07-08 overnight run did.
+        result = run_cmd(
+            f'{ssh_cmd} "cd /opt/wmt/tests && sudo -n node {script} ws://localhost:3000"',
+            shell=True, capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 124:
             details.append((label, script, 0, 0, 'TIMEOUT'))
-            failure_output[label] = '(timed out after 60s — no output captured)'
+            failure_output[label] = (result.stdout or '') + '\n(timed out after 60s)'
             total_failed += 1
             continue
 
@@ -783,7 +803,7 @@ def log_deploy(target, commit_hash, success):
     """Append a line to the deploy log on Lightsail (always, even with no code changes)"""
     ssh_key = Path.home() / '.ssh' / 'wmt-client-socket.pem'
     host = '3.14.128.194'
-    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no ubuntu@{host}'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 ubuntu@{host}'
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     status = 'OK' if success else 'FAILED'
     entry = f'{ts} target={target} commit={commit_hash} status={status}'

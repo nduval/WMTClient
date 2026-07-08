@@ -2107,6 +2107,38 @@ function serializeActiveSessions(includeChat) {
 }
 
 /**
+ * Merge persisted variables a browser-won session is missing (review F2 /
+ * client-audit window 3). When the browser reconnects before restore runs, the
+ * RESTORE_SKIP_ACTIVE / RESTORE_SKIP_BROWSER paths used to DROP ps.variables
+ * entirely — a hard refresh racing a deploy lost server-authored bot/heal
+ * state. Existing keys win (they are newer client writes); missing keys are
+ * restored, stamped against legacy full-sync clobber, and pushed to the
+ * browser as a var_update so its view catches up.
+ */
+function restoreMissingVariables(session, ps) {
+  if (!ps.variables) return;
+  if (!session.variables) session.variables = {};
+  const restored = {};
+  for (const k of Object.keys(ps.variables)) {
+    if (!(k in session.variables)) {
+      session.variables[k] = ps.variables[k];
+      restored[k] = ps.variables[k];
+    }
+  }
+  const keys = Object.keys(restored);
+  if (keys.length === 0) return;
+  session._varServerModified = session._varServerModified || {};
+  const protectUntil = Date.now() + 28000;
+  for (const k of keys) session._varServerModified[k] = protectUntil;
+  sendToClient(session, { type: 'var_update', variables: restored });
+  logSessionEvent('RESTORE_VARS_MERGED', {
+    token: (session.token || '').substring(0, 8),
+    char: session.characterName,
+    count: keys.length
+  });
+}
+
+/**
  * Re-arm persisted server-authored runtime state — runtime #ticker timers and
  * #event handlers — on a restored session, OR on an existing session when the
  * browser reconnected before restore ran (the RESTORE_SKIP_ACTIVE /
@@ -2844,6 +2876,7 @@ async function restorePersistentSessions() {
         // Re-arm runtime tickers/events the restart dropped — the reconnected
         // session was rebuilt from the browser, which never knows about them.
         restoreRuntimeState(existing, ps);
+        restoreMissingVariables(existing, ps);
         logSessionEvent('RESTORE_SKIP_ACTIVE', {
           token: ps.token.substring(0, 8),
           char: ps.characterName,
@@ -2870,6 +2903,7 @@ async function restorePersistentSessions() {
         }
         // Same re-arm as above: the browser-first session has no runtime state.
         restoreRuntimeState(existing, ps);
+        restoreMissingVariables(existing, ps);
         logSessionEvent('RESTORE_SKIP_BROWSER', {
           token: ps.token.substring(0, 8),
           char: ps.characterName,
@@ -2896,6 +2930,14 @@ async function restorePersistentSessions() {
     // Phase 1: restore persisted session state
     if (ps.variables && Object.keys(ps.variables).length > 0) {
       session.variables = ps.variables;
+      // Transition guard (review F2 scenario B): after a restart the
+      // _varServerModified stamps are empty, so a stale cached LEGACY client's
+      // first full set_variables push would wholesale-replace restored bot/heal
+      // state. Future-dated stamps protect restored keys for ~30s (the
+      // reconnect burst); new clients send var_ops and never clobber.
+      session._varServerModified = {};
+      const protectUntil = Date.now() + 28000;
+      for (const k of Object.keys(ps.variables)) session._varServerModified[k] = protectUntil;
     }
     if (ps.actualMudChar) {
       session._actualMudChar = ps.actualMudChar;
@@ -8608,7 +8650,29 @@ wss.on('connection', (ws, req) => {
           }
           break;
 
+        case 'var_ops':
+          // Incremental per-key variable sync (Phase 3 step 1 — review F2).
+          // New clients send ops for exactly the keys THEY wrote instead of the
+          // legacy full-store set_variables push, so a client can no longer
+          // overwrite or delete server-authored state it didn't touch (the 2s
+          // merge cliff). Last-write-wins per key, matching TinTin's sequential
+          // semantics; races shrink from "any var >2s old" to ~100ms same-key.
+          {
+            if (!session.variables) session.variables = {};
+            const set = (data.set && typeof data.set === 'object') ? data.set : {};
+            for (const key of Object.keys(set)) {
+              session.variables[key] = set[key];
+            }
+            const del = Array.isArray(data.del) ? data.del : [];
+            for (const key of del) delete session.variables[key];
+            if (Object.keys(set).length || del.length) {
+              writeSessionLog(session, 'settings', { what: 'var_ops', set: Object.keys(set), del });
+            }
+          }
+          break;
+
         case 'set_variables':
+          // LEGACY full-store push (cached clients only — new clients send var_ops).
           // Merge client variables instead of wholesale replace.
           // Protect variables recently modified server-side (by #math/#var in
           // trigger/alias expansion) from being overwritten by stale client sync.

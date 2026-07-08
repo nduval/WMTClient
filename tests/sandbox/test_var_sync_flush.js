@@ -2,25 +2,20 @@
  * Variable-sync flush-before-command test (client-side) — ROOT fix for the
  * recurring bot-start race ("There is no reason to 'secstep$secstepnumber' here").
  *
- * Root cause (from prod logs): syncVariablesToServer() debounces 100ms, so a
- * client-set var (secon's `#var secstepnumber 1`) reached the server AFTER the
- * dependent command (secwalk). The server then expanded `secstep$secstepnumber`
- * against a variable that hadn't synced yet → literal → "no reason."
- *
- * Fix: the command-send wrapper calls _flushPendingVarSync() before every command,
- * pushing pending variable state first so the server has it before it substitutes.
- *
- * This loads the REAL app.js (vm sandbox, browser globals mocked) and asserts:
- *   - a pending var sync is flushed (setVariables sent) when a command is about to go
- *   - the flush happens BEFORE the command (ordering)
- *   - no pending sync → flush is a no-op (no spurious setVariables)
- *   - after a debounced sync fires, _varSyncTimer is cleared (so flush state is accurate)
+ * 2026-07-08 (review F2 / Phase 3 step 1): the client no longer pushes its whole
+ * variable store — it queues per-key ops (_queueVarOp) and sends `var_ops
+ * {set, del}` for exactly the keys IT wrote. This suite asserts the new contract:
+ *   - a queued write is flushed (var_ops sent) before a command, with the LATEST value
+ *   - ONLY queued keys are sent — unqueued store keys are NOT asserted (the F2 fix:
+ *     the client can no longer clobber/delete server state it didn't touch)
+ *   - deletes are transported; a set-then-deleted key degrades to a delete
+ *   - no queued ops → flush sends nothing
+ *   - disconnected → ops stay queued (flushed after resume, not lost)
  *
  * Run: node test_var_sync_flush.js [/path/to/app.js]
  */
 const fs = require('fs');
 const vm = require('vm');
-// Accept an explicit path; ignore the gate's ws:// arg and use the synced sandbox copy.
 const _arg = process.argv[2];
 const APP_JS = (_arg && !_arg.startsWith('ws')) ? _arg : '/opt/wmt/assets/js/app.js';
 
@@ -44,58 +39,73 @@ const check = (n, c) => { if (c) { pass++; console.log('  PASS: ' + n); } else {
 
 const P = loadWMTClient().prototype;
 
-// Fake `this` recording connection calls in order, with controllable timers.
-function makeFake() {
+function makeFake(connected = true) {
   const calls = [];
-  const fake = {
+  return {
     variables: {},
     _varSyncTimer: null,
-    _pendingTimerToken: 0,
+    _pendingVarOps: null,
     connection: {
-      setVariables(v) { calls.push({ op: 'setVariables', vars: { ...v } }); },
+      connected,
+      send(type, data) { calls.push({ op: type, data: JSON.parse(JSON.stringify(data)) }); },
       sendCommand(c) { calls.push({ op: 'command', cmd: c }); },
     },
-    // timers: setTimeout returns a token and does NOT auto-fire (sync stays pending)
-    _setTimeout() { return ++this._pendingTimerToken; },
+    _queueVarOp: P._queueVarOp,
+    _touchVar: P._touchVar,
     syncVariablesToServer: P.syncVariablesToServer,
+    _sendVarOps: P._sendVarOps,
     _flushPendingVarSync: P._flushPendingVarSync,
     calls,
   };
-  return fake;
 }
 
 console.log('=== VarSyncFlush ===');
 
-// Patch global timers used by the prototype methods (they were captured from the
-// vm sandbox, so override on the fake by wrapping the methods' timer calls):
-// syncVariablesToServer uses setTimeout/clearTimeout from its closure (the vm
-// sandbox's no-op ones). To make a sync "pending", set _varSyncTimer manually.
-
-// 1. pending sync is flushed before a command, with the latest vars
+// 1. queued write flushed before a command, with the LATEST value
 let f = makeFake();
-f.variables = { secstepnumber: '1', other: 'x' };
-f._varSyncTimer = 99;            // simulate a pending debounced sync
-f._flushPendingVarSync();
-const sv = f.calls.find(c => c.op === 'setVariables');
-check('pending sync flushed (setVariables sent)', !!sv);
-check('flushed vars include the just-set secstepnumber=1', sv && sv.vars.secstepnumber === '1');
-check('_varSyncTimer cleared after flush', f._varSyncTimer === null);
-
-// 2. ordering: flush happens before the command (mirrors the sendCommand wrapper)
-f = makeFake();
-f.variables = { secstepnumber: '1' };
-f._varSyncTimer = 99;
-f._flushPendingVarSync();                 // wrapper does this first
-f.connection.sendCommand('secwalk');      // then the command
-const iVars = f.calls.findIndex(c => c.op === 'setVariables');
+f.variables = { secstepnumber: '0', serverOwned: '99' };
+f._queueVarOp('set', 'secstepnumber');
+f.variables.secstepnumber = '1';           // value changes after queueing
+f._flushPendingVarSync();                  // the sendCommand wrapper does this first
+f.connection.sendCommand('secwalk');       // then the command
+const ops = f.calls.filter(c => c.op === 'var_ops');
+check('queued write flushed as var_ops', ops.length === 1);
+check('flushed op carries the LATEST value (secstepnumber=1)', !!(ops[0] && ops[0].data.set && ops[0].data.set.secstepnumber === '1'));
+const iOps = f.calls.findIndex(c => c.op === 'var_ops');
 const iCmd = f.calls.findIndex(c => c.op === 'command');
-check('variables are sent BEFORE the command', iVars >= 0 && iCmd >= 0 && iVars < iCmd);
+check('var_ops sent BEFORE the command', iOps >= 0 && iCmd >= 0 && iOps < iCmd);
 
-// 3. no pending sync → flush is a no-op (no spurious setVariables)
+// 2. F2 core: unqueued store keys are NOT asserted
+check('unqueued key (serverOwned) NOT in the op', !!(ops[0] && !('serverOwned' in ops[0].data.set)));
+check('no deletes asserted for keys the client did not touch', !!(ops[0] && ops[0].data.del.length === 0));
+
+// 3. deletes transported; set-then-deleted degrades to delete
 f = makeFake();
-f._varSyncTimer = null;
+f.variables = { a: '1', b: '2' };
+f._queueVarOp('del', 'a');
+f._queueVarOp('set', 'b');
+delete f.variables.b;                      // deleted after being queued as set
 f._flushPendingVarSync();
-check('no pending sync → no spurious setVariables', !f.calls.some(c => c.op === 'setVariables'));
+const op3 = f.calls.find(c => c.op === 'var_ops');
+check('delete op transported', !!(op3 && op3.data.del.includes('a')));
+check('set-then-deleted key degrades to delete', !!(op3 && op3.data.del.includes('b') && !('b' in op3.data.set)));
+
+// 4. nothing queued → flush sends nothing
+f = makeFake();
+f._flushPendingVarSync();
+check('no queued ops → no var_ops message', !f.calls.some(c => c.op === 'var_ops'));
+
+// 5. disconnected → ops retained, not lost
+f = makeFake(false);
+f.variables = { x: '5' };
+f._queueVarOp('set', 'x');
+f._flushPendingVarSync();
+check('disconnected → nothing sent', !f.calls.some(c => c.op === 'var_ops'));
+check('disconnected → ops stay queued for the post-resume flush', !!(f._pendingVarOps && f._pendingVarOps.set.has('x')));
+f.connection.connected = true;
+f._flushPendingVarSync();
+const op5 = f.calls.find(c => c.op === 'var_ops');
+check('reconnect flush delivers the retained op', !!(op5 && op5.data.set.x === '5'));
 
 console.log(`=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);
