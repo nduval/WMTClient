@@ -45,6 +45,29 @@ def dstatus_reset(header):
     except OSError:
         pass
 
+def _timeout_autopsy():
+    """Record ssh/scp process state + TCP connection states to the deploy hosts
+    BEFORE the tree-kill. Both 2026-07-08 silent hangs were killed without
+    capturing this, so the underlying stall cause is UNPROVEN (correlation:
+    both were Claude-launched detached background runs; hundreds of interactive
+    runs never hung). A recurrence must leave evidence, not another theory."""
+    try:
+        t = subprocess.run('tasklist /FI "IMAGENAME eq ssh.exe" & tasklist /FI "IMAGENAME eq scp.exe"',
+                           shell=True, capture_output=True, text=True, timeout=15)
+        for row in (t.stdout or '').splitlines():
+            if 'ssh.exe' in row or 'scp.exe' in row:
+                dstatus(f"AUTOPSY proc: {row.strip()}")
+        n = subprocess.run('netstat -ano', shell=True, capture_output=True, text=True, timeout=15)
+        for row in (n.stdout or '').splitlines():
+            if '18.225.235.28' in row or '3.14.128.194' in row:
+                dstatus(f"AUTOPSY tcp: {row.strip()}")
+    except Exception as e:
+        try:
+            dstatus(f"AUTOPSY failed: {e}")
+        except Exception:
+            pass
+
+
 def run_cmd(cmd, timeout=180, **kw):
     """subprocess.run-alike with a hard timeout that kills the CHILD TREE.
 
@@ -63,6 +86,7 @@ def run_cmd(cmd, timeout=180, **kw):
         out, err = p.communicate(timeout=timeout)
         return subprocess.CompletedProcess(cmd, p.returncode, stdout=out, stderr=err)
     except subprocess.TimeoutExpired:
+        _timeout_autopsy()
         subprocess.run(f'taskkill /F /T /PID {p.pid}', shell=True, capture_output=True)
         try:
             out, err = p.communicate(timeout=10)

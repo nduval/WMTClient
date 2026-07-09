@@ -1376,6 +1376,8 @@ class WMTClient {
             case 'ftp_saved':     this._onFtpSaved(data); break;
             case 'ftp_mkdir_ok':  this._onFtpMkdirOk(data); break;
             case 'ftp_deleted':   this._onFtpDeleted(data); break;
+            case 'ftp_renamed':   this._onFtpRenamed(data); break;
+            case 'ftp_rmdir_ok':  this._onFtpRmdirOk(data); break;
 
             case 'bot_status': {
                 const prevActive = this.botState.active;
@@ -5247,7 +5249,11 @@ class WMTClient {
         if (!user || !pass) { document.getElementById('ftp-acct-status').textContent = 'Username and password required.'; return; }
         if (remember) localStorage.setItem('wmt_ftp_user', user); else localStorage.removeItem('wmt_ftp_user');
         document.getElementById('ftp-acct-status').textContent = 'Connecting…';
-        this._ftp = { connected: false, cwd: '.', curFile: null, dirty: false };
+        // RE-connect (idle drop → Reconnect) keeps the browsing/editing context — cwd,
+        // open file, dirty flag — so Save still knows its target after re-login. Only a
+        // fresh connect (no prior state, e.g. after explicit Disconnect) starts clean.
+        if (this._ftp) this._ftp.connected = false;
+        else this._ftp = { connected: false, cwd: '.', curFile: null, dirty: false };
         this.connection.send('ftp_connect', { user, pass });   // password used once; never stored
     }
 
@@ -5258,13 +5264,14 @@ class WMTClient {
         const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = ''; foot.style.color = ''; }   // clear any "connection lost" banner
         this._ftpShowWorkspace();
         this.appendOutput(`FTP connected as ${data.user}.`, 'system');
-        this.connection.send('ftp_list', { path: '.' });
+        this.connection.send('ftp_list', { path: this._ftp.cwd || '.' });   // return to where the wizard was (preserved across a reconnect)
     }
 
     _onFtpError(data) {
         if (this._ftpUlQueue || this._ftpDelQueue || this._ftpDlQueue) {   // a failed op closes the FTP connection server-side — stop the batch
             this._ftpUlQueue = null; this._ftpDelQueue = null; this._ftpDlQueue = null;
         }
+        this._ftpXfer = null;   // disarm any pending to-local intercept — a stale one would misroute the next open of that file into a silent disk write
         const raw = String(data.message || 'unknown');
         // Humanize the worst raw library messages; the rest pass through as-is.
         const human = /launched a task|client is closed/i.test(raw) ? 'FTP was busy — please try again'
@@ -5304,12 +5311,12 @@ class WMTClient {
             const li = document.createElement('li');
             li.className = 'ftp-item ' + (e.type === 'dir' ? 'ftp-dir' : 'ftp-file');
             const full = this._ftpJoin(data.path, e.name);
-            if (e.type === 'file') {
+            if (e.type === 'file' || e.type === 'dir') {   // dirs are checkable too — for rename + empty-folder delete (transfers stay files-only)
                 const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'ftp-check';
                 cb.addEventListener('click', (ev) => ev.stopPropagation());
                 cb.addEventListener('change', () => this._ftpUpdateXfer());
                 li.appendChild(cb);
-                this._ftpRows.push({ name: e.name, path: full, cb });
+                this._ftpRows.push({ name: e.name, path: full, cb, type: e.type });
             } else { li.appendChild(this._paneSpacer()); }
             const nm = document.createElement('span'); nm.className = 'ftp-name';
             nm.textContent = (e.type === 'dir' ? '📁 ' : '📄 ') + e.name;
@@ -5613,14 +5620,19 @@ class WMTClient {
             li.addEventListener('click', () => { this._local.stack.push(this._local.dir); this._local.dir = h; this._localRender(); });
             ul.appendChild(li);
         }
-        for (const [name, h] of files) {
+        // Stat all files at once — a serial await per file made big folders list slowly.
+        const metas = await Promise.all(files.map(async ([, h]) => {
+            try { const f = await h.getFile(); return { size: f.size, lastMod: f.lastModified }; } catch (e) { return { size: 0, lastMod: 0 }; }
+        }));
+        for (let fi = 0; fi < files.length; fi++) {
+            const [name, h] = files[fi];
             const li = document.createElement('li'); li.className = 'ftp-item ftp-file';
             const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'ftp-check';
             cb.addEventListener('click', (e) => e.stopPropagation());
             cb.addEventListener('change', () => this._localUpdateXfer());
             li.appendChild(cb);
             const n = document.createElement('span'); n.className = 'ftp-name'; n.textContent = '📄 ' + name; li.appendChild(n);
-            let size = 0, lastMod = 0; try { const f = await h.getFile(); size = f.size; lastMod = f.lastModified; } catch (e) {}
+            const { size, lastMod } = metas[fi];
             const ds = this._ftpFmtDate(lastMod);
             if (ds) { const dt = document.createElement('span'); dt.className = 'ftp-date'; dt.textContent = ds; dt.title = ds; li.appendChild(dt); }
             const sz = document.createElement('span'); sz.className = 'ftp-size'; sz.textContent = this._ftpFmtSize(size); li.appendChild(sz);
@@ -5734,16 +5746,26 @@ class WMTClient {
         if (btn) { btn.disabled = !n || !(this._ftp && this._ftp.connected); btn.textContent = n ? `Copy ${n} → FTP` : 'Check a box, then copy → FTP'; }
     }
     _ftpUpdateXfer() {
-        const n = (this._ftpRows || []).filter(r => r.cb.checked).length;
+        const n = (this._ftpRows || []).filter(r => r.cb.checked && r.type !== 'dir').length;   // only FILES transfer; checked dirs are for rename/delete
         const lbl = document.getElementById('ftp-tree-selcount'); if (lbl) lbl.textContent = n + ' selected';
         const btn = document.getElementById('ftp-tree-xfer');
         if (btn) { btn.disabled = !n || !(this._local && this._local.dir); btn.textContent = n ? `Copy ${n} ← Local` : 'Check a box, then copy ← Local'; }   // FTP is on the right, Local on the left → arrow points left
+    }
+    // One confirm per transfer, and it NAMES any files that already exist on the other
+    // side — a stale-version clobber is as destructive as the empty-write the guards
+    // catch, just quieter (feedback_guard_destructive_file_writes).
+    _xferConfirm(count, destDesc, clobber) {
+        let msg = 'Copy ' + count + ' file(s) to ' + destDesc + '?';
+        if (clobber.length) msg += '\n\n⚠ OVERWRITES ' + clobber.length + ' existing file(s): ' + clobber.join(', ');
+        return window.confirm(msg);
     }
     async _xferLocalToFtp() {
         if (!this._ftp || !this._ftp.connected) { this._ftpFootMsg('Connect FTP first.', '#caa300'); return; }
         const sel = (this._localRows || []).filter(r => r.cb.checked);
         if (!sel.length) return;
-        if (!window.confirm('Copy ' + sel.length + ' file(s) to the FTP folder ' + (this._ftp.cwd || '.') + '?')) return;
+        const ftpNames = new Set((this._ftpRows || []).filter(r => r.type !== 'dir').map(r => r.name));   // current FTP listing = what a copy would overwrite
+        const clobber = sel.filter(r => ftpNames.has(r.name)).map(r => r.name);
+        if (!this._xferConfirm(sel.length, 'the FTP folder ' + (this._ftp.cwd || '.'), clobber)) return;
         const items = [];
         for (const r of sel) {   // local reads are fine to do up front; the FTP uploads must be one-at-a-time
             try {
@@ -5769,9 +5791,11 @@ class WMTClient {
     }
     _xferFtpToLocal() {
         if (!this._local || !this._local.dir) { this._ftpFootMsg('Open a local folder first.', '#caa300'); return; }
-        const sel = (this._ftpRows || []).filter(r => r.cb.checked);
+        const sel = (this._ftpRows || []).filter(r => r.cb.checked && r.type !== 'dir');
         if (!sel.length) return;
-        if (!window.confirm('Copy ' + sel.length + ' file(s) to your local folder?')) return;
+        const localNames = new Set((this._localRows || []).map(r => r.name));
+        const clobber = sel.filter(r => localNames.has(r.name)).map(r => r.name);
+        if (!this._xferConfirm(sel.length, 'your local folder', clobber)) return;
         this._ftpDlQueue = sel.map(r => ({ path: r.path, name: r.name }));
         this._ftpDlDir = this._local.dir;
         this._ftpDlTotal = this._ftpDlQueue.length;
@@ -5955,8 +5979,8 @@ class WMTClient {
         this.connection.send('ftp_put', { path: this._ftp.curFile, content: val, allowEmpty: !val });   // user already confirmed via _ftpGuardEmpty
     }
 
+    // NOTE: the caller (_ftpSave compare branch) already ran _ftpGuardEmpty — no second confirm here.
     async _ftpWriteLocalHandle(handle, text) {
-        if (!this._ftpGuardEmpty(text, handle && handle.name)) { this._ftpUpdateSaveBtn('dirty'); return; }
         try {
             const w = await handle.createWritable(); await w.write(text); await w.close();
             this._ftpCmpDirty = false; this._ftpUpdateSaveBtn('saved');
@@ -5973,28 +5997,79 @@ class WMTClient {
         this._ftpRefresh();   // so a newly-created file shows up without a manual refresh
     }
 
-    // Delete the currently-open file (with confirm). Files only (DELE), not dirs.
+    // Delete the checked items (or the open file, with confirm). Files via DELE;
+    // folders via RMD, which only removes EMPTY folders — the server refuses otherwise.
     _ftpDelete() {
         if (!this._ftp || !this._ftp.connected) return;
         const checked = (this._ftpRows || []).filter(r => r.cb.checked);
-        if (checked.length) {   // delete all checked files, ONE at a time (see _ftpDelNext)
-            if (!window.confirm(`Delete ${checked.length} file(s) from the MUD?\n\nThis permanently removes them and cannot be undone.`)) return;
-            this._ftpDelQueue = checked.map(r => r.path); this._ftpDelDone = 0;
+        if (checked.length) {   // delete all checked items, ONE at a time (see _ftpDelNext)
+            const nf = checked.filter(r => r.type !== 'dir').length, nd = checked.length - nf;
+            const what = [nf ? nf + ' file(s)' : '', nd ? nd + ' folder(s) (must be empty)' : ''].filter(Boolean).join(' and ');
+            if (!window.confirm(`Delete ${what} from the MUD?\n\nThis permanently removes them and cannot be undone.`)) return;
+            this._ftpDelQueue = checked.map(r => ({ path: r.path, isDir: r.type === 'dir' })); this._ftpDelDone = 0;
             this._ftpDelNext();
             return;
         }
         const path = this._ftp.curFile;
-        if (!path) { this._ftpFootMsg('Check files, or open one, to delete.', '#caa300'); return; }
+        if (!path) { this._ftpFootMsg('Check items, or open a file, to delete.', '#caa300'); return; }
         if (!window.confirm(`Delete ${path}?\n\nThis permanently removes the file from the MUD and cannot be undone.`)) return;
         this.connection.send('ftp_delete', { path });
     }
-    _ftpDelNext() {   // one DELE at a time — basic-ftp serializes per connection
+    _ftpDelNext() {   // one DELE/RMD at a time — basic-ftp serializes per connection
         if (!this._ftpDelQueue || !this._ftpDelQueue.length) {
             const n = this._ftpDelDone || 0; this._ftpDelQueue = null;
-            if (n) { this._ftpFootMsg('Deleted ' + n + ' file(s).'); this._ftpRefresh(); }
+            if (n) { this._ftpFootMsg('Deleted ' + n + ' item(s).'); this._ftpRefresh(); }
             return;
         }
-        this.connection.send('ftp_delete', { path: this._ftpDelQueue[0] });
+        const it = this._ftpDelQueue[0];
+        this.connection.send(it.isDir ? 'ftp_rmdir' : 'ftp_delete', { path: it.path });
+    }
+    _onFtpRmdirOk(data) {
+        if (this._ftpDelQueue) { this._ftpDelQueue.shift(); this._ftpDelDone = (this._ftpDelDone || 0) + 1; this._ftpDelNext(); return; }
+        this.appendOutput(`FTP removed folder ${data.path}.`, 'system');
+        this._ftpRefresh();
+    }
+
+    // ── Rename / move (✏️ toolbar button, routed by active pane) ──
+    _ftpRename() {
+        if (this._activePane === 'local') return this._localRename();
+        if (!this._ftp || !this._ftp.connected) return;
+        const checked = (this._ftpRows || []).filter(r => r.cb.checked);
+        if (checked.length > 1) { this._ftpFootMsg('Check exactly ONE item to rename.', '#caa300'); return; }
+        const from = checked.length ? checked[0].path : this._ftp.curFile;
+        if (!from) { this._ftpFootMsg('Check an item, or open a file, to rename.', '#caa300'); return; }
+        const input = (window.prompt('Rename/move "' + from + '" to (a bare name stays in this folder; a path moves it):', from) || '').trim();
+        if (!input || input === from) return;
+        // Bare name → same folder as the source; anything with a slash is used as-is.
+        const to = input.includes('/') ? input : (from.includes('/') ? from.replace(/[^/]+$/, '') + input : input);
+        this.connection.send('ftp_rename', { from, to });
+    }
+    _onFtpRenamed(data) {
+        if (this._ftp && this._ftp.curFile === data.from) {   // keep the open editor pointed at the new path
+            this._ftp.curFile = data.to;
+            const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = data.to;
+            if (this._ftp.mtimes && this._ftp.mtimes[data.from] !== undefined) { this._ftp.mtimes[data.to] = this._ftp.mtimes[data.from]; delete this._ftp.mtimes[data.from]; }
+        }
+        this._ftpFootMsg('Renamed to ' + data.to + '.');
+        this._ftpRefresh();
+    }
+    async _localRename() {
+        if (!this._local || !this._local.dir) { this._ftpFootMsg('Open a local folder first.', '#caa300'); return; }
+        const checked = (this._localRows || []).filter(r => r.cb.checked);
+        if (checked.length > 1) { this._ftpFootMsg('Check exactly ONE file to rename.', '#caa300'); return; }
+        const handle = checked.length ? checked[0].handle : this._local.curHandle;
+        if (!handle) { this._ftpFootMsg('Check a file, or open one, to rename.', '#caa300'); return; }
+        if (typeof handle.move !== 'function') { this._ftpFootMsg('Local rename is not supported by this browser.', '#caa300'); return; }
+        const name = (window.prompt('Rename "' + handle.name + '" to:', handle.name) || '').trim();
+        if (!name || name === handle.name) return;
+        if (/[\/\\]/.test(name)) { this._ftpFootMsg('File name cannot contain slashes.', '#ff6666'); return; }
+        try { await handle.move(name); } catch (e) { this._ftpFootMsg('Rename failed: ' + (e.message || e), '#ff6666'); return; }
+        if (this._local.curHandle === handle) {   // renamed the open file — update the header
+            this._local.curName = name;
+            const fn = document.getElementById('ftp-filename'); if (fn) fn.textContent = '[local] ' + name;
+        }
+        this._ftpFootMsg('Renamed to ' + name + '.');
+        this._localRender();
     }
 
     _onFtpDeleted(data) {
@@ -6035,7 +6110,8 @@ class WMTClient {
         // re-show the account form so the (session-only) password can be re-entered.
         if (dc && dc.classList.contains('ftp-reconnect')) {
             dc.classList.remove('ftp-reconnect'); dc.textContent = 'Disconnect';
-            this._ftp = null;
+            // Keep this._ftp — the cwd/open-file/dirty context survives the re-login
+            // (see _ftpDoConnect); only an explicit Disconnect resets it.
             this._ftpShowAccount();
             return;
         }
@@ -6077,7 +6153,7 @@ class WMTClient {
             'dialog.js', 'jump-to-line.js',
             'annotatescrollbar.js', 'matchesonscrollbar.js', 'match-highlighter.js',
             'foldcode.js', 'foldgutter.js', 'brace-fold.js', 'comment-fold.js', 'indent-fold.js',
-            'trailingspace.js', 'hardwrap.js',
+            'trailingspace.js',   // (hardwrap.js stays vendored but unloaded — the ↦ 80 button was removed)
         ];
         this._ftpCMReady = loadScript(dir + 'codemirror.js')
             .then(() => Promise.all(addons.map(f => loadScript(dir + f))))
@@ -6141,7 +6217,13 @@ class WMTClient {
             },
         });
         this._ftpCM.setSize('100%', '100%');
-        this._ftpCM.on('change', () => { this._ftpSetDirty(true); this._ftpMarkLongLines(); if (this._ftpPreviewOn) this._ftpRenderPreview(); });
+        // Dirty flag flips immediately; the long-line scan (touches line classes on
+        // every line) and the preview re-render are debounced so big files stay smooth.
+        this._ftpCM.on('change', () => {
+            this._ftpSetDirty(true);
+            clearTimeout(this._ftpChangeTimer);
+            this._ftpChangeTimer = setTimeout(() => { this._ftpMarkLongLines(); if (this._ftpPreviewOn) this._ftpRenderPreview(); }, 300);
+        });
         const gut = document.getElementById('ftp-gutter'); if (gut) gut.style.display = 'none';   // CM draws its own line numbers
         // If a file was already loaded into the textarea before CM came up, carry it over.
         if (this._ftp && this._ftp.curFile && ta.value) { this._ftpCM.setValue(ta.value); this._ftpSetDirty(false); }
@@ -6526,7 +6608,7 @@ class WMTClient {
         window.addEventListener('mouseup', () => { if (dragging) { dragging = false; this._ftpSaveGeom(); } });
         header.addEventListener('dblclick', (e) => {   // reset to default position/size
             if (!floating() || e.target.closest('button')) return;
-            try { localStorage.removeItem('wmt_ftp_geom'); } catch (e2) {}
+            try { localStorage.removeItem('wmt_ftp_geom3'); } catch (e2) {}   // the LIVE geometry key (geom/geom2 are dead generations) — removing the wrong one made this reset a no-op
             this._ftpApplyGeom(); if (this._ftpCM) this._ftpCM.refresh();
         });
         modal.addEventListener('mouseup', () => { if (floating()) { this._ftpSaveGeom(); if (this._ftpCM) this._ftpCM.refresh(); } });   // catches resize-grip end
@@ -6791,7 +6873,8 @@ class WMTClient {
                   <span class="ftp-tb-sep"></span>
                   <button class="ftp-tbtn" id="ftp-newfolder" title="New folder">📁</button>
                   <button class="ftp-tbtn" id="ftp-newfile" title="New file">📝</button>
-                  <button class="ftp-tbtn" id="ftp-delete" title="Delete checked files (or the open file) — Del key">🗑️</button>
+                  <button class="ftp-tbtn" id="ftp-rename" title="Rename/move the checked item (or the open file)">✏️</button>
+                  <button class="ftp-tbtn" id="ftp-delete" title="Delete checked items (or the open file) — folders must be empty — Del key">🗑️</button>
                   <span class="ftp-tb-sep"></span>
                   <button class="ftp-tbtn" id="ftp-local-toggle" title="Toggle a local-drive pane (Chrome/Edge)" style="display:none">🖥️</button>
                   <button class="ftp-tbtn" id="ftp-goto" title="Go to a path (e.g. one you can't reach by clicking)">📍</button>
@@ -6923,6 +7006,7 @@ class WMTClient {
         overlay.querySelector('#ftp-refresh').addEventListener('click', () => { if (this._activePane === 'local') this._localRender(); else this._ftpRefresh(); });
         overlay.querySelector('#ftp-newfolder').addEventListener('click', () => this._activePane === 'local' ? this._localNewFolder() : this._ftpNewFolder());
         overlay.querySelector('#ftp-newfile').addEventListener('click', () => this._activePane === 'local' ? this._localNewFile() : this._ftpNewFile());
+        overlay.querySelector('#ftp-rename').addEventListener('click', () => this._ftpRename());   // routes by active pane internally
         overlay.querySelector('#ftp-delete').addEventListener('click', () => this._activePane === 'local' ? this._localDelete() : this._ftpDelete());
         const gotoBtn = overlay.querySelector('#ftp-goto'), gotoPop = overlay.querySelector('#ftp-goto-pop');
         gotoBtn.addEventListener('click', (e) => { e.stopPropagation(); this._activePane === 'local' ? this._localGoto() : this._ftpShowGoto(); });

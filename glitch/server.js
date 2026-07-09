@@ -5924,6 +5924,15 @@ function ftpRun(session, fn) {
   return next;
 }
 function ftpEntryType(e) { return e.type === 2 ? 'dir' : (e.type === 1 ? 'file' : (e.type === 3 ? 'link' : 'other')); }
+// Strip CR/LF/NUL from every client-supplied path. A CRLF embedded in a path would
+// let extra raw commands ride the FTP control connection (dodging the audit log —
+// not a privilege escalation, the creds are the wizard's own, but hygiene).
+function ftpSanitizePath(v) { return String(v || '').replace(/[\r\n\0]/g, ''); }
+// ftp_get guards: cap what we'll buffer + ship over the WS, and refuse true binary
+// (NUL bytes) — buf.toString('utf8') would corrupt it and a save would write it back
+// mangled. (.o save files on 3K are TEXT, so extension checks are wrong; NUL is the
+// reliable discriminator.)
+const FTP_GET_MAX_BYTES = 5 * 1024 * 1024;
 // Common fields for FTP audit logs. NEVER includes file content or the FTP password.
 function ftpLogBase(session) {
   return {
@@ -8005,12 +8014,13 @@ wss.on('connection', (ws, req) => {
 
       // Handle authenticated messages
       switch (data.type) {
-        // ─── Wizard FTP file editor (project_ftp_wizard_editor; trial: mimic only) ──
+        // ─── Wizard FTP file editor (project_ftp_wizard_editor; open to ALL wizards since 87fad0a) ──
         case 'ftp_connect': {
           if (!ftpEditorAllowed(session)) { sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'FTP editor not available for this character.' }); break; }
           const ftpUser = String(data.user || '').trim();
           const ftpPass = typeof data.pass === 'string' ? data.pass : '';
           if (!ftpUser || !ftpPass) { sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'Username and password required.' }); break; }
+          ftpClose(session);   // a re-connect must not leak a previous client's TCP socket
           // Session-only creds: in memory for this session, NEVER persisted/logged.
           session._ftp = { creds: { host: '3k.org', port: 3001, user: ftpUser, pass: ftpPass }, client: null };
           logSessionEvent('FTP_CONNECT', { token: session.token ? session.token.substring(0, 8) : null, user: session.userId, char: effectiveCharName(session), ftpUser });
@@ -8022,7 +8032,7 @@ wss.on('connection', (ws, req) => {
         }
         case 'ftp_list': {
           if (!ftpEditorAllowed(session)) break;
-          const p = String(data.path || '.');
+          const p = ftpSanitizePath(data.path || '.');
           ftpRun(session, async (client) => {
             const entries = await client.list(p);
             sendToClient(session, { type: 'ftp_list', path: p, entries: entries.map(e => ({ name: e.name, type: ftpEntryType(e), size: e.size, modifiedAt: (e.modifiedAt instanceof Date ? e.modifiedAt.toISOString() : (e.rawModifiedAt || null)) })) });
@@ -8031,7 +8041,7 @@ wss.on('connection', (ws, req) => {
         }
         case 'ftp_mkdir': {
           if (!ftpEditorAllowed(session)) break;
-          const p = String(data.path || '');
+          const p = ftpSanitizePath(data.path);
           if (!p) break;
           ftpRun(session, async (client) => { await client.send('MKD ' + p); logSessionEvent('FTP_MKDIR', { ...ftpLogBase(session), path: p }); sendToClient(session, { type: 'ftp_mkdir_ok', path: p }); })
             .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); sendToClient(session, { type: 'ftp_error', op: 'mkdir', path: p, message: e.message || 'mkdir failed' }); });
@@ -8039,7 +8049,7 @@ wss.on('connection', (ws, req) => {
         }
         case 'ftp_delete': {
           if (!ftpEditorAllowed(session)) break;
-          const p = String(data.path || '');
+          const p = ftpSanitizePath(data.path);
           if (!p) break;
           ftpRun(session, async (client) => { await client.remove(p); logSessionEvent('FTP_DELETE', { ...ftpLogBase(session), path: p }); sendToClient(session, { type: 'ftp_deleted', path: p }); })
             .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'delete', path: p, message: e.message || 'delete failed' }); sendToClient(session, { type: 'ftp_error', op: 'delete', path: p, message: e.message || 'delete failed' }); });
@@ -8047,20 +8057,55 @@ wss.on('connection', (ws, req) => {
         }
         case 'ftp_get': {
           if (!ftpEditorAllowed(session)) break;
-          const p = String(data.path || '');
+          const p = ftpSanitizePath(data.path);
           ftpRun(session, async (client) => {
+            let size = -1;
+            try { size = await client.size(p); } catch (e) { size = -1; }   // -1 = SIZE unsupported/unknown — fall through, post-download cap still applies
+            if (size > FTP_GET_MAX_BYTES) {
+              logSessionEvent('FTP_GET_REFUSED_SIZE', { ...ftpLogBase(session), path: p, bytes: size });
+              sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: `Refused: "${p}" is ${Math.round(size / 1048576)} MB — too large to open in the editor (limit ${FTP_GET_MAX_BYTES / 1048576} MB).` });
+              return;
+            }
             const chunks = [];
             const sink = new (require('stream').Writable)({ write(c, enc, cb) { chunks.push(c); cb(); } });
             await client.downloadTo(sink, p);
             const buf = Buffer.concat(chunks);
+            if (buf.length > FTP_GET_MAX_BYTES) {
+              logSessionEvent('FTP_GET_REFUSED_SIZE', { ...ftpLogBase(session), path: p, bytes: buf.length });
+              sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: `Refused: "${p}" is ${Math.round(buf.length / 1048576)} MB — too large to open in the editor (limit ${FTP_GET_MAX_BYTES / 1048576} MB).` });
+              return;
+            }
+            if (buf.includes(0)) {
+              logSessionEvent('FTP_GET_REFUSED_BINARY', { ...ftpLogBase(session), path: p, bytes: buf.length });
+              sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: `Refused: "${p}" looks binary (contains NUL bytes) — opening it as text would corrupt it.` });
+              return;
+            }
             logSessionEvent('FTP_GET', { ...ftpLogBase(session), path: p, bytes: buf.length });
             sendToClient(session, { type: 'ftp_file', path: p, content: buf.toString('utf8') });
           }).catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'get', path: p, message: e.message || 'get failed' }); sendToClient(session, { type: 'ftp_error', op: 'get', path: p, message: e.message || 'get failed' }); });
           break;
         }
+        case 'ftp_rename': {
+          if (!ftpEditorAllowed(session)) break;
+          const from = ftpSanitizePath(data.from), to = ftpSanitizePath(data.to);
+          if (!from || !to) break;
+          ftpRun(session, async (client) => { await client.rename(from, to); logSessionEvent('FTP_RENAME', { ...ftpLogBase(session), from, to }); sendToClient(session, { type: 'ftp_renamed', from, to }); })
+            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'rename', path: from, message: e.message || 'rename failed' }); sendToClient(session, { type: 'ftp_error', op: 'rename', path: from, message: e.message || 'rename failed' }); });
+          break;
+        }
+        case 'ftp_rmdir': {
+          if (!ftpEditorAllowed(session)) break;
+          const p = ftpSanitizePath(data.path);
+          if (!p) break;
+          // RMD only removes an EMPTY directory — the server refuses otherwise (550),
+          // which is the safety we want; no recursive delete is offered.
+          ftpRun(session, async (client) => { await client.send('RMD ' + p); logSessionEvent('FTP_RMDIR', { ...ftpLogBase(session), path: p }); sendToClient(session, { type: 'ftp_rmdir_ok', path: p }); })
+            .catch(e => { if (ftpIsConnErr(e)) ftpDropClient(session); logSessionEvent('FTP_ERROR', { ...ftpLogBase(session), op: 'rmdir', path: p, message: e.message || 'rmdir failed' }); sendToClient(session, { type: 'ftp_error', op: 'rmdir', path: p, message: e.message || 'rmdir failed' }); });
+          break;
+        }
         case 'ftp_put': {
           if (!ftpEditorAllowed(session)) break;
-          const p = String(data.path || '');
+          const p = ftpSanitizePath(data.path);
           const body = typeof data.content === 'string' ? data.content : '';
           ftpRun(session, async (client) => {
             // SERVER-SIDE zeroing guard: never overwrite a non-empty remote file with empty
