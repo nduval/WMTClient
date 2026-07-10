@@ -6857,7 +6857,7 @@ class WMTClient {
             </div>
             <div class="modal-body">
               <div id="ftp-account">
-                <p style="font-size:.82em;color:var(--text-muted);margin:0 0 14px">Connect to your 3k.org file account. The password is used for this session only and is never stored.</p>
+                <p style="font-size:.82em;color:var(--text-muted);margin:0 0 14px">Connect to your wizard file account (3k.org or 3scapes.org — it follows the realm you're playing on). The password is used for this session only and is never stored.</p>
                 <div class="ftp-account-form">
                   <div class="ftp-field"><span class="ftp-lbl">Username</span><input id="ftp-user" type="text" autocomplete="off" spellcheck="false"></div>
                   <div class="ftp-field"><span class="ftp-lbl">Password</span><input id="ftp-pass" type="password" autocomplete="off"></div>

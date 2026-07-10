@@ -8042,9 +8042,13 @@ wss.on('connection', (ws, req) => {
           const ftpPass = typeof data.pass === 'string' ? data.pass : '';
           if (!ftpUser || !ftpPass) { sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'Username and password required.' }); break; }
           ftpClose(session);   // a re-connect must not leak a previous client's TCP socket
+          // FTP rides the MUD domain on port 3001 for BOTH realms — pick the
+          // host from the session's MUD target. 3scapes.org:3001 probe-verified
+          // live ProFTPD 2026-07-10 (530 on bogus creds, same as 3k.org).
+          const ftpHost = (session.targetHost === '3scapes.org') ? '3scapes.org' : '3k.org';
           // Session-only creds: in memory for this session, NEVER persisted/logged.
-          session._ftp = { creds: { host: '3k.org', port: 3001, user: ftpUser, pass: ftpPass }, client: null };
-          logSessionEvent('FTP_CONNECT', { token: session.token ? session.token.substring(0, 8) : null, user: session.userId, char: effectiveCharName(session), ftpUser });
+          session._ftp = { creds: { host: ftpHost, port: 3001, user: ftpUser, pass: ftpPass }, client: null };
+          logSessionEvent('FTP_CONNECT', { token: session.token ? session.token.substring(0, 8) : null, user: session.userId, char: effectiveCharName(session), ftpUser, ftpHost });
           (async () => {
             try { await ftpEnsureClient(session); sendToClient(session, { type: 'ftp_connected', user: ftpUser }); }
             catch (e) { ftpClose(session); sendToClient(session, { type: 'ftp_error', op: 'connect', message: 'Login failed: ' + (e.message || 'error') }); }

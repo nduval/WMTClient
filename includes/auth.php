@@ -306,7 +306,21 @@ function setUserWizard(string $userId, bool $isWizard): bool {
     foreach ($users as &$user) {
         if ($user['id'] === $userId) {
             $user['isWizard'] = $isWizard;
-            return saveUsersIndex($users);
+            $saved = saveUsersIndex($users);
+            // Sync to the Lightsail DB — reads are DB-first (findUserById,
+            // usersIndexWithJsonFallback), so a JSON-only write is invisible:
+            // the admin toggle said "success" but nothing changed (igor,
+            // 2026-07-10). /admin/user does a PARTIAL update (only isWizard);
+            // do NOT use /account-sync 'update' here — it overwrites
+            // username/email/password with whatever is passed.
+            if ($saved) {
+                $resp = pushToLightsail('/admin/user', ['id' => $userId, 'isWizard' => $isWizard]);
+                if (!$resp || empty($resp['success'])) {
+                    @error_log("setUserWizard: DB sync failed for $userId — JSON updated but DB (the read path) was not");
+                    return false;   // surface it — a 'success' banner over a no-op is worse than an error
+                }
+            }
+            return $saved;
         }
     }
 
