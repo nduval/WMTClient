@@ -1030,7 +1030,7 @@ function removeFromCharacterIndex(string $characterId): void {
 /**
  * Create a new character for a user
  */
-function createCharacter(string $userId, string $characterName, string $server = '3k'): array {
+function createCharacter(string $userId, string $characterName, string $server = '3k'): ?array {
     $characterId = generateId();
     $charPath = getCharacterDataPath($userId, $characterId);
 
@@ -1059,20 +1059,29 @@ function createCharacter(string $userId, string $characterName, string $server =
     // Update global character index
     updateCharacterIndex($userId, $characterId, $characterName, $server);
 
-    // Push to Lightsail DB so the characters table is kept in sync with the
-    // IONOS JSON write. Non-fatal on failure — IONOS is the user-facing
-    // source of truth, this is the sync to the runtime DB.
-    // See memory/bug_characters_not_synced_to_lightsail_db.md (2026-05-25).
-    pushToLightsail('/admin/character', [
+    // Push to Lightsail DB. LOUD on failure since 2026-07-10: character reads
+    // are DB-first now, so a char whose row never landed would be INVISIBLE on
+    // the characters page. Roll back the JSON append and report failure so the
+    // user retries, instead of "creating" a ghost.
+    $resp = pushToLightsail('/admin/character', [
         'id' => $characterId,
         'user_id' => $userId,
         'name' => $characterName,
         'label' => '',
         'server' => $server,
         'password' => '',
-        'sort_order' => 0,
+        'sort_order' => count($characters) - 1,
         'created_at' => $character['created_at']
     ]);
+    if (!$resp || empty($resp['success'])) {
+        @error_log("createCharacter: DB push failed for $characterId — rolling back JSON append");
+        $rollback = array_values(array_filter($characters, function ($c) use ($characterId) {
+            return ($c['id'] ?? '') !== $characterId;
+        }));
+        saveJsonFile(getCharactersListPath($userId), $rollback);
+        removeFromCharacterIndex($characterId);
+        return null;
+    }
 
     return $character;
 }
@@ -1081,6 +1090,27 @@ function createCharacter(string $userId, string $characterName, string $server =
  * Get all characters for a user
  */
 function getCharacters(string $userId): array {
+    // DB-first (accounts migration 2026-07-10). The JSON fallback fires ONLY
+    // when Lightsail is UNREACHABLE — it keeps login/character pages alive
+    // through an outage. A reachable-but-empty DB answer is trusted as truth
+    // (the 2026-07-10 backfill made the DB a verified superset), so JSON
+    // drift can never leak back into a healthy system.
+    $adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
+    if ($adminKey) {
+        $url = 'https://ws.wemudtogether.com/admin/characters?userId=' . urlencode($userId);
+        $ctx = stream_context_create([
+            'http' => ['method' => 'GET', 'header' => "X-Admin-Key: $adminKey\r\n", 'timeout' => 5, 'ignore_errors' => true],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]
+        ]);
+        $body = @file_get_contents($url, false, $ctx);
+        if ($body !== false) {
+            $data = json_decode($body, true);
+            if (is_array($data) && !empty($data['success']) && is_array($data['characters'] ?? null)) {
+                return $data['characters'];
+            }
+        }
+        @error_log("getCharacters: Lightsail unreachable for $userId — serving JSON fallback");
+    }
     return loadJsonFile(getCharactersListPath($userId));
 }
 
@@ -1256,20 +1286,25 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
 
     // Create the new character's DB row FIRST — every DB write below (triggers,
     // aliases, tickers, classes, preferences) FK-references the characters table.
-    // duplicateCharacter historically skipped this (createCharacter does it), so
-    // duplicated chars had NO DB row → every DB save silently FK-failed → the char
-    // lived permanently on the JSON fallback. See createCharacter +
-    // memory/bug_characters_not_synced_to_lightsail_db.md.
-    pushToLightsail('/admin/character', [
+    // LOUD on failure since 2026-07-10 (DB-first reads): no row = invisible char.
+    $rowResp = pushToLightsail('/admin/character', [
         'id' => $newId,
         'user_id' => $userId,
         'name' => $source['name'],
         'label' => $label,
         'server' => $source['server'] ?? '3k',
         'password' => $source['password'] ?? '',
-        'sort_order' => 0,
+        'sort_order' => count($characters) - 1,
         'created_at' => $newChar['created_at']
     ]);
+    if (!$rowResp || empty($rowResp['success'])) {
+        @error_log("duplicateCharacter: DB row push failed for $newId — rolling back");
+        $rollback = array_values(array_filter($characters, function ($c) use ($newId) {
+            return ($c['id'] ?? '') !== $newId;
+        }));
+        saveJsonFile(getCharactersListPath($userId), $rollback);
+        return null;
+    }
 
     // Copy data from source.
     $sourcePath = getCharacterDataPath($userId, $sourceId);
@@ -1444,11 +1479,13 @@ function isCharacterWizard(string $userId, string $characterId): bool {
 function setCharacterWizard(string $userId, string $characterId, bool $isWizard): bool {
     $characters = getCharacters($userId);
     $found = false;
+    $charData = null;
 
     foreach ($characters as &$char) {
         if ($char['id'] === $characterId) {
             $char['isWizard'] = $isWizard;
             $found = true;
+            $charData = $char;
             break;
         }
     }
@@ -1457,7 +1494,23 @@ function setCharacterWizard(string $userId, string $characterId, bool $isWizard)
         return false;
     }
 
-    return saveJsonFile(getCharactersListPath($userId), $characters);
+    $result = saveJsonFile(getCharactersListPath($userId), $characters);
+    // Sync to the DB (characters.is_wizard, added 2026-07-10) — reads are
+    // DB-first now, so a JSON-only write would be an invisible no-op (the
+    // igor account-wizard bug, character edition). Loud on failure.
+    if ($result && $charData) {
+        $resp = pushToLightsail('/admin/character', [
+            'id' => $characterId,
+            'user_id' => $userId,
+            'name' => $charData['name'],
+            'is_wizard' => $isWizard
+        ]);
+        if (!$resp || empty($resp['success'])) {
+            @error_log("setCharacterWizard: DB sync failed for $characterId");
+            return false;
+        }
+    }
+    return $result;
 }
 
 /**

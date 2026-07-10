@@ -4624,7 +4624,10 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ success: false, error: 'DB not available' }));
       return;
     }
-    const listUserId = parsedUrl.query.userId;
+    // parsedUrl.query is an UNPARSED string here (url.parse without `true`) —
+    // read params via URLSearchParams like every other GET endpoint in this file.
+    const charsParams = new URLSearchParams(parsedUrl.query || '');
+    const listUserId = charsParams.get('userId');
     if (!listUserId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'userId required' }));

@@ -106,6 +106,9 @@ switch ($action) {
         }
 
         $character = createCharacter($userId, $name, $server);
+        if (!$character) {
+            errorResponse('Character creation failed — data server unreachable, please try again', 503);
+        }
         if ($label) {
             updateCharacterLabel($userId, $character['id'], $label);
             $character['label'] = $label;
