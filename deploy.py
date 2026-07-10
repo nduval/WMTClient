@@ -439,6 +439,11 @@ def run_test_suites():
         ('EntityGuard',  'test_entity_guard.js'),
         ('BlockTrigger', 'test_block_trigger.js'),
         ('SelfAlerts',   'test_self_alerts.js'),
+        # ChatMon replay skips hidden ("silenced") channels so a busy silenced
+        # channel can't eat the 100-message window (elminster 2026-07-09: 74/100
+        # replayed lines were silenced atalk). Live capture stays unfiltered;
+        # no-prefs sessions fall back to the old unfiltered replay.
+        ('ChatReplayHidden', 'test_chat_replay_hidden.js'),
         ('VarSubst',     'test_var_substitution.js'),
         ('CharSync',     'test_character_sync.js'),
         ('SessionPersist', 'test_session_persist.js'),

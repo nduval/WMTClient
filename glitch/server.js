@@ -5719,6 +5719,65 @@ function broadcastChatReplay(session, message) {
   }
 }
 
+// ── Chat replay filtering: hidden ("silenced") channels ──
+// Silencing a channel is the per-channel `hidden` flag; the client filters
+// DISPLAY only, so a busy silenced channel used to eat most of the 100-message
+// replay window (2026-07-09: 74 of elminster's 100 replayed lines were silenced
+// atalk — his visible tabs got ~26). Replay now skips hidden channels, and
+// re-reads the DB deeper so visible channels still fill the window. CAPTURE is
+// untouched — every message still lands in chat_messages and the buffer, so
+// unhiding a channel later brings its history back.
+const CHAT_REPLAY_DB_DEPTH = 500;   // rows to re-read when filtering leaves the window short
+
+// Mirrors the client's prefs-key scheme: channel.toLowerCase(), with a legacy
+// space-stripped variant (see bug_channel_name_space_stripped).
+function chatChannelHidden(session, channel) {
+  const prefs = session.discordChannelPrefs;
+  if (!prefs || !channel) return false;
+  const key = String(channel).toLowerCase();
+  const p = prefs[key] || prefs[key.replace(/[^a-z0-9_-]/g, '')];
+  return !!(p && p.hidden);
+}
+
+// The list a reconnect replay should send: the most recent CHAT_BUFFER_MAX
+// messages on VISIBLE channels. Channel prefs arrive async (browser push or the
+// PHP fetch) — until they exist we can't classify, so fall back to the
+// unfiltered buffer (the old behavior).
+function buildChatReplayList(session) {
+  const buf = session.chatBuffer || [];
+  const prefs = session.discordChannelPrefs;
+  if (!prefs || Object.keys(prefs).length === 0) return buf.slice(-CHAT_BUFFER_MAX);
+  let list = buf.filter(m => !chatChannelHidden(session, m.channel));
+  // Filtering can leave the window short (busy hidden channel) — deepen from the DB.
+  if (list.length < CHAT_BUFFER_MAX && wmtDb && session.characterId) {
+    try {
+      const rows = dbStmts.getRecentChat.all(session.characterId, CHAT_REPLAY_DB_DEPTH);
+      const deep = rows.reverse().map(parseStoredChatMessage).filter(Boolean)
+        .filter(m => !chatChannelHidden(session, m.channel));
+      if (deep.length > list.length) list = deep;
+    } catch (e) {}
+  }
+  return list.slice(-CHAT_BUFFER_MAX);
+}
+
+// One replay implementation for every reconnect path: chat_clear, then the
+// filtered list. Pass a ws to target the one socket that is authenticating
+// (resume/rekey/new paths), or omit it to broadcast to the session's browsers.
+function replayChatBuffer(session, ws) {
+  const list = buildChatReplayList(session);
+  if (!list.length) return;
+  console.log(`Replaying ${list.length} ChatMon messages`);
+  if (ws) {
+    try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) { return; }
+    for (const msg of list) {
+      try { ws.send(JSON.stringify(msg)); } catch (e) { break; }
+    }
+  } else {
+    broadcastChatReplay(session, { type: 'chat_clear' });
+    for (const msg of list) broadcastChatReplay(session, msg);
+  }
+}
+
 function sendToClient(session, message, targetWs) {
   // client_command messages cause the browser to execute code (e.g. #send, #delay,
   // #class read) which sends commands back to the server. On multi-device sessions,
@@ -7305,10 +7364,7 @@ function dispatchRelinkSessionNew(session) {
   session._bridgeModeInit = false;
   session._relinkOnNamePrompt = false;
   sendToClient(session, { type: 'session_new' });
-  if (session.chatBuffer && session.chatBuffer.length > 0) {
-    broadcastChatReplay(session, { type: 'chat_clear' });
-    for (const msg of session.chatBuffer) broadcastChatReplay(session, msg);
-  }
+  replayChatBuffer(session);
 }
 
 /**
@@ -7442,10 +7498,7 @@ function connectToMud(session) {
           note: 'bridge held socket; resumed silently — will relink only on a real name prompt'
         });
         sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });
-        if (session.chatBuffer.length > 0) {
-          broadcastChatReplay(session, { type: 'chat_clear' });
-          for (const msg of session.chatBuffer) broadcastChatReplay(session, msg);
-        }
+        replayChatBuffer(session);
         return;   // resumed path complete — never fall through to a name send
       }
       // Genuinely fresh connection — no socket was held. Notify + log in.
@@ -7477,12 +7530,7 @@ function connectToMud(session) {
       // show "Session resumed" message, enable MIP, run startup script.
       sendToClient(session, { type: 'session_resumed', mudConnected: true, variables: session.variables || {} });
       // Replay chat history so ChatMon has previous messages
-      if (session.chatBuffer.length > 0) {
-        broadcastChatReplay(session, { type: 'chat_clear' });
-        for (const msg of session.chatBuffer) {
-          broadcastChatReplay(session, msg);
-        }
-      }
+      replayChatBuffer(session);
     }
   });
 
@@ -7785,18 +7833,7 @@ wss.on('connection', (ws, req) => {
               }
 
               // Replay ChatMon buffer (clear first so reconnect doesn't duplicate)
-              if (session.chatBuffer.length > 0) {
-                try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) {}
-                console.log(`Replaying ${session.chatBuffer.length} ChatMon messages (rekey)`);
-                for (const msg of session.chatBuffer) {
-                  try {
-                    ws.send(JSON.stringify(msg));
-                  } catch (e) {
-                    console.error('Error replaying chat buffer:', e.message);
-                    break;
-                  }
-                }
-              }
+              replayChatBuffer(session, ws);
 
               authenticated = true;
               return;  // Skip normal session creation/resume
@@ -7903,18 +7940,7 @@ wss.on('connection', (ws, req) => {
 
             // Replay ChatMon buffer so chat history survives refresh
             // Clear first so reconnect after deploy doesn't duplicate
-            if (session.chatBuffer.length > 0) {
-              try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) {}
-              console.log(`Replaying ${session.chatBuffer.length} ChatMon messages`);
-              for (const msg of session.chatBuffer) {
-                try {
-                  ws.send(JSON.stringify(msg));
-                } catch (e) {
-                  console.error('Error replaying chat buffer:', e.message);
-                  break;
-                }
-              }
-            }
+            replayChatBuffer(session, ws);
 
             // Send current bot status if bot is active
             if (session.bot && session.bot.active) {
@@ -7993,12 +8019,7 @@ wss.on('connection', (ws, req) => {
                 type: 'session_new'
               }));
               // Replay chat history from DB so ChatMon has previous messages
-              if (session.chatBuffer.length > 0) {
-                try { ws.send(JSON.stringify({ type: 'chat_clear' })); } catch (e) {}
-                for (const msg of session.chatBuffer) {
-                  try { ws.send(JSON.stringify(msg)); } catch (e) { break; }
-                }
-              }
+              replayChatBuffer(session, ws);
             }
           }
 
