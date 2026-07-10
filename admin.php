@@ -39,46 +39,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // would write back data the read paths now ignore. Replaced by
             // a cron-driven sqlite3 .backup of /opt/wmt/wmt.db on Lightsail.
             // See memory: reference_db_backup.md for the cron + retention.
-            case 'adopt_orphan':
-                $orphanId = $_POST['orphan_id'] ?? '';
-                $targetUserId = $_POST['target_user_id'] ?? '';
-                if ($orphanId && $targetUserId) {
-                    $result = adoptOrphanedCharacters($orphanId, $targetUserId);
-                    if ($result['success']) {
-                        $message = 'Adopted ' . $result['count'] . ' character(s)';
-                        $messageType = 'success';
-                    } else {
-                        $message = 'Adopt failed: ' . $result['error'];
-                        $messageType = 'error';
-                    }
-                }
-                break;
-
-            case 'delete_orphan':
-                $orphanId = $_POST['orphan_id'] ?? '';
-                if ($orphanId) {
-                    $result = deleteOrphanedDirectory($orphanId);
-                    if ($result['success']) {
-                        $message = 'Orphaned directory deleted';
-                        $messageType = 'success';
-                    } else {
-                        $message = 'Delete failed: ' . $result['error'];
-                        $messageType = 'error';
-                    }
-                }
-                break;
-
-            case 'repair_index':
-                $result = repairUsersIndex();
-                if ($result['success']) {
-                    $message = 'Index repaired: ' . $result['recovered'] . ' user(s) recovered';
-                    $messageType = 'success';
-                } else {
-                    $message = 'Repair failed: ' . $result['error'];
-                    $messageType = 'error';
-                }
-                break;
-
+            //
+            // adopt_orphan / delete_orphan / repair_index removed 2026-07-09.
+            // All three predate the DB migration: they compared disk dirs
+            // against the JSON users_index, but accounts are DB-first now
+            // (userWithJsonFallback), so "orphaned vs the JSON index" no
+            // longer means abandoned — a DB-only user's dir would have shown
+            // as orphaned, and Delete would have destroyed their .tin files.
+            // Adopt copied characters.json without syncing the DB (the
+            // char-sync gap). Verified 0 orphan dirs on prod at removal.
             case 'delete_user':
                 $targetUserId = $_POST['user_id'] ?? '';
                 $confirmUsername = $_POST['confirm_username'] ?? '';
@@ -168,156 +137,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Helper functions for admin operations
 // (createBackup / restoreBackup removed 2026-05-10 — see DB-backup cron)
-
-function getOrphanedDirectories(): array {
-    $orphans = [];
-    $usersIndex = loadJsonFile(getUsersIndexPath());
-    $indexedIds = array_column($usersIndex, 'id');
-
-    $userDirs = glob(USERS_PATH . '/*', GLOB_ONLYDIR);
-    foreach ($userDirs as $userDir) {
-        $dirName = basename($userDir);
-        if ($dirName === 'backups') continue;
-        if (str_starts_with($dirName, 'guest_')) continue;
-
-        if (!in_array($dirName, $indexedIds)) {
-            $orphan = [
-                'id' => $dirName,
-                'profile' => loadJsonFile($userDir . '/profile.json'),
-                'characters' => loadJsonFile($userDir . '/characters.json')
-            ];
-            $orphans[] = $orphan;
-        }
-    }
-
-    return $orphans;
-}
-
-function adoptOrphanedCharacters(string $orphanId, string $targetUserId): array {
-    $orphanPath = USERS_PATH . '/' . $orphanId;
-    $targetPath = USERS_PATH . '/' . $targetUserId;
-
-    if (!is_dir($orphanPath)) {
-        return ['success' => false, 'error' => 'Orphan directory not found'];
-    }
-    if (!is_dir($targetPath)) {
-        return ['success' => false, 'error' => 'Target user not found'];
-    }
-
-    $orphanChars = loadJsonFile($orphanPath . '/characters.json');
-    $targetChars = loadJsonFile($targetPath . '/characters.json');
-
-    $adopted = 0;
-    foreach ($orphanChars as $char) {
-        // Check for duplicate names
-        $exists = false;
-        foreach ($targetChars as $tc) {
-            if (strtolower($tc['name']) === strtolower($char['name'])) {
-                $exists = true;
-                break;
-            }
-        }
-
-        if (!$exists) {
-            $targetChars[] = $char;
-
-            // Copy character data directory
-            $srcCharPath = $orphanPath . '/characters/' . $char['id'];
-            $dstCharPath = $targetPath . '/characters/' . $char['id'];
-
-            if (is_dir($srcCharPath) && !is_dir($dstCharPath)) {
-                mkdir($dstCharPath, 0755, true);
-                $files = glob($srcCharPath . '/*.json');
-                foreach ($files as $file) {
-                    copy($file, $dstCharPath . '/' . basename($file));
-                }
-            }
-
-            $adopted++;
-        }
-    }
-
-    saveJsonFile($targetPath . '/characters.json', $targetChars);
-
-    return ['success' => true, 'count' => $adopted];
-}
-
-function deleteOrphanedDirectory(string $orphanId): array {
-    $orphanPath = USERS_PATH . '/' . $orphanId;
-
-    // Safety check - make sure it's actually orphaned
-    $usersIndex = loadJsonFile(getUsersIndexPath());
-    foreach ($usersIndex as $user) {
-        if ($user['id'] === $orphanId) {
-            return ['success' => false, 'error' => 'This is not an orphaned directory'];
-        }
-    }
-
-    if (!is_dir($orphanPath)) {
-        return ['success' => false, 'error' => 'Directory not found'];
-    }
-
-    // Recursively delete
-    $files = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($orphanPath, RecursiveDirectoryIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::CHILD_FIRST
-    );
-
-    foreach ($files as $file) {
-        if ($file->isDir()) {
-            rmdir($file->getRealPath());
-        } else {
-            unlink($file->getRealPath());
-        }
-    }
-    rmdir($orphanPath);
-
-    return ['success' => true];
-}
-
-function repairUsersIndex(): array {
-    $usersIndex = loadJsonFile(getUsersIndexPath());
-    $indexedIds = array_column($usersIndex, 'id');
-    $recovered = 0;
-
-    $userDirs = glob(USERS_PATH . '/*', GLOB_ONLYDIR);
-    foreach ($userDirs as $userDir) {
-        $dirName = basename($userDir);
-        if ($dirName === 'backups') continue;
-
-        if (!in_array($dirName, $indexedIds)) {
-            // Try to recover from profile.json
-            $profilePath = $userDir . '/profile.json';
-            if (file_exists($profilePath)) {
-                $profile = loadJsonFile($profilePath);
-                if (!empty($profile['id']) && !empty($profile['username'])) {
-                    // Check for password hash in profile
-                    $passwordHash = $profile['password_hash'] ?? '';
-
-                    if ($passwordHash) {
-                        // Full recovery possible
-                        $usersIndex[] = [
-                            'id' => $profile['id'],
-                            'username' => $profile['username'],
-                            'password' => $passwordHash,
-                            'created_at' => $profile['created_at'] ?? date('c'),
-                            'recovered_at' => date('c')
-                        ];
-                        $recovered++;
-                    }
-                }
-            }
-        }
-    }
-
-    if ($recovered > 0) {
-        if (!saveJsonFile(getUsersIndexPath(), $usersIndex)) {
-            return ['success' => false, 'error' => 'Failed to save repaired index'];
-        }
-    }
-
-    return ['success' => true, 'recovered' => $recovered];
-}
+// (getOrphanedDirectories / adoptOrphanedCharacters / deleteOrphanedDirectory /
+//  repairUsersIndex removed 2026-07-09 — pre-DB-migration tooling; see the
+//  removal note in the action switch above)
 
 function deleteUserAccount(string $userId, string $confirmUsername): array {
     // Find user in index
@@ -444,7 +266,6 @@ function adminSendResetEmail(string $userId, string $bccEmail): array {
 
 // Get data for display
 $usersIndex = loadJsonFile(getUsersIndexPath());
-$orphans = getOrphanedDirectories();
 // JSON backup feature removed 2026-05-10; DB backups handled by Lightsail cron.
 ?>
 <!DOCTYPE html>
@@ -605,35 +426,6 @@ $orphans = getOrphanedDirectories();
             color: #ff3333;
         }
 
-        .orphan-card {
-            background: #2a2a1a;
-            border: 1px solid #ff6600;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-
-        .orphan-card h4 {
-            margin: 0 0 10px 0;
-            color: #ff6600;
-        }
-
-        .char-list {
-            margin: 10px 0;
-            padding-left: 20px;
-        }
-
-        .char-list li {
-            color: #aaa;
-            margin: 5px 0;
-        }
-
-        .orphan-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-        }
-
         .backup-list {
             max-height: 200px;
             overflow-y: auto;
@@ -706,6 +498,11 @@ $orphans = getOrphanedDirectories();
 
         .user-card.online {
             border-left: 3px solid #00ff00;
+        }
+
+        /* Default view: only online users (the full list got lengthy). */
+        #users-list.filter-online .user-card:not(.online) {
+            display: none;
         }
 
         .user-row-1 {
@@ -859,10 +656,6 @@ $orphans = getOrphanedDirectories();
                 <div class="stat-value" id="online-count">-</div>
                 <div class="stat-label">Online</div>
             </div>
-            <div class="stat">
-                <div class="stat-value"><?= count($orphans) ?></div>
-                <div class="stat-label">Orphaned</div>
-            </div>
         </div>
 
         <!-- Broadcast Section -->
@@ -885,30 +678,21 @@ $orphans = getOrphanedDirectories();
             <?php endif; ?>
         </div>
 
-        <!-- Maintenance Section -->
-        <div class="section">
-            <h2>Maintenance</h2>
-            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                <form method="post" style="margin: 0;" onsubmit="return confirm('Attempt to repair the users index from profile.json files?');">
-                    <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                    <input type="hidden" name="action" value="repair_index">
-                    <button type="submit" class="btn btn-warning">Repair Users Index</button>
-                </form>
-            </div>
-            <p style="color: #666; font-size: 12px; margin-top: 10px;">
-                Repair Index: Recovers orphaned users from profile.json if they have a stored password hash.<br>
-                DB backups: handled automatically by cron on Lightsail (daily, retained 14 days at /opt/wmt/backups/).
-            </p>
-        </div>
-
         <!-- Users Section -->
         <div class="section">
-            <h2>Registered Users</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; margin-bottom: 10px;">
+                <h2 style="border-bottom: none; margin-bottom: 10px;">Registered Users</h2>
+                <div style="display: flex; gap: 6px;">
+                    <button type="button" class="btn btn-sm btn-primary" id="filter-online" onclick="setUserFilter('online')">Online</button>
+                    <button type="button" class="btn btn-sm btn-secondary" id="filter-all" onclick="setUserFilter('all')">All (<?= count($usersIndex) ?>)</button>
+                </div>
+            </div>
+            <p id="filter-empty" style="display: none; color: #888;">No users online right now — click All to see everyone.</p>
 
             <?php if (empty($usersIndex)): ?>
                 <p style="color: #888;">No users registered.</p>
             <?php else: ?>
-                <div id="users-list">
+                <div id="users-list" class="filter-online">
                     <?php foreach ($usersIndex as $user):
                         $stats = getUserStorageStats($user['id']);
                         $isAdmin = in_array($user['username'], $ADMIN_USERS);
@@ -997,67 +781,6 @@ $orphans = getOrphanedDirectories();
             <?php endif; ?>
         </div>
 
-        <!-- Orphaned Directories Section -->
-        <div class="section">
-            <h2>Orphaned Directories</h2>
-            <p style="color: #888; font-size: 13px; margin-bottom: 15px;">
-                These directories exist on disk but are not linked to any user account.
-            </p>
-
-            <?php if (empty($orphans)): ?>
-                <p style="color: #00ff00;">No orphaned directories found.</p>
-            <?php else: ?>
-                <?php foreach ($orphans as $orphan): ?>
-                    <div class="orphan-card">
-                        <h4>Orphaned Directory</h4>
-                        <div class="id-cell">ID: <?= htmlspecialchars($orphan['id']) ?></div>
-
-                        <?php if (!empty($orphan['profile'])): ?>
-                            <p>Original username: <strong><?= htmlspecialchars($orphan['profile']['username'] ?? 'Unknown') ?></strong></p>
-                        <?php endif; ?>
-
-                        <?php if (!empty($orphan['characters'])): ?>
-                            <h3>Characters (<?= count($orphan['characters']) ?>)</h3>
-                            <ul class="char-list">
-                                <?php foreach ($orphan['characters'] as $char): ?>
-                                    <li>
-                                        <strong><?= htmlspecialchars($char['name']) ?></strong>
-                                        <?php if (!empty($char['password'])): ?>
-                                            <span style="color: #00ff00;">(has password)</span>
-                                        <?php endif; ?>
-                                        <br>
-                                        <span style="font-size: 11px; color: #666;">
-                                            Created: <?= date('M j, Y g:i A', strtotime($char['created_at'])) ?>
-                                        </span>
-                                    </li>
-                                <?php endforeach; ?>
-                            </ul>
-                        <?php endif; ?>
-
-                        <div class="orphan-actions">
-                            <form method="post" style="margin: 0;">
-                                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                                <input type="hidden" name="action" value="adopt_orphan">
-                                <input type="hidden" name="orphan_id" value="<?= htmlspecialchars($orphan['id']) ?>">
-                                <input type="hidden" name="target_user_id" value="<?= htmlspecialchars($userId) ?>">
-                                <button type="submit" class="btn btn-primary" onclick="return confirm('Adopt these characters into your account?');">
-                                    Adopt Characters to My Account
-                                </button>
-                            </form>
-
-                            <form method="post" style="margin: 0;">
-                                <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-                                <input type="hidden" name="action" value="delete_orphan">
-                                <input type="hidden" name="orphan_id" value="<?= htmlspecialchars($orphan['id']) ?>">
-                                <button type="submit" class="btn btn-danger" onclick="return confirm('Permanently delete this orphaned directory? This cannot be undone.');">
-                                    Delete Permanently
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            <?php endif; ?>
-        </div>
     </div>
 
     <!-- Delete User Modal -->
@@ -1134,6 +857,33 @@ $orphans = getOrphanedDirectories();
             }
         });
 
+        // ── User list filter: Online (default) / All ──
+        let userFilter = 'online';
+        let sessionsFetched = false;   // until the first successful /sessions fetch, "online" is unknown
+
+        function setUserFilter(mode) {
+            userFilter = mode;
+            refreshFilterUI();
+        }
+
+        function refreshFilterUI() {
+            const list = document.getElementById('users-list');
+            if (!list) return;
+            list.classList.toggle('filter-online', userFilter === 'online');
+            const onlineCount = list.querySelectorAll('.user-card.online').length;
+            const btnOnline = document.getElementById('filter-online');
+            const btnAll = document.getElementById('filter-all');
+            if (btnOnline) {
+                btnOnline.textContent = sessionsFetched ? `Online (${onlineCount})` : 'Online (…)';
+                btnOnline.className = 'btn btn-sm ' + (userFilter === 'online' ? 'btn-primary' : 'btn-secondary');
+            }
+            if (btnAll) {
+                btnAll.className = 'btn btn-sm ' + (userFilter === 'all' ? 'btn-primary' : 'btn-secondary');
+            }
+            const empty = document.getElementById('filter-empty');
+            if (empty) empty.style.display = (userFilter === 'online' && sessionsFetched && onlineCount === 0) ? '' : 'none';
+        }
+
         // Fetch and display online sessions
         async function fetchSessions() {
             try {
@@ -1148,10 +898,13 @@ $orphans = getOrphanedDirectories();
                 const result = await response.json();
 
                 if (result.success) {
+                    sessionsFetched = true;
                     updateOnlineStatus(result.sessions);
                 }
             } catch (e) {
                 console.error('Failed to fetch sessions:', e);
+                // Online status unknown (proxy unreachable) — show everyone rather than a blank page.
+                if (!sessionsFetched && userFilter === 'online') setUserFilter('all');
             }
         }
 
@@ -1205,9 +958,12 @@ $orphans = getOrphanedDirectories();
                     statusDetail.textContent = '';
                 }
             });
+
+            refreshFilterUI();
         }
 
         // Fetch sessions on page load and periodically
+        refreshFilterUI();
         fetchSessions();
         setInterval(fetchSessions, 30000); // Refresh every 30 seconds
 
