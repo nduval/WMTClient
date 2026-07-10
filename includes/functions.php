@@ -494,9 +494,15 @@ function geoLookupCached(string $ip): array {
     if (isset($cache[$ip]) && is_array($cache[$ip]) && ($now - ($cache[$ip]['ts'] ?? 0)) < $ttl) {
         return ['country' => $cache[$ip]['country'] ?? '', 'city' => $cache[$ip]['city'] ?? '', 'asn' => $cache[$ip]['asn'] ?? ''];
     }
-    // Cache miss → live lookup (2s timeout, non-fatal).
+    // Cache miss → live lookup (2s timeout, non-fatal). Authenticated when
+    // config/ipinfo.php provides a token (50k/mo vs ~1k/day unauthenticated;
+    // the standard endpoint's shape — country/city/org — is unchanged by it).
+    $tokenFile = __DIR__ . '/../config/ipinfo.php';
+    if (is_file($tokenFile)) require_once $tokenFile;
+    $tok = (defined('IPINFO_TOKEN') && IPINFO_TOKEN && IPINFO_TOKEN !== 'YOUR_TOKEN_HERE')
+        ? '?token=' . rawurlencode(IPINFO_TOKEN) : '';
     $ctx = stream_context_create(['http' => ['timeout' => 2]]);
-    $ipData = @file_get_contents("https://ipinfo.io/{$ip}/json", false, $ctx);
+    $ipData = @file_get_contents("https://ipinfo.io/{$ip}/json{$tok}", false, $ctx);
     $geo = $empty;
     if ($ipData) {
         $info = json_decode($ipData, true);

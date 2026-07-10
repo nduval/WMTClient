@@ -7,6 +7,7 @@ cloudflare.txt
 *.pem
 config/sendgrid.php
 config/render_admin_key.php
+config/ipinfo.php
 
 # Dependencies
 /vendor/
