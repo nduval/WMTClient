@@ -264,8 +264,10 @@ function adminSendResetEmail(string $userId, string $bccEmail): array {
 // getBackupFiles removed 2026-05-10. JSON backup feature retired after the
 // DB migration; DB snapshots are handled by cron on Lightsail.
 
-// Get data for display
-$usersIndex = loadJsonFile(getUsersIndexPath());
+// Get data for display. DB-first with JSON-only entries merged in — the pure
+// JSON index hid DB-only drift (the stale `dwolin` attacker row was invisible
+// here until 2026-07-09 precisely because this page rendered JSON only).
+$usersIndex = usersIndexWithJsonFallback();
 // JSON backup feature removed 2026-05-10; DB backups handled by Lightsail cron.
 ?>
 <!DOCTYPE html>
@@ -698,7 +700,7 @@ $usersIndex = loadJsonFile(getUsersIndexPath());
                         $isAdmin = in_array($user['username'], $ADMIN_USERS);
                         $isWizard = $user['isWizard'] ?? false;
                         $profile = loadJsonFile(getProfilePath($user['id']));
-                        $isBanned = !empty($profile['banned']);
+                        $isBanned = !empty($user['banned']) || !empty($profile['banned']);   // DB flag first; profile.json is the legacy fallback
                         $lastIp = $profile['last_ip'] ?? '';
                         $registeredIp = $profile['registered_ip'] ?? '';
                     ?>
@@ -884,16 +886,11 @@ $usersIndex = loadJsonFile(getUsersIndexPath());
             if (empty) empty.style.display = (userFilter === 'online' && sessionsFetched && onlineCount === 0) ? '' : 'none';
         }
 
-        // Fetch and display online sessions
+        // Fetch and display online sessions — via the PHP proxy so the admin
+        // key never appears in page source (api/admin_proxy.php).
         async function fetchSessions() {
             try {
-                const proxyUrl = '<?= WS_CLIENT_URL ?>'.replace('wss://', 'https://').replace('ws://', 'http://');
-                const response = await fetch(proxyUrl + '/sessions', {
-                    method: 'GET',
-                    headers: {
-                        'X-Admin-Key': '<?= RENDER_ADMIN_KEY ?? '' ?>'
-                    }
-                });
+                const response = await fetch('api/admin_proxy.php?action=sessions');
 
                 const result = await response.json();
 
@@ -987,15 +984,11 @@ $usersIndex = loadJsonFile(getUsersIndexPath());
             statusEl.style.color = '#888';
 
             try {
-                // Convert wss:// to https:// for HTTP endpoint
-                const proxyUrl = '<?= WS_CLIENT_URL ?>'.replace('wss://', 'https://').replace('ws://', 'http://');
-                const response = await fetch(proxyUrl + '/broadcast', {
+                // Via the PHP proxy (api/admin_proxy.php) — admin key stays server-side.
+                const response = await fetch('api/admin_proxy.php?action=broadcast', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Admin-Key': '<?= RENDER_ADMIN_KEY ?? '' ?>'
-                    },
-                    body: JSON.stringify({ message: message })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message, csrf_token: '<?= $csrfToken ?>' })
                 });
 
                 const result = await response.json();
