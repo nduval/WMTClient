@@ -453,6 +453,11 @@ def run_test_suites():
         ('AutoLoginGate', 'test_autologin_gate.js'),
         # Client-side (vm-load app.js/connection.js from /opt/wmt/assets/js, synced above)
         ('VarSyncFlush',  'test_var_sync_flush.js'),
+        # Resume-startup #var guard: a device resuming a LIVE session re-ran
+        # startup.tin and force-reset the bot's state variables (the phone-hop
+        # bot-killer, elminster 2026-07-10). #var is init-if-absent during
+        # _resumeInitRead; normal force-set semantics everywhere else.
+        ('ResumeStartupGuard', 'test_resume_startup_guard.js'),
         ('VarClassScope', 'test_var_class_scope.js'),
         ('ReconnectGate', 'test_reconnect_gate.js'),
         # Bridge-mode harness — spawns its own bridge.js + wmt-server(BRIDGE_URL)

@@ -969,12 +969,22 @@ class WMTClient {
             // Run the startup script AFTER loadSettings completes so
             // cmdRead's trigger additions aren't overwritten by the
             // disk-loaded set.
+            // _resumeInitRead: on a RESUME the startup #var block is
+            // init-if-absent (see cmdVar) — the server's live variable store
+            // (just adopted above) is authoritative, and force-resetting it
+            // killed running bots on multi-device hops.
+            const runStartup = () => {
+                this._resumeInitRead = true;
+                Promise.resolve(this.cmdRead([this.preferences.startupScript]))
+                    .catch(() => {})
+                    .finally(() => { this._resumeInitRead = false; });
+            };
             if (mudConnected) {
                 if (!briefReconnect && this.preferences.startupScript) {
-                    this.cmdRead([this.preferences.startupScript]);
+                    runStartup();
                 }
             } else if (this.preferences.startupScript) {
-                this.cmdRead([this.preferences.startupScript]);
+                runStartup();
             }
         });
 
@@ -13215,6 +13225,19 @@ class WMTClient {
         }
 
         const { name, keys } = this.parseVariableName(args[0]);
+
+        // INIT-IF-ABSENT during a startup-script run on session RESUME: the server
+        // just handed this client the LIVE variable store (session_resumed →
+        // Object.assign), and startup.tin's #var block is an INIT, not a reset.
+        // Without this guard, every device hop that re-ran startup re-defaulted
+        // the running bot's state vars and var_ops pushed the defaults over the
+        // server's live values — elminster's dosec died 29 minutes after a phone
+        // hop re-initialized 28 bot-state gates (2026-07-10, proven from logs:
+        // the var_ops batch matched startup.tin's init block 28/28). Fresh logins
+        // and page loads are unaffected: their vars don't exist yet, so inits apply.
+        if (this._resumeInitRead && this.variables[name] !== undefined) {
+            return;
+        }
 
         // TinTin++ class scoping: a variable defined while a #class {read} is active
         // belongs to that class, so #class {name} kill removes it. Tag only the
