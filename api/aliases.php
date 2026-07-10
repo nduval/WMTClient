@@ -1,6 +1,13 @@
 <?php
 /**
  * WMT Client - Aliases API
+ *
+ * DB-only since 2026-07-10 (JSON dual-store retired — see
+ * project_database_migration.md). The browser's WS sync (set_aliases) is the
+ * primary save path; `save` here is the HTTP fallback when the WS is down.
+ * The old item-level add/update/delete actions were removed: no client code
+ * called them, and they loaded JSON as working state and bulk-pushed it over
+ * the DB (a stale-clobber vector).
  */
 
 require_once __DIR__ . '/../includes/functions.php';
@@ -25,10 +32,11 @@ $action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        // DB-first read with JSON safety net for characters whose data was
-        // never dual-written (silent FK-fail). See listWithJsonFallback.
-        $r = listWithJsonFallback('/admin/aliases', 'aliases', $characterId, getAliasesPath($userId, $characterId));
-        successResponse(['aliases' => $r['list'], 'source' => $r['source']]);
+        $list = dbList('/admin/aliases', 'aliases', $characterId);
+        if ($list === null) {
+            errorResponse('Aliases temporarily unavailable', 503);
+        }
+        successResponse(['aliases' => $list, 'source' => 'db']);
         break;
 
     case 'save':
@@ -59,113 +67,11 @@ switch ($action) {
             $validatedAliases[] = $validated;
         }
 
-        saveJsonFile(getAliasesPath($userId, $characterId), $validatedAliases);
-        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $validatedAliases);
+        // DB is the only store — a failed push must be loud, not silent.
+        if (!pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $validatedAliases)) {
+            errorResponse('Save failed — data server unreachable, nothing was changed', 503);
+        }
         successResponse(['aliases' => $validatedAliases]);
-        break;
-
-    case 'add':
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-
-        if (empty($data['pattern']) || empty($data['replacement'])) {
-            errorResponse('Pattern and replacement are required');
-        }
-
-        $aliases = loadJsonFile(getAliasesPath($userId, $characterId));
-
-        // Check storage limits (estimate ~300 bytes per alias)
-        $limitCheck = checkUserStorageLimits($userId, 300, 0);
-        if (!$limitCheck['allowed']) {
-            errorResponse($limitCheck['error']);
-        }
-
-        // Check for duplicate pattern
-        $pattern = trim($data['pattern']);
-        foreach ($aliases as $existing) {
-            if ($existing['pattern'] === $pattern) {
-                errorResponse('An alias with this pattern already exists');
-            }
-        }
-
-        $alias = [
-            'id' => generateId(),
-            'pattern' => $pattern,
-            'replacement' => $data['replacement'],
-            'matchType' => in_array($data['matchType'] ?? '', ['exact', 'startsWith', 'regex'])
-                ? $data['matchType']
-                : 'exact',
-            'enabled' => true,
-            'class' => $data['class'] ?? null
-        ];
-
-        $aliases[] = $alias;
-        saveJsonFile(getAliasesPath($userId, $characterId), $aliases);
-        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $aliases);
-
-        successResponse(['alias' => $alias]);
-        break;
-
-    case 'update':
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-        $aliasId = $data['id'] ?? '';
-
-        if (empty($aliasId)) {
-            errorResponse('Alias ID is required');
-        }
-
-        $aliases = loadJsonFile(getAliasesPath($userId, $characterId));
-        $found = false;
-
-        foreach ($aliases as &$alias) {
-            if ($alias['id'] === $aliasId) {
-                if (isset($data['pattern'])) $alias['pattern'] = trim($data['pattern']);
-                if (isset($data['replacement'])) $alias['replacement'] = $data['replacement'];
-                if (isset($data['matchType'])) $alias['matchType'] = $data['matchType'];
-                if (isset($data['enabled'])) $alias['enabled'] = (bool)$data['enabled'];
-                if (array_key_exists('class', $data)) $alias['class'] = $data['class'];
-                $found = true;
-                break;
-            }
-        }
-
-        if (!$found) {
-            errorResponse('Alias not found', 404);
-        }
-
-        saveJsonFile(getAliasesPath($userId, $characterId), $aliases);
-        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $aliases);
-        successResponse(['message' => 'Alias updated']);
-        break;
-
-    case 'delete':
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-        $aliasId = $data['id'] ?? '';
-
-        if (empty($aliasId)) {
-            errorResponse('Alias ID is required');
-        }
-
-        $aliases = loadJsonFile(getAliasesPath($userId, $characterId));
-        $aliases = array_filter($aliases, function($a) use ($aliasId) {
-            return $a['id'] !== $aliasId;
-        });
-
-        $aliases = array_values($aliases);
-        saveJsonFile(getAliasesPath($userId, $characterId), $aliases);
-        pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $aliases);
-        successResponse(['message' => 'Alias deleted']);
         break;
 
     default:

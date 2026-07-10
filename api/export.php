@@ -67,17 +67,18 @@ switch ($action) {
             'mudPort' => MUD_PORT
         ];
 
-        // Export triggers
+        // Everything comes from the DB (single source of truth since 2026-07-10) —
+        // the old JSON reads exported STALE data for any character edited in-game.
         if ($include === 'all' || $include === 'triggers') {
-            $data['triggers'] = loadJsonFile(getTriggersPath($userId, $characterId));
+            $data['triggers'] = dbList('/admin/triggers', 'triggers', $characterId);
+            if ($data['triggers'] === null) errorResponse('Export unavailable — data server unreachable', 503);
         }
 
-        // Export aliases
         if ($include === 'all' || $include === 'aliases') {
-            $data['aliases'] = loadJsonFile(getAliasesPath($userId, $characterId));
+            $data['aliases'] = dbList('/admin/aliases', 'aliases', $characterId);
+            if ($data['aliases'] === null) errorResponse('Export unavailable — data server unreachable', 503);
         }
 
-        // Export preferences — from the DB (single source of truth), not the orphaned JSON.
         if ($include === 'all' || $include === 'preferences') {
             $resp = fetchFromLightsail('/admin/preferences', $characterId);
             $data['preferences'] = ($resp && isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
@@ -85,8 +86,7 @@ switch ($action) {
 
         // Include classes when exporting triggers or aliases (for cross-user/cross-character import)
         if (isset($data['triggers']) || isset($data['aliases'])) {
-            $classesPath = getCharacterDataPath($userId, $characterId) . '/classes.json';
-            $classes = loadJsonFile($classesPath);
+            $classes = dbList('/admin/classes', 'classes', $characterId);
             if (!empty($classes)) {
                 $data['classes'] = $classes;
             }
@@ -143,8 +143,10 @@ switch ($action) {
                 $importClassMap[$ic['id']] = $ic;
             }
 
-            $targetClassesPath = getCharacterDataPath($userId, $characterId) . '/classes.json';
-            $targetClasses = loadJsonFile($targetClassesPath);
+            $targetClasses = dbList('/admin/classes', 'classes', $characterId);
+            if ($targetClasses === null) {
+                errorResponse('Import aborted — data server unreachable, nothing was changed', 503);
+            }
 
             foreach ($importClasses as $ic) {
                 $sourceId = $ic['id'];
@@ -175,7 +177,9 @@ switch ($action) {
             }
 
             if ($classesCreated > 0) {
-                saveJsonFile($targetClassesPath, $targetClasses);
+                if (!pushBulkToLightsail('/admin/classes-bulk', 'classes', $characterId, $targetClasses)) {
+                    errorResponse('Import aborted — class save failed, nothing else was changed', 503);
+                }
                 $imported[] = 'classes';
             }
         }
@@ -192,7 +196,10 @@ switch ($action) {
         // Import triggers
         if (isset($data['triggers']) && is_array($data['triggers'])) {
             if ($mode === 'merge') {
-                $existing = loadJsonFile(getTriggersPath($userId, $characterId));
+                $existing = dbList('/admin/triggers', 'triggers', $characterId);
+                if ($existing === null) {
+                    errorResponse('Import aborted — data server unreachable', 503);
+                }
                 $existingPatterns = array_column($existing, 'pattern');
 
                 foreach ($data['triggers'] as $trigger) {
@@ -218,14 +225,19 @@ switch ($action) {
                 }
             }
 
-            saveJsonFile(getTriggersPath($userId, $characterId), $data['triggers']);
+            if (!pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $data['triggers'])) {
+                errorResponse('Import failed saving triggers — data server unreachable', 503);
+            }
             $imported[] = 'triggers';
         }
 
         // Import aliases
         if (isset($data['aliases']) && is_array($data['aliases'])) {
             if ($mode === 'merge') {
-                $existing = loadJsonFile(getAliasesPath($userId, $characterId));
+                $existing = dbList('/admin/aliases', 'aliases', $characterId);
+                if ($existing === null) {
+                    errorResponse('Import aborted — data server unreachable', 503);
+                }
                 $existingPatterns = array_map('strtolower', array_column($existing, 'pattern'));
 
                 foreach ($data['aliases'] as $alias) {
@@ -250,7 +262,9 @@ switch ($action) {
                 }
             }
 
-            saveJsonFile(getAliasesPath($userId, $characterId), $data['aliases']);
+            if (!pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $data['aliases'])) {
+                errorResponse('Import failed saving aliases — data server unreachable', 503);
+            }
             $imported[] = 'aliases';
         }
 
@@ -316,11 +330,14 @@ switch ($action) {
             errorResponse('Source character not found', 404);
         }
 
-        // Load source data
-        $sourceClasses = loadJsonFile(getCharacterDataPath($userId, $sourceCharId) . '/classes.json');
-        $sourceTriggers = loadJsonFile(getTriggersPath($userId, $sourceCharId));
-        $sourceAliases = loadJsonFile(getAliasesPath($userId, $sourceCharId));
-        $sourceTickers = loadJsonFile(getTickersPath($userId, $sourceCharId));
+        // Load source data from the DB (the only store since 2026-07-10)
+        $sourceClasses = dbList('/admin/classes', 'classes', $sourceCharId);
+        $sourceTriggers = dbList('/admin/triggers', 'triggers', $sourceCharId);
+        $sourceAliases = dbList('/admin/aliases', 'aliases', $sourceCharId);
+        $sourceTickers = dbList('/admin/tickers', 'tickers', $sourceCharId);
+        if ($sourceClasses === null || $sourceTriggers === null || $sourceAliases === null || $sourceTickers === null) {
+            errorResponse('Preview unavailable — data server unreachable', 503);
+        }
 
         // Count items per class
         $classCounts = []; // classId => [triggers, aliases, tickers]
@@ -406,17 +423,28 @@ switch ($action) {
             return in_array($itemClass, $selectedClasses);
         };
 
-        // Load source classes
-        $sourceClassesPath = getCharacterDataPath($userId, $sourceCharId) . '/classes.json';
-        $sourceClasses = loadJsonFile($sourceClassesPath);
+        // Load EVERYTHING needed from the DB up front — if any read fails we
+        // abort with 503 before a single write happens (no partial copies).
+        $sourceClasses = dbList('/admin/classes', 'classes', $sourceCharId);
+        $targetClasses = dbList('/admin/classes', 'classes', $characterId);
+        $dbReads = [
+            'triggers' => [dbList('/admin/triggers', 'triggers', $sourceCharId), dbList('/admin/triggers', 'triggers', $characterId)],
+            'aliases'  => [dbList('/admin/aliases', 'aliases', $sourceCharId),  dbList('/admin/aliases', 'aliases', $characterId)],
+            'tickers'  => [dbList('/admin/tickers', 'tickers', $sourceCharId),  dbList('/admin/tickers', 'tickers', $characterId)],
+        ];
+        if ($sourceClasses === null || $targetClasses === null) {
+            errorResponse('Copy aborted — data server unreachable, nothing was changed', 503);
+        }
+        foreach ($include as $k) {
+            if (isset($dbReads[$k]) && ($dbReads[$k][0] === null || $dbReads[$k][1] === null)) {
+                errorResponse('Copy aborted — data server unreachable, nothing was changed', 503);
+            }
+        }
+
         $sourceClassMap = []; // source class ID → source class data
         foreach ($sourceClasses as $sc) {
             $sourceClassMap[$sc['id']] = $sc;
         }
-
-        // Load target classes
-        $targetClassesPath = getCharacterDataPath($userId, $characterId) . '/classes.json';
-        $targetClasses = loadJsonFile($targetClassesPath);
 
         // Build class ID mapping: source ID → target ID
         $classIdMap = [];
@@ -467,12 +495,12 @@ switch ($action) {
 
         // Copy triggers
         if (in_array('triggers', $include)) {
-            $sourceTriggers = loadJsonFile(getTriggersPath($userId, $sourceCharId));
-            $targetTriggers = ($mode === 'merge') ? loadJsonFile(getTriggersPath($userId, $characterId)) : [];
+            $sourceTriggers = $dbReads['triggers'][0];
+            $targetTriggers = ($mode === 'merge') ? $dbReads['triggers'][1] : [];
 
             // In replace mode with class filter, keep items NOT in selected classes
             if ($mode === 'replace' && $selectedClasses !== null) {
-                $targetTriggers = loadJsonFile(getTriggersPath($userId, $characterId));
+                $targetTriggers = $dbReads['triggers'][1];
                 // Remove only items whose class is in selectedClasses (or unassigned if includeUnassigned)
                 $targetTriggers = array_values(array_filter($targetTriggers, function($t) use ($shouldIncludeItem) {
                     return !$shouldIncludeItem($t['class'] ?? null);
@@ -502,18 +530,20 @@ switch ($action) {
                 $copied++;
             }
 
-            saveJsonFile(getTriggersPath($userId, $characterId), $targetTriggers);
+            if (!pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $targetTriggers)) {
+                errorResponse('Copy failed saving triggers — data server unreachable', 503);
+            }
             $summary['triggers'] = $copied;
         }
 
         // Copy aliases
         if (in_array('aliases', $include)) {
-            $sourceAliases = loadJsonFile(getAliasesPath($userId, $sourceCharId));
-            $targetAliases = ($mode === 'merge') ? loadJsonFile(getAliasesPath($userId, $characterId)) : [];
+            $sourceAliases = $dbReads['aliases'][0];
+            $targetAliases = ($mode === 'merge') ? $dbReads['aliases'][1] : [];
 
             // In replace mode with class filter, keep items NOT in selected classes
             if ($mode === 'replace' && $selectedClasses !== null) {
-                $targetAliases = loadJsonFile(getAliasesPath($userId, $characterId));
+                $targetAliases = $dbReads['aliases'][1];
                 $targetAliases = array_values(array_filter($targetAliases, function($a) use ($shouldIncludeItem) {
                     return !$shouldIncludeItem($a['class'] ?? null);
                 }));
@@ -540,18 +570,20 @@ switch ($action) {
                 $copied++;
             }
 
-            saveJsonFile(getAliasesPath($userId, $characterId), $targetAliases);
+            if (!pushBulkToLightsail('/admin/aliases-bulk', 'aliases', $characterId, $targetAliases)) {
+                errorResponse('Copy failed saving aliases — data server unreachable', 503);
+            }
             $summary['aliases'] = $copied;
         }
 
         // Copy tickers
         if (in_array('tickers', $include)) {
-            $sourceTickers = loadJsonFile(getTickersPath($userId, $sourceCharId));
-            $targetTickers = ($mode === 'merge') ? loadJsonFile(getTickersPath($userId, $characterId)) : [];
+            $sourceTickers = $dbReads['tickers'][0];
+            $targetTickers = ($mode === 'merge') ? $dbReads['tickers'][1] : [];
 
             // In replace mode with class filter, keep items NOT in selected classes
             if ($mode === 'replace' && $selectedClasses !== null) {
-                $targetTickers = loadJsonFile(getTickersPath($userId, $characterId));
+                $targetTickers = $dbReads['tickers'][1];
                 $targetTickers = array_values(array_filter($targetTickers, function($t) use ($shouldIncludeItem) {
                     return !$shouldIncludeItem($t['class'] ?? null);
                 }));
@@ -578,13 +610,17 @@ switch ($action) {
                 $copied++;
             }
 
-            saveJsonFile(getTickersPath($userId, $characterId), $targetTickers);
+            if (!pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $targetTickers)) {
+                errorResponse('Copy failed saving tickers — data server unreachable', 503);
+            }
             $summary['tickers'] = $copied;
         }
 
         // Save target classes if any were created
         if ($classesCreated > 0) {
-            saveJsonFile($targetClassesPath, $targetClasses);
+            if (!pushBulkToLightsail('/admin/classes-bulk', 'classes', $characterId, $targetClasses)) {
+                errorResponse('Copy failed saving classes — data server unreachable', 503);
+            }
         }
         $summary['classesCreated'] = $classesCreated;
 

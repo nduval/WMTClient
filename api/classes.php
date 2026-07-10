@@ -2,6 +2,13 @@
 /**
  * WMT Client Classes API
  * Manages script classes (groups of triggers/aliases/gags)
+ *
+ * DB-only since 2026-07-10 (JSON dual-store retired — see
+ * project_database_migration.md). Every mutation reads the CURRENT list from
+ * the Lightsail DB, mutates, and pushes back. The old flow loaded JSON as
+ * working state and pushed it over the DB — if JSON had drifted (e.g. items
+ * authored in-game via WS), a class rename or delete replaced good DB rows
+ * with stale data. The unused toggle/get_items actions were removed.
  */
 
 require_once __DIR__ . '/../includes/auth.php';
@@ -21,31 +28,30 @@ header('Content-Type: application/json');
 
 $userId = getCurrentUserId();
 $characterId = getCurrentCharacterId();
-$characterPath = getCharacterDataPath($userId, $characterId);
-$classesPath = $characterPath . '/classes.json';
 
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
 
 /**
- * Load classes for current character
+ * Load classes for the current character from the DB. 503s (and exits) if
+ * the DB is unreachable — mutating against an unknown current state is how
+ * data gets clobbered.
  */
-function loadClasses($path) {
-    return loadJsonFile($path);
+function loadClassesDb(string $characterId): array {
+    $list = dbList('/admin/classes', 'classes', $characterId);
+    if ($list === null) {
+        errorResponse('Classes temporarily unavailable', 503);
+    }
+    return $list;
 }
 
 /**
- * Save classes for current character.
- * Writes JSON (legacy persistence) AND pushes to Lightsail DB so the change
- * is reflected end-to-end even when the user's WS is disconnected at save time.
+ * Push the full class list to the DB (the only store). Loud on failure.
  */
-function saveClasses($path, $classes) {
-    global $characterId;
-    $result = saveJsonFile($path, $classes);
-    if (!empty($characterId)) {
-        pushBulkToLightsail('/admin/classes-bulk', 'classes', $characterId, $classes);
+function saveClassesDb(string $characterId, array $classes): void {
+    if (!pushBulkToLightsail('/admin/classes-bulk', 'classes', $characterId, $classes)) {
+        errorResponse('Save failed — data server unreachable, nothing was changed', 503);
     }
-    return $result;
 }
 
 /**
@@ -75,8 +81,7 @@ function findClassByName($classes, $name) {
 
 switch ($action) {
     case 'list':
-        $r = listWithJsonFallback('/admin/classes', 'classes', $characterId, $classesPath);
-        successResponse(['classes' => $r['list'], 'source' => $r['source']]);
+        successResponse(['classes' => loadClassesDb($characterId), 'source' => 'db']);
         break;
 
     case 'create':
@@ -95,13 +100,7 @@ switch ($action) {
             errorResponse('Class name must be 50 characters or less');
         }
 
-        $classes = loadClasses($classesPath);
-
-        // Check storage limits (estimate ~200 bytes per class)
-        $limitCheck = checkUserStorageLimits($userId, 200, 0);
-        if (!$limitCheck['allowed']) {
-            errorResponse($limitCheck['error']);
-        }
+        $classes = loadClassesDb($characterId);
 
         // Check if class with same name exists
         if (findClassByName($classes, $name)) {
@@ -116,7 +115,7 @@ switch ($action) {
         ];
 
         $classes[] = $newClass;
-        saveClasses($classesPath, $classes);
+        saveClassesDb($characterId, $classes);
 
         successResponse(['class' => $newClass]);
         break;
@@ -135,7 +134,7 @@ switch ($action) {
             errorResponse('Class ID is required');
         }
 
-        $classes = loadClasses($classesPath);
+        $classes = loadClassesDb($characterId);
         $found = findClassById($classes, $classId);
 
         if (!$found) {
@@ -161,7 +160,7 @@ switch ($action) {
             $classes[$found['index']]['enabled'] = (bool)$enabled;
         }
 
-        saveClasses($classesPath, $classes);
+        saveClassesDb($characterId, $classes);
 
         successResponse(['class' => $classes[$found['index']]]);
         break;
@@ -179,136 +178,64 @@ switch ($action) {
             errorResponse('Class ID is required');
         }
 
-        $classes = loadClasses($classesPath);
+        $classes = loadClassesDb($characterId);
         $found = findClassById($classes, $classId);
 
         if (!$found) {
             errorResponse('Class not found');
+        }
+
+        // Read ALL current item lists from the DB BEFORE mutating anything —
+        // if any read fails we abort with 503 and nothing has changed.
+        $triggers = dbList('/admin/triggers', 'triggers', $characterId);
+        $aliases  = dbList('/admin/aliases',  'aliases',  $characterId);
+        $tickers  = dbList('/admin/tickers',  'tickers',  $characterId);
+        if ($triggers === null || $aliases === null || $tickers === null) {
+            errorResponse('Class delete aborted — data server unreachable, nothing was changed', 503);
         }
 
         // Remove class from array
         array_splice($classes, $found['index'], 1);
-        saveClasses($classesPath, $classes);
-
-        // Handle items in this class
-        $triggersPath = $characterPath . '/triggers.json';
-        $aliasesPath = $characterPath . '/aliases.json';
-        $tickersPath = $characterPath . '/tickers.json';
 
         if ($deleteItems) {
             // Delete all triggers, aliases, and tickers in this class
-            $triggers = loadJsonFile($triggersPath);
             $triggers = array_values(array_filter($triggers, function($t) use ($classId) {
                 return ($t['class'] ?? null) !== $classId;
             }));
-            saveJsonFile($triggersPath, $triggers);
-
-            $aliases = loadJsonFile($aliasesPath);
             $aliases = array_values(array_filter($aliases, function($a) use ($classId) {
                 return ($a['class'] ?? null) !== $classId;
             }));
-            saveJsonFile($aliasesPath, $aliases);
-
-            $tickers = loadJsonFile($tickersPath);
             $tickers = array_values(array_filter($tickers, function($t) use ($classId) {
                 return ($t['class'] ?? null) !== $classId;
             }));
-            saveJsonFile($tickersPath, $tickers);
         } else {
             // Just remove class reference from items (make them classless)
-            $triggers = loadJsonFile($triggersPath);
             foreach ($triggers as &$t) {
-                if (($t['class'] ?? null) === $classId) {
-                    $t['class'] = null;
-                }
+                if (($t['class'] ?? null) === $classId) $t['class'] = null;
             }
-            saveJsonFile($triggersPath, $triggers);
-
-            $aliases = loadJsonFile($aliasesPath);
+            unset($t);
             foreach ($aliases as &$a) {
-                if (($a['class'] ?? null) === $classId) {
-                    $a['class'] = null;
-                }
+                if (($a['class'] ?? null) === $classId) $a['class'] = null;
             }
-            saveJsonFile($aliasesPath, $aliases);
-
-            $tickers = loadJsonFile($tickersPath);
+            unset($a);
             foreach ($tickers as &$t) {
-                if (($t['class'] ?? null) === $classId) {
-                    $t['class'] = null;
-                }
+                if (($t['class'] ?? null) === $classId) $t['class'] = null;
             }
-            saveJsonFile($tickersPath, $tickers);
+            unset($t);
         }
 
-        // Cascade the updated triggers/aliases/tickers lists to the Lightsail
-        // DB. Without these, deleting a class would leave the DB with either
-        // orphan rows (delete_items=true) or items referencing a class_id
-        // that no longer exists (delete_items=false). See class-delete audit
-        // gap, 2026-05-25.
-        pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $triggers);
-        pushBulkToLightsail('/admin/aliases-bulk',  'aliases',  $characterId, $aliases);
-        pushBulkToLightsail('/admin/tickers-bulk',  'tickers',  $characterId, $tickers);
+        // Push the class list first, then cascade the item lists. Without the
+        // cascade, deleting a class would leave orphan rows (delete_items=true)
+        // or items referencing a dead class_id (delete_items=false).
+        saveClassesDb($characterId, $classes);
+        $ok = pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $triggers)
+            & pushBulkToLightsail('/admin/aliases-bulk',  'aliases',  $characterId, $aliases)
+            & pushBulkToLightsail('/admin/tickers-bulk',  'tickers',  $characterId, $tickers);
+        if (!$ok) {
+            errorResponse('Class deleted but item cleanup partially failed — refresh and retry', 500);
+        }
 
         successResponse(['message' => 'Class deleted']);
-        break;
-
-    case 'toggle':
-        // Quick toggle enabled state
-        if ($method !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-        $classId = $data['class_id'] ?? '';
-
-        if (empty($classId)) {
-            errorResponse('Class ID is required');
-        }
-
-        $classes = loadClasses($classesPath);
-        $found = findClassById($classes, $classId);
-
-        if (!$found) {
-            errorResponse('Class not found');
-        }
-
-        $classes[$found['index']]['enabled'] = !$classes[$found['index']]['enabled'];
-        saveClasses($classesPath, $classes);
-
-        $toggledClass = $classes[$found['index']];
-        successResponse([
-            'class' => $toggledClass,
-            'enabled' => $toggledClass['enabled']
-        ]);
-        break;
-
-    case 'get_items':
-        // Get all items in a class (including from packages)
-        $classId = $_GET['class_id'] ?? '';
-
-        if (empty($classId)) {
-            errorResponse('Class ID is required');
-        }
-
-        $triggersPath = $characterPath . '/triggers.json';
-        $aliasesPath = $characterPath . '/aliases.json';
-
-        $triggers = loadJsonFile($triggersPath);
-        $aliases = loadJsonFile($aliasesPath);
-
-        $classTriggers = array_values(array_filter($triggers, function($t) use ($classId) {
-            return ($t['class'] ?? null) === $classId;
-        }));
-
-        $classAliases = array_values(array_filter($aliases, function($a) use ($classId) {
-            return ($a['class'] ?? null) === $classId;
-        }));
-
-        successResponse([
-            'triggers' => $classTriggers,
-            'aliases' => $classAliases
-        ]);
         break;
 
     default:

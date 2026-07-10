@@ -21,74 +21,11 @@ $characters = getCharacters($userId);
 $csrfToken = generateCsrfToken();
 $isAccountWizard = isUserWizard($userId);
 
-// Auto-backup: create daily backup if admin user and >24 hours since last backup
-$ADMIN_USERS = ['nathan'];
-$REPORT_USERS = ['nathan', 'amy', 'adalius']; // Users who can see the Player Report link
-if (in_array($username, $ADMIN_USERS)) {
-    $backupDir = USERS_PATH . '/backups';
-    if (!is_dir($backupDir)) {
-        @mkdir($backupDir, 0755, true);
-    }
-
-    $lastBackupFile = $backupDir . '/.last_auto_backup';
-    $lastBackup = file_exists($lastBackupFile) ? (int)file_get_contents($lastBackupFile) : 0;
-    $dayAgo = time() - 86400;
-
-    if ($lastBackup < $dayAgo) {
-        // Create auto backup
-        $timestamp = date('Y-m-d_H-i-s');
-        $backupFile = $backupDir . '/auto_backup_' . $timestamp . '.json';
-
-        $backup = [
-            'timestamp' => date('c'),
-            'version' => 1,
-            'auto' => true,
-            'users_index' => loadJsonFile(getUsersIndexPath()),
-            'user_data' => []
-        ];
-
-        $userDirs = glob(USERS_PATH . '/*', GLOB_ONLYDIR);
-        foreach ($userDirs as $userDir) {
-            $dirName = basename($userDir);
-            if ($dirName === 'backups') continue;
-
-            $userData = [
-                'id' => $dirName,
-                'profile' => loadJsonFile($userDir . '/profile.json'),
-                'characters' => loadJsonFile($userDir . '/characters.json'),
-                'character_data' => []
-            ];
-
-            $charDirs = glob($userDir . '/characters/*', GLOB_ONLYDIR);
-            foreach ($charDirs as $charDir) {
-                $charId = basename($charDir);
-                $userData['character_data'][$charId] = [
-                    'triggers' => loadJsonFile($charDir . '/triggers.json'),
-                    'aliases' => loadJsonFile($charDir . '/aliases.json'),
-                    'classes' => loadJsonFile($charDir . '/classes.json'),
-                    'tickers' => loadJsonFile($charDir . '/tickers.json'),
-                    'preferences' => loadJsonFile($charDir . '/preferences.json')
-                ];
-            }
-
-            $backup['user_data'][$dirName] = $userData;
-        }
-
-        if (@file_put_contents($backupFile, json_encode($backup, JSON_PRETTY_PRINT))) {
-            @file_put_contents($lastBackupFile, time());
-
-            // Keep only last 7 auto backups
-            $autoBackups = glob($backupDir . '/auto_backup_*.json');
-            if (count($autoBackups) > 7) {
-                usort($autoBackups, function($a, $b) { return filemtime($a) - filemtime($b); });
-                $toDelete = array_slice($autoBackups, 0, count($autoBackups) - 7);
-                foreach ($toDelete as $old) {
-                    @unlink($old);
-                }
-            }
-        }
-    }
-}
+// (The daily JSON auto-backup that ran here was removed 2026-07-10 with the
+// JSON dual-store retirement: it snapshotted every user's triggers/aliases/
+// tickers/classes/preferences JSON — data that now lives only in the Lightsail
+// DB, which has its own nightly off-site backup, on-box snapshots, and a
+// 30-day change_log. See project_database_migration.md.)
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -567,10 +504,10 @@ if (in_array($username, $ADMIN_USERS)) {
         <div class="characters-header">
             <div class="user-info">
                 Logged in as <strong><?= htmlspecialchars($username) ?></strong>
-                <?php if (in_array($username, $ADMIN_USERS)): ?>
+                <?php if (isAdminUser()): ?>
                     | <a href="admin.php">Admin</a>
                 <?php endif; ?>
-                <?php if (in_array($username, $REPORT_USERS)): ?>
+                <?php if (isReportUser()): ?>
                     | <a href="report.php">Report</a>
                 <?php endif; ?>
                 | <a href="#" onclick="showChangePassword(); return false;">Change Password</a>

@@ -366,39 +366,24 @@ function usersIndexWithJsonFallback(): array {
 }
 
 /**
- * Authoritative list read with JSON-divergence safety net.
+ * DB-only list read for the migrated tables (triggers/aliases/tickers/classes).
  *
- * Tries Lightsail DB first via fetchFromLightsail. If the DB returns success
- * with an EMPTY list AND the JSON file on IONOS has data, returns JSON
- * instead — this protects users whose data was never dual-written to DB
- * (e.g. characters with no `characters` table row, where every DB save
- * silently FK-failed). Without this fallback, a hard refresh would show
- * an empty UI, and any subsequent save action would push `[]` over the
- * (still-populated) JSON file, destroying it.
+ * Returns the list on success (possibly empty — an empty DB IS the truth),
+ * or null when Lightsail is unreachable so callers can 503 cleanly instead
+ * of silently diverging.
  *
- * Returns ['list' => array, 'source' => 'db' | 'json_fallback' | 'json_db_unreachable'].
+ * HISTORY: this replaced listWithJsonFallback on 2026-07-10 when the JSON
+ * dual-store was retired. The fallback dated from the 2026-04-27 read-path
+ * switchover that shipped before auditing DB completeness; a full divergence
+ * audit (all 235 char dirs vs DB) ran clean on 2026-07-10 — every JSON-only
+ * item was backfilled into the DB first (Remiel + 3 stray tickers), and the
+ * remaining JSON-vs-DB drift was verified stale-JSON (in-game deletions that
+ * correctly never wrote back to JSON). See project_database_migration.md.
  */
-function listWithJsonFallback(string $endpoint, string $listKey, string $characterId, string $jsonFallbackPath): array {
+function dbList(string $endpoint, string $listKey, string $characterId): ?array {
     $resp = fetchFromLightsail($endpoint, $characterId);
-    $dbList = ($resp && isset($resp[$listKey]) && is_array($resp[$listKey])) ? $resp[$listKey] : null;
-
-    // DB returned data — authoritative
-    if (is_array($dbList) && count($dbList) > 0) {
-        return ['list' => $dbList, 'source' => 'db'];
-    }
-
-    // DB empty or unreachable — check JSON
-    $jsonList = file_exists($jsonFallbackPath) ? loadJsonFile($jsonFallbackPath) : [];
-    $jsonList = is_array($jsonList) ? $jsonList : [];
-
-    if (count($jsonList) > 0) {
-        $reason = $resp === null ? 'json_db_unreachable' : 'json_fallback';
-        @error_log("listWithJsonFallback: $reason for $endpoint cid=$characterId json_count=" . count($jsonList));
-        return ['list' => $jsonList, 'source' => $reason];
-    }
-
-    // Both empty — return DB result (treat as truth, user has no data)
-    return ['list' => $dbList ?? [], 'source' => $resp === null ? 'db_unreachable_empty' : 'db_empty'];
+    if ($resp === null) return null;
+    return (isset($resp[$listKey]) && is_array($resp[$listKey])) ? $resp[$listKey] : [];
 }
 
 /**
@@ -1067,20 +1052,9 @@ function createCharacter(string $userId, string $characterName, string $server =
     $characters[] = $character;
     saveJsonFile(getCharactersListPath($userId), $characters);
 
-    // Initialize character data files
-    saveJsonFile(getTriggersPath($userId, $characterId), []);
-    saveJsonFile(getAliasesPath($userId, $characterId), []);
-    saveJsonFile(getTickersPath($userId, $characterId), []);
-    saveJsonFile(getPreferencesPath($userId, $characterId), [
-        'fontFamily' => DEFAULT_FONT_FAMILY,
-        'fontSize' => DEFAULT_FONT_SIZE,
-        'textColor' => DEFAULT_TEXT_COLOR,
-        'backgroundColor' => DEFAULT_BACKGROUND_COLOR,
-        'echoCommands' => true,
-        'scrollOnOutput' => true,
-        'keepAlive' => true,
-        'keepAliveInterval' => 60
-    ]);
+    // (No JSON data files to initialize — triggers/aliases/tickers/classes/
+    // preferences live in the Lightsail DB only since 2026-07-10. A new char
+    // simply has zero rows until its first save; the client applies defaults.)
 
     // Update global character index
     updateCharacterIndex($userId, $characterId, $characterName, $server);
@@ -1303,10 +1277,8 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
     // (mip_conditions is no longer a separate file — it lives in the preferences
     // blob, which the prefs DB sync further below copies to the new char.)
 
-    // triggers/aliases/tickers/classes are dual-store (DB primary, JSON fallback).
-    // Replicate a real save into the new char: write BOTH the JSON file AND the DB
-    // rows so server-side execution (which loads from the DB) works immediately and
-    // the copy doesn't lean on the JSON safety net.
+    // triggers/aliases/tickers/classes live in the DB only (JSON dual-store
+    // retired 2026-07-10). Copy = DB read → fresh ids → DB push for the new char.
     //
     // CRITICAL: every id in these tables is GLOBALLY unique (the primary key is the
     // bare id, not (character_id,id)). Copying a row with the SOURCE's id collides:
@@ -1317,8 +1289,7 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
     // remap each item's `class` reference (the wire field that carries class_id).
 
     // 1) classes first — fresh ids + old→new map for remapping below.
-    $clsRes = listWithJsonFallback('/admin/classes', 'classes', $sourceId, $sourcePath . '/classes.json');
-    $srcClasses = is_array($clsRes['list']) ? $clsRes['list'] : [];
+    $srcClasses = dbList('/admin/classes', 'classes', $sourceId) ?? [];
     $classMap = [];
     $newClasses = [];
     foreach ($srcClasses as $cl) {
@@ -1328,21 +1299,21 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
         if ($oldId !== null) $classMap[$oldId] = $cl['id'];
         $newClasses[] = $cl;
     }
-    saveJsonFile($newPath . '/classes.json', $newClasses);
     if (count($newClasses) > 0) {
-        pushBulkToLightsail('/admin/classes-bulk', 'classes', $newId, $newClasses);
+        if (!pushBulkToLightsail('/admin/classes-bulk', 'classes', $newId, $newClasses)) {
+            @error_log("duplicateCharacter: classes push failed for new char $newId");
+        }
     }
 
     // 2) triggers/aliases/tickers — fresh item ids + remapped class refs.
     $itemTypes = [
-        'triggers' => ['/admin/triggers', '/admin/triggers-bulk', getTriggersPath($userId, $sourceId), getTriggersPath($userId, $newId)],
-        'aliases'  => ['/admin/aliases',  '/admin/aliases-bulk',  getAliasesPath($userId, $sourceId),  getAliasesPath($userId, $newId)],
-        'tickers'  => ['/admin/tickers',  '/admin/tickers-bulk',  getTickersPath($userId, $sourceId),  getTickersPath($userId, $newId)],
+        'triggers' => ['/admin/triggers', '/admin/triggers-bulk'],
+        'aliases'  => ['/admin/aliases',  '/admin/aliases-bulk'],
+        'tickers'  => ['/admin/tickers',  '/admin/tickers-bulk'],
     ];
     foreach ($itemTypes as $listKey => $p) {
-        list($getEndpoint, $bulkEndpoint, $srcJsonPath, $newJsonPath) = $p;
-        $res = listWithJsonFallback($getEndpoint, $listKey, $sourceId, $srcJsonPath);
-        $list = is_array($res['list']) ? $res['list'] : [];
+        list($getEndpoint, $bulkEndpoint) = $p;
+        $list = dbList($getEndpoint, $listKey, $sourceId) ?? [];
         foreach ($list as &$item) {
             if (!is_array($item)) continue;
             $item['id'] = generateId();
@@ -1351,9 +1322,10 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
             }
         }
         unset($item);
-        saveJsonFile($newJsonPath, $list);
         if (count($list) > 0) {
-            pushBulkToLightsail($bulkEndpoint, $listKey, $newId, $list);
+            if (!pushBulkToLightsail($bulkEndpoint, $listKey, $newId, $list)) {
+                @error_log("duplicateCharacter: $listKey push failed for new char $newId");
+            }
         }
     }
 

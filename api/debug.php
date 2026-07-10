@@ -61,10 +61,13 @@ switch ($action) {
             errorResponse('character parameter required for state action', 400);
         }
 
-        $triggers = loadJsonFile(getTriggersPath($userId, $characterId));
-        $aliases = loadJsonFile(getAliasesPath($userId, $characterId));
-        $tickers = loadJsonFile(getTickersPath($userId, $characterId));
-        $preferences = loadJsonFile(getPreferencesPath($userId, $characterId));
+        // All from the DB (single source of truth since 2026-07-10) — the JSON
+        // reads this used to do showed stale data for any in-game-edited char.
+        $triggers = dbList('/admin/triggers', 'triggers', $characterId) ?? [];
+        $aliases = dbList('/admin/aliases', 'aliases', $characterId) ?? [];
+        $tickers = dbList('/admin/tickers', 'tickers', $characterId) ?? [];
+        $prefsResp = fetchFromLightsail('/admin/preferences', $characterId);
+        $preferences = ($prefsResp && isset($prefsResp['preferences']) && is_array($prefsResp['preferences'])) ? $prefsResp['preferences'] : [];
 
         // List script files
         $scriptsPath = getCharacterDataPath($userId, $characterId) . '/scripts';
@@ -99,7 +102,7 @@ switch ($action) {
             errorResponse('character parameter required', 400);
         }
 
-        $triggers = loadJsonFile(getTriggersPath($userId, $characterId));
+        $triggers = dbList('/admin/triggers', 'triggers', $characterId) ?? [];
 
         // Summarize triggers by type
         $summary = ['command' => 0, 'gag' => 0, 'highlight' => 0, 'substitute' => 0, 'sound' => 0, 'other' => 0];

@@ -1,6 +1,13 @@
 <?php
 /**
  * WMT Client - Tickers API
+ *
+ * DB-only since 2026-07-10 (JSON dual-store retired — see
+ * project_database_migration.md). The browser's WS sync (set_tickers) is the
+ * primary save path; `save` here is the HTTP fallback when the WS is down.
+ * The old item-level add/update/delete actions were removed: no client code
+ * called them, and they loaded JSON as working state and bulk-pushed it over
+ * the DB (a stale-clobber vector).
  */
 
 require_once __DIR__ . '/../includes/functions.php';
@@ -25,8 +32,11 @@ $action = $_GET['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        $r = listWithJsonFallback('/admin/tickers', 'tickers', $characterId, getTickersPath($userId, $characterId));
-        successResponse(['tickers' => $r['list'], 'source' => $r['source']]);
+        $list = dbList('/admin/tickers', 'tickers', $characterId);
+        if ($list === null) {
+            errorResponse('Tickers temporarily unavailable', 503);
+        }
+        successResponse(['tickers' => $list, 'source' => 'db']);
         break;
 
     case 'save':
@@ -55,103 +65,11 @@ switch ($action) {
             $validatedTickers[] = $validated;
         }
 
-        saveJsonFile(getTickersPath($userId, $characterId), $validatedTickers);
-        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $validatedTickers);
+        // DB is the only store — a failed push must be loud, not silent.
+        if (!pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $validatedTickers)) {
+            errorResponse('Save failed — data server unreachable, nothing was changed', 503);
+        }
         successResponse(['tickers' => $validatedTickers]);
-        break;
-
-    case 'add':
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-
-        if (empty($data['command'])) {
-            errorResponse('Command is required');
-        }
-
-        $tickers = loadJsonFile(getTickersPath($userId, $characterId));
-
-        // Check storage limits
-        $limitCheck = checkUserStorageLimits($userId, 300, 0);
-        if (!$limitCheck['allowed']) {
-            errorResponse($limitCheck['error']);
-        }
-
-        $ticker = [
-            'id' => generateId(),
-            'name' => sanitize($data['name'] ?? ''),
-            'command' => $data['command'],
-            'interval' => max(1, intval($data['interval'] ?? 60)),
-            'enabled' => true,
-            'class' => $data['class'] ?? null
-        ];
-
-        $tickers[] = $ticker;
-        saveJsonFile(getTickersPath($userId, $characterId), $tickers);
-        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $tickers);
-
-        successResponse(['ticker' => $ticker]);
-        break;
-
-    case 'update':
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-        $tickerId = $data['id'] ?? '';
-
-        if (empty($tickerId)) {
-            errorResponse('Ticker ID is required');
-        }
-
-        $tickers = loadJsonFile(getTickersPath($userId, $characterId));
-        $found = false;
-
-        foreach ($tickers as &$ticker) {
-            if ($ticker['id'] === $tickerId) {
-                if (isset($data['name'])) $ticker['name'] = sanitize($data['name']);
-                if (isset($data['command'])) $ticker['command'] = $data['command'];
-                if (isset($data['interval'])) $ticker['interval'] = max(1, intval($data['interval']));
-                if (isset($data['enabled'])) $ticker['enabled'] = (bool)$data['enabled'];
-                if (array_key_exists('class', $data)) $ticker['class'] = $data['class'];
-                $found = true;
-                break;
-            }
-        }
-
-        if (!$found) {
-            errorResponse('Ticker not found', 404);
-        }
-
-        saveJsonFile(getTickersPath($userId, $characterId), $tickers);
-        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $tickers);
-        successResponse(['message' => 'Ticker updated']);
-        break;
-
-    case 'delete':
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            errorResponse('Method not allowed', 405);
-        }
-
-        $data = json_decode(file_get_contents('php://input'), true);
-        $tickerId = $data['id'] ?? '';
-
-        if (empty($tickerId)) {
-            errorResponse('Ticker ID is required');
-        }
-
-        $tickers = loadJsonFile(getTickersPath($userId, $characterId));
-        $tickers = array_filter($tickers, function($t) use ($tickerId) {
-            return $t['id'] !== $tickerId;
-        });
-
-        $tickers = array_values($tickers);
-        saveJsonFile(getTickersPath($userId, $characterId), $tickers);
-        pushBulkToLightsail('/admin/tickers-bulk', 'tickers', $characterId, $tickers);
-        successResponse(['message' => 'Ticker deleted']);
         break;
 
     default:
