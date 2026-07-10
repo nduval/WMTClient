@@ -109,6 +109,18 @@ try {
   } catch (e) {
     console.error('block_trigger column migration failed:', e.message);
   }
+  // Accounts migration (2026-07-10): per-character wizard flag moves into the
+  // DB so PHP's isCharacterWizard can read DB-first. Previously JSON-only
+  // (characters.json isWizard) — the one character field with no DB column.
+  try {
+    const charCols = new Set(wmtDb.prepare('PRAGMA table_info(characters)').all().map(c => c.name));
+    if (!charCols.has('is_wizard')) {
+      wmtDb.exec('ALTER TABLE characters ADD COLUMN is_wizard INTEGER DEFAULT 0');
+      console.log('characters: added is_wizard column');
+    }
+  } catch (e) {
+    console.error('characters is_wizard column migration failed:', e.message);
+  }
   // Local persisted-session store (2026-06-12). PRIMARY store for session
   // continuity: synchronous writes that can't be lost to an IONOS HTTP hiccup
   // at the worst moment (SIGTERM, crash). The PHP store stays as a best-effort
@@ -4575,11 +4587,12 @@ const server = http.createServer(async (req, res) => {
           password: data.password !== undefined ? data.password : (before ? before.password : ''),
           sort_order: data.sort_order !== undefined ? data.sort_order : (before ? before.sort_order : 0),
           created_at: data.created_at !== undefined ? data.created_at : (before ? before.created_at : new Date().toISOString()),
+          is_wizard: data.is_wizard !== undefined ? (data.is_wizard ? 1 : 0) : (before ? (before.is_wizard || 0) : 0),
         };
         wmtDb.transaction(() => {
           wmtDb.prepare(
-            'INSERT OR REPLACE INTO characters (id, user_id, name, label, server, password, sort_order, created_at) VALUES (?,?,?,?,?,?,?,?)'
-          ).run(next.id, next.user_id, next.name, next.label, next.server, next.password, next.sort_order, next.created_at);
+            'INSERT OR REPLACE INTO characters (id, user_id, name, label, server, password, sort_order, created_at, is_wizard) VALUES (?,?,?,?,?,?,?,?,?)'
+          ).run(next.id, next.user_id, next.name, next.label, next.server, next.password, next.sort_order, next.created_at, next.is_wizard);
           try {
             wmtDb.prepare(
               `INSERT INTO change_log (character_id, table_name, item_id, action, old_data, new_data, source, created_at) VALUES (?,?,?,?,?,?,?, datetime('now'))`
@@ -4595,6 +4608,45 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: e.message }));
       }
     });
+    return;
+
+  } else if (parsedUrl.pathname === '/admin/characters' && req.method === 'GET') {
+    // A user's character list from the DB, client-shaped (accounts migration
+    // 2026-07-10 — backs PHP getCharacters()). Ordered like the old JSON list.
+    const adminKey = req.headers['x-admin-key'];
+    if (!ADMIN_KEY || adminKey !== ADMIN_KEY) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid admin key' }));
+      return;
+    }
+    if (!wmtDb) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'DB not available' }));
+      return;
+    }
+    const listUserId = parsedUrl.query.userId;
+    if (!listUserId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'userId required' }));
+      return;
+    }
+    try {
+      const rows = wmtDb.prepare('SELECT * FROM characters WHERE user_id = ? ORDER BY sort_order, created_at').all(listUserId);
+      const characters = rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        label: r.label || '',
+        server: r.server || '3k',
+        password: r.password || '',
+        isWizard: r.is_wizard === 1,
+        created_at: r.created_at || '',
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, characters }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
     return;
 
   } else if (parsedUrl.pathname === '/admin/character/delete' && req.method === 'POST') {
