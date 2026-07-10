@@ -9,10 +9,11 @@ require_once __DIR__ . '/includes/functions.php';
 
 initSession();
 
-// Simple admin check - must be logged in and username must be 'nathan' (or add to config)
-$ADMIN_USERS = ['nathan']; // Add admin usernames here
+// Admin gate — the username list lives in adminUsernames() (functions.php),
+// shared with api/admin_proxy.php so the two can't drift.
+$ADMIN_USERS = adminUsernames();   // still used below for badges + delete guard
 
-if (!isLoggedIn() || !in_array(getCurrentUsername(), $ADMIN_USERS)) {
+if (!isAdminUser()) {
     header('Location: index.php');
     exit;
 }

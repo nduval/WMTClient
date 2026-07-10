@@ -440,26 +440,10 @@ function auditLog(string $activity, string $account, string $character, string $
     $expectedHeader = "timestamp,activity,account,character,realm,ip,country,city,asn";
     if (!file_exists($csvFile)) {
         @file_put_contents($csvFile, $expectedHeader . "\n", LOCK_EX);
-    } else {
-        // Migrate old CSV header if needed
-        $firstLine = trim(fgets(fopen($csvFile, 'r')));
-        if ($firstLine && $firstLine !== $expectedHeader && strpos($firstLine, 'activity') === false) {
-            // Old format: insert activity column after timestamp
-            $contents = file_get_contents($csvFile);
-            $lines = explode("\n", $contents);
-            $lines[0] = $expectedHeader;
-            for ($i = 1; $i < count($lines); $i++) {
-                $line = trim($lines[$i]);
-                if ($line === '') continue;
-                // Insert 'login' as activity after the first comma (timestamp)
-                $pos = strpos($line, ',');
-                if ($pos !== false) {
-                    $lines[$i] = substr($line, 0, $pos) . ',login' . substr($line, $pos);
-                }
-            }
-            @file_put_contents($csvFile, implode("\n", $lines));
-        }
     }
+    // (The pre-activity-column header migration that used to run here completed
+    // 2026-04-08; removed 2026-07-09 — it re-read the header on every event and
+    // leaked the file handle.)
 
     // Enrich IP if geo data not provided — cached per IP so we don't hammer ipinfo's
     // rate-limited free tier (and skip the up-to-2s blocking lookup on repeat IPs).
@@ -468,8 +452,16 @@ function auditLog(string $activity, string $account, string $character, string $
         $country = $geo['country']; $city = $geo['city']; $asn = $geo['asn'];
     }
 
-    $csvLine = date('c') . ',' . $activity . ',' . $account . ',' . $character . ',' . strtoupper($realm) . ',' . $ip . ',' . $country . ',' . $city . ',' . $asn . "\n";
-    @file_put_contents($csvFile, $csvLine, FILE_APPEND | LOCK_EX);
+    // fputcsv, not string-concat: a comma/quote/newline in any field (ASN org
+    // names like "Amazon.com, Inc.") would otherwise shift the columns, and the
+    // report reader silently DROPS rows whose column count doesn't match.
+    $fh = @fopen($csvFile, 'a');
+    if ($fh) {
+        @flock($fh, LOCK_EX);
+        fputcsv($fh, [date('c'), $activity, $account, $character, strtoupper($realm), $ip, $country, $city, $asn]);
+        @flock($fh, LOCK_UN);
+        fclose($fh);
+    }
 
     // Keep the audit CSV bounded — report_query.php loads the WHOLE file each request.
     // Self-limited to once per day via a marker, so this is a cheap no-op almost always.
@@ -1658,6 +1650,28 @@ function getCurrentUserId(): ?string {
  */
 function getCurrentUsername(): ?string {
     return $_SESSION['username'] ?? null;
+}
+
+/**
+ * Privileged-user gates — the ONE place these username lists live.
+ * They used to be copy-pasted per page (admin.php, admin_proxy.php,
+ * report.php, report_query.php, report_export.php), which meant adding
+ * a viewer required editing several files or someone got partial access.
+ */
+function adminUsernames(): array {
+    return ['nathan'];
+}
+
+function reportUsernames(): array {
+    return ['nathan', 'amy', 'adalius'];
+}
+
+function isAdminUser(): bool {
+    return isLoggedIn() && in_array(getCurrentUsername(), adminUsernames());
+}
+
+function isReportUser(): bool {
+    return isLoggedIn() && in_array(getCurrentUsername(), reportUsernames());
 }
 
 /**

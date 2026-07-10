@@ -2,14 +2,15 @@
 /**
  * Report query endpoint — server-side filtering and pagination for audit log.
  * Returns JSON. Requires report user session auth.
+ * Shared load/filter/sort logic lives in includes/report_lib.php.
  */
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/functions.php';
+require_once __DIR__ . '/../includes/report_lib.php';
 
 initSession();
 
-$REPORT_USERS = ['nathan', 'amy', 'adalius'];
-if (!isLoggedIn() || !in_array(getCurrentUsername(), $REPORT_USERS)) {
+if (!isReportUser()) {
     http_response_code(403);
     header('Content-Type: application/json');
     echo json_encode(['success' => false, 'error' => 'Forbidden']);
@@ -19,59 +20,43 @@ if (!isLoggedIn() || !in_array(getCurrentUsername(), $REPORT_USERS)) {
 header('Content-Type: application/json');
 
 // Parse query params
-$search = strtolower(trim($_GET['search'] ?? ''));
-$activity = strtolower(trim($_GET['activity'] ?? ''));
-$realm = strtoupper(trim($_GET['realm'] ?? ''));
-$days = (int)($_GET['days'] ?? 0);
 $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = min(500, max(10, (int)($_GET['per_page'] ?? 100)));
 $sortCol = $_GET['sort'] ?? 'timestamp';
 $sortDir = strtolower($_GET['dir'] ?? 'desc');
 
-$csvFile = __DIR__ . '/../data/logs/login_audit.csv';
-$allRows = [];
-$headers = [];
+$loaded = reportLoadAuditRows();
+$headers = $loaded['headers'];
+// Geo backfill BEFORE filtering so searching "Houston" also finds rows whose
+// geo was blank at write time but is known in the cache now.
+$allRows = reportGeoBackfill($loaded['rows']);
 
-if (file_exists($csvFile)) {
-    $lines = file($csvFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if (count($lines) > 0) {
-        $headers = str_getcsv(array_shift($lines));
-        foreach ($lines as $line) {
-            $row = str_getcsv($line);
-            if (count($row) === count($headers)) {
-                $allRows[] = array_combine($headers, $row);
-            }
-        }
-    }
+// Distinct activity types actually present — drives the page's filter
+// dropdown, so new event types (login_failed, register, ...) can't silently
+// fall outside the filter list again.
+$activityCounts = [];
+foreach ($allRows as $r) {
+    $a = strtolower($r['activity'] ?? 'login');
+    $activityCounts[$a] = ($activityCounts[$a] ?? 0) + 1;
 }
+ksort($activityCounts);
 
-// Filter
-$cutoff = $days > 0 ? date('c', time() - $days * 86400) : '';
-$filtered = [];
-foreach ($allRows as $row) {
-    if ($activity && strtolower($row['activity'] ?? 'login') !== $activity) continue;
-    if ($realm && strtoupper($row['realm'] ?? '') !== $realm) continue;
-    if ($cutoff && ($row['timestamp'] ?? '') < $cutoff) continue;
-    if ($search) {
-        $haystack = strtolower(implode(' ', $row));
-        if (strpos($haystack, $search) === false) continue;
-    }
-    $filtered[] = $row;
-}
+$filtered = reportFilterAuditRows($allRows, [
+    'search' => $_GET['search'] ?? '',
+    'activity' => $_GET['activity'] ?? '',
+    'realm' => $_GET['realm'] ?? '',
+    'days' => $_GET['days'] ?? 0,
+]);
 
 $totalFiltered = count($filtered);
 $totalAll = count($allRows);
 
-// Sort
-$validCols = array_flip($headers);
-if (!isset($validCols[$sortCol])) $sortCol = 'timestamp';
-usort($filtered, function($a, $b) use ($sortCol, $sortDir) {
-    $cmp = strcmp($a[$sortCol] ?? '', $b[$sortCol] ?? '');
-    return $sortDir === 'asc' ? $cmp : -$cmp;
-});
+// Sort (whitelist to real columns)
+if (!in_array($sortCol, $headers, true)) $sortCol = 'timestamp';
+$filtered = reportSortAuditRows($filtered, $sortCol, $sortDir);
 
 // Paginate
-$totalPages = max(1, ceil($totalFiltered / $perPage));
+$totalPages = max(1, (int)ceil($totalFiltered / $perPage));
 $page = min($page, $totalPages);
 $offset = ($page - 1) * $perPage;
 $pageRows = array_slice($filtered, $offset, $perPage);
@@ -83,5 +68,6 @@ echo json_encode([
     'filtered' => $totalFiltered,
     'page' => $page,
     'per_page' => $perPage,
-    'total_pages' => $totalPages
+    'total_pages' => $totalPages,
+    'activities' => $activityCounts,
 ]);

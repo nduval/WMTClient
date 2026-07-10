@@ -9,30 +9,15 @@ require_once __DIR__ . '/includes/functions.php';
 
 initSession();
 
-// Access control: admins + designated report viewers
-$REPORT_USERS = ['nathan', 'amy', 'adalius']; // Add usernames who can view this page
-
-if (!isLoggedIn() || !in_array(getCurrentUsername(), $REPORT_USERS)) {
+// Access control: the viewer list lives in reportUsernames() (functions.php) —
+// shared with report_query/report_export/report_bans so it can't drift per file.
+if (!isReportUser()) {
     header('Location: index.php');
     exit;
 }
 
-// Fetch IP bans from Lightsail
-$ipBans = [];
-$adminKey = defined('RENDER_ADMIN_KEY') ? RENDER_ADMIN_KEY : null;
-if ($adminKey) {
-    $ctx = stream_context_create([
-        'http' => [
-            'timeout' => 3,
-            'header' => "X-Admin-Key: {$adminKey}\r\n"
-        ]
-    ]);
-    $bansData = @file_get_contents('https://ws.wemudtogether.com/ip-bans', false, $ctx);
-    if ($bansData) {
-        $parsed = json_decode($bansData, true);
-        if ($parsed && $parsed['success']) $ipBans = $parsed['bans'] ?? [];
-    }
-}
+// IP bans load lazily via api/report_bans.php — the old inline fetch here
+// blocked the whole page render for up to 3s when Lightsail was slow.
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -140,6 +125,10 @@ if ($adminKey) {
             border-radius: 3px;
             font-size: 11px;
             font-weight: bold;
+            /* fallback for activity types with no specific rule below —
+               still reads as a badge instead of bare text */
+            background: rgba(136,136,136,0.15);
+            color: #aaa;
         }
 
         .realm-3k { background: rgba(0,255,0,0.15); color: #00ff00; }
@@ -154,6 +143,9 @@ if ($adminKey) {
            when the captured name DIFFERS from the WMT slot label, so
            presence of this row is itself meaningful (mismatch flag). */
         .activity-identified { background: rgba(170,102,255,0.15);  color: #aa66ff; }
+        .activity-login_failed { background: rgba(255,51,51,0.2);   color: #ff5555; }
+        .activity-register   { background: rgba(0,204,204,0.15);    color: #00cccc; }
+        .activity-relink     { background: rgba(204,204,102,0.15);  color: #cccc66; }
 
         .pagination {
             padding: 16px 24px;
@@ -237,20 +229,18 @@ if ($adminKey) {
         <h1>Player Report</h1>
         <div class="nav-links">
             <a href="characters.php">Characters</a>
-            <?php if (getCurrentUsername() === 'nathan'): ?><a href="admin.php">Admin</a><?php endif; ?>
+            <?php if (isAdminUser()): ?><a href="admin.php">Admin</a><?php endif; ?>
             <a href="#" onclick="exportCsv(); return false;">Export CSV</a>
         </div>
     </div>
 
     <div class="toolbar">
         <input type="text" id="search" placeholder="Search account, character, IP, ASN...">
+        <!-- Options are built from the activity types actually in the data
+             (report_query returns distinct counts) — a hardcoded list left
+             login_failed/register/relink unfilterable for months. -->
         <select id="activity-filter">
             <option value="">All Activity</option>
-            <option value="login">Login</option>
-            <option value="reconnect">Reconnect</option>
-            <option value="disconnect">Disconnect</option>
-            <option value="logout">Logout</option>
-            <option value="identified">Identified (mismatch)</option>
         </select>
         <select id="realm-filter">
             <option value="">All Realms</option>
@@ -291,21 +281,8 @@ if ($adminKey) {
     <div class="pagination" id="pagination"></div>
 
     <div class="bans-panel">
-        <h2>IP Bans (<?= count($ipBans) ?>)</h2>
-<?php if (empty($ipBans)): ?>
-        <div class="bans-empty">No IP bans configured.</div>
-<?php else: ?>
-        <ul class="bans-list">
-<?php foreach ($ipBans as $ban): ?>
-            <li>
-                <span class="ban-type"><?= htmlspecialchars($ban['type'] ?? '') ?></span>
-                <span class="ban-value"><?= htmlspecialchars($ban['value'] ?? '') ?></span>
-                <span class="ban-reason"><?= htmlspecialchars($ban['reason'] ?? '') ?></span>
-                <span class="ban-date"><?= isset($ban['banned_at']) ? date('M j, Y H:i', strtotime($ban['banned_at'])) : '' ?></span>
-            </li>
-<?php endforeach; ?>
-        </ul>
-<?php endif; ?>
+        <h2 id="bans-title">IP Bans</h2>
+        <div id="bans-body"><div class="bans-empty">Loading…</div></div>
     </div>
 
 <script>
@@ -348,21 +325,56 @@ if ($adminKey) {
         return d.innerHTML;
     }
 
-    async function loadData() {
-        const params = new URLSearchParams({
+    // CSS-class-safe slug for badge classes — anything else could break out
+    // of the class attribute (activity values come from the audit CSV).
+    function cssSlug(str) {
+        return String(str || '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    }
+
+    // ISO timestamp → compact LOCAL time for display; the raw value goes in
+    // the title so the original (with offset) is a hover away.
+    function fmtTs(iso) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return esc(iso || '');
+        const p = n => String(n).padStart(2, '0');
+        const local = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+        return `<span title="${esc(iso)}">${local}</span>`;
+    }
+
+    function currentParams() {
+        return new URLSearchParams({
             search: document.getElementById('search').value,
             activity: document.getElementById('activity-filter').value,
             realm: document.getElementById('realm-filter').value,
             days: document.getElementById('time-filter').value,
             sort: currentSort,
-            dir: currentDir,
-            page: currentPage,
-            per_page: perPage
+            dir: currentDir
         });
+    }
 
-        // Update sort header styling
+    // Rebuild the Activity dropdown from the distinct types actually in the
+    // data (with counts), preserving the current selection.
+    function updateActivityOptions(activities) {
+        if (!activities) return;
+        const sel = document.getElementById('activity-filter');
+        const current = sel.value;
+        const label = a => a.charAt(0).toUpperCase() + a.slice(1).replace(/_/g, ' ');
+        sel.innerHTML = '<option value="">All Activity</option>' + Object.entries(activities)
+            .map(([a, n]) => `<option value="${esc(a)}">${esc(label(a))} (${n})</option>`).join('');
+        sel.value = current;   // reselect (falls back to All if the type vanished)
+    }
+
+    async function loadData() {
+        const params = currentParams();
+        params.set('page', currentPage);
+        params.set('per_page', perPage);
+
+        // Update sort header styling + direction arrow
         document.querySelectorAll('th[data-sort]').forEach(th => {
-            th.classList.toggle('active-sort', th.dataset.sort === currentSort);
+            const active = th.dataset.sort === currentSort;
+            th.classList.toggle('active-sort', active);
+            const arrow = th.querySelector('.sort-arrow');
+            if (arrow) arrow.textContent = active ? (currentDir === 'asc' ? '▲' : '▼') : '▼';
         });
 
         try {
@@ -370,16 +382,18 @@ if ($adminKey) {
             const data = await res.json();
             if (!data.success) throw new Error(data.error);
 
+            updateActivityOptions(data.activities);
+
             const tbody = document.getElementById('report-body');
             if (data.rows.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="9" class="no-results">No results found.</td></tr>';
             } else {
                 tbody.innerHTML = data.rows.map(r => `<tr>
-                    <td class="col-timestamp">${esc(r.timestamp || '')}</td>
-                    <td class="col-activity"><span class="activity-badge activity-${(r.activity||'login').toLowerCase()}">${esc(r.activity || 'login')}</span></td>
+                    <td class="col-timestamp">${fmtTs(r.timestamp || '')}</td>
+                    <td class="col-activity"><span class="activity-badge activity-${cssSlug(r.activity || 'login')}">${esc(r.activity || 'login')}</span></td>
                     <td class="col-account">${esc(r.account || '')}</td>
                     <td class="col-character">${esc(r.character || '')}</td>
-                    <td class="col-realm"><span class="realm-badge realm-${(r.realm||'3k').toLowerCase()}">${esc(r.realm || '')}</span></td>
+                    <td class="col-realm"><span class="realm-badge realm-${cssSlug(r.realm || '3k')}">${esc(r.realm || '')}</span></td>
                     <td class="col-ip">${esc(r.ip || '')}</td>
                     <td class="col-country">${esc(r.country || '')}</td>
                     <td class="col-city">${esc(r.city || '')}</td>
@@ -427,12 +441,47 @@ if ($adminKey) {
         loadData();
     }
 
+    // Export honors the filters/sort you're looking at; with everything
+    // blank it exports the full log, same as before.
     function exportCsv() {
-        window.location.href = 'api/report_export.php';
+        window.location.href = 'api/report_export.php?' + currentParams();
+    }
+
+    // IP bans — loaded async so a slow Lightsail can't stall the page render.
+    async function loadBans() {
+        const body = document.getElementById('bans-body');
+        const title = document.getElementById('bans-title');
+        try {
+            const res = await fetch('api/report_bans.php');
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'failed');
+            const bans = data.bans || [];
+            title.textContent = `IP Bans (${bans.length})`;
+            if (!bans.length) {
+                body.innerHTML = '<div class="bans-empty">No IP bans configured.</div>';
+                return;
+            }
+            body.innerHTML = '<ul class="bans-list">' + bans.map(b => {
+                const when = b.banned_at ? new Date(b.banned_at) : null;
+                const whenStr = when && !isNaN(when.getTime())
+                    ? `${when.getFullYear()}-${String(when.getMonth()+1).padStart(2,'0')}-${String(when.getDate()).padStart(2,'0')} ${String(when.getHours()).padStart(2,'0')}:${String(when.getMinutes()).padStart(2,'0')}`
+                    : '';
+                return `<li>
+                    <span class="ban-type">${esc(b.type || '')}</span>
+                    <span class="ban-value">${esc(b.value || '')}</span>
+                    <span class="ban-reason">${esc(b.reason || '')}</span>
+                    <span class="ban-date">${esc(whenStr)}</span>
+                </li>`;
+            }).join('') + '</ul>';
+        } catch (e) {
+            title.textContent = 'IP Bans';
+            body.innerHTML = `<div class="bans-empty">Could not load bans: ${esc(e.message)}</div>`;
+        }
     }
 
     // Initial load
     loadData();
+    loadBans();
 </script>
 </body>
 </html>

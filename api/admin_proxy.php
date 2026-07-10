@@ -19,9 +19,8 @@ require_once __DIR__ . '/../includes/auth.php';
 initSession();
 header('Content-Type: application/json');
 
-// Same admin gate as admin.php
-$ADMIN_USERS = ['nathan'];
-if (!isLoggedIn() || !in_array(getCurrentUsername(), $ADMIN_USERS)) {
+// Same admin gate as admin.php (shared list — adminUsernames() in functions.php)
+if (!isAdminUser()) {
     http_response_code(403);
     echo json_encode(['success' => false, 'error' => 'Admin only']);
     exit;
