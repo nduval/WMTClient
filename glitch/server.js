@@ -4897,12 +4897,28 @@ const server = http.createServer(async (req, res) => {
             `).run(user.id, user.username, user.email || '', user.password || '', user.is_wizard ? 1 : 0, user.created_at || '', '', '');
             break;
           case 'update':
-          case 'password_change':
+          case 'password_change': {
+            // PARTIAL-SAFE since 2026-07-10: only overwrite fields the payload
+            // actually carries. The old form wrote all six columns straight
+            // from the payload — a password_change without is_wizard/last_login
+            // silently DEMOTED wizards and wiped login stamps (found during
+            // the igor wizard-toggle audit).
+            const beforeU = wmtDb.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+            if (!beforeU) break;
             wmtDb.prepare(`
               UPDATE users SET username = ?, email = ?, password = ?, is_wizard = ?, last_login = ?, last_ip = ?
               WHERE id = ?
-            `).run(user.username, user.email || '', user.password || '', user.is_wizard ? 1 : 0, user.last_login || '', user.last_ip || '', user.id);
+            `).run(
+              user.username !== undefined ? user.username : beforeU.username,
+              user.email !== undefined ? user.email : beforeU.email,
+              user.password !== undefined ? user.password : beforeU.password,
+              user.is_wizard !== undefined ? (user.is_wizard ? 1 : 0) : beforeU.is_wizard,
+              user.last_login !== undefined ? user.last_login : beforeU.last_login,
+              user.last_ip !== undefined ? user.last_ip : beforeU.last_ip,
+              user.id
+            );
             break;
+          }
           case 'ban':
             wmtDb.prepare('UPDATE users SET banned = ?, ban_reason = ? WHERE id = ?')
               .run(user.banned ? 1 : 0, user.ban_reason || '', user.id);

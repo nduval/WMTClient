@@ -506,6 +506,15 @@ function resetPasswordWithToken(string $token, string $newPassword): array {
         return ['success' => false, 'error' => 'Failed to update password'];
     }
 
+    // Sync to the Lightsail DB — authenticateUser reads the DB-first record,
+    // so without this the RESET password can't log in while the OLD one still
+    // works. /admin/user is a PARTIAL update (only the password column);
+    // /account-sync 'password_change' would wipe is_wizard/last_login.
+    $resp = pushToLightsail('/admin/user', ['id' => $user['id'], 'password' => $hashedPassword]);
+    if (!$resp || empty($resp['success'])) {
+        return ['success' => false, 'error' => 'Password update did not reach the login database — please try again'];
+    }
+
     // Update profile.json too
     $profilePath = getProfilePath($user['id']);
     $profile = loadJsonFile($profilePath);
@@ -804,20 +813,25 @@ function changePassword(string $userId, string $currentPassword, string $newPass
     }
 
     // Update password in index
+    $newHash = password_hash($newPassword, PASSWORD_BCRYPT);
     $users = loadUsersIndex();
     foreach ($users as &$u) {
         if ($u['id'] === $userId) {
-            $u['password'] = password_hash($newPassword, PASSWORD_BCRYPT);
+            $u['password'] = $newHash;
             break;
         }
     }
     saveUsersIndex($users);
 
-    // Sync password change to Lightsail DB (fire-and-forget)
-    syncAccountToDb('password_change', [
-        'id' => $userId, 'username' => $user['username'],
-        'email' => $user['email'] ?? '', 'password' => password_hash($newPassword, PASSWORD_BCRYPT)
-    ]);
+    // Sync to the Lightsail DB via the PARTIAL /admin/user endpoint. The old
+    // /account-sync 'password_change' action overwrote ALL columns with the
+    // payload — and this payload had no is_wizard/last_login, so every
+    // password change silently DEMOTED wizards in the DB (found 2026-07-10
+    // during the igor wizard-toggle audit).
+    $resp = pushToLightsail('/admin/user', ['id' => $userId, 'password' => $newHash]);
+    if (!$resp || empty($resp['success'])) {
+        return ['success' => false, 'error' => 'Password update did not reach the login database — please try again'];
+    }
 
     return ['success' => true];
 }

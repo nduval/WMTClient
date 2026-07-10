@@ -353,7 +353,10 @@ def deploy_test_server():
     # Pushed to /opt/wmt/phpsrc. The admin key is stripped on the sandbox so the
     # suite uses the JSON user fallback (no prod DB / no secret left on the box).
     dstatus("sandbox: staging phpsrc (includes/config/api)")
-    run_cmd(f'{ssh_cmd} "rm -rf /tmp/phpsrc && mkdir -p /tmp/phpsrc"',
+    # sudo rm: the PhpLogin suite runs as root and leaves root-owned files in
+    # /tmp/phpsrc — a plain rm then fails and every later scp hits Permission
+    # denied, so the gate silently tests STALE php (bit us 2026-07-10).
+    run_cmd(f'{ssh_cmd} "sudo rm -rf /tmp/phpsrc && mkdir -p /tmp/phpsrc"',
                    shell=True, capture_output=True, text=True)
     php_ok = True
     for d in ('includes', 'config', 'api'):
