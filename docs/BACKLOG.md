@@ -100,19 +100,35 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       error), mixed-brace forms (conservative), #read scripts, offline (a delay
       created offline lives client-side + won't appear in the server listing —
       tiny window, still fires).
-- [ ] Step 5b — MIP conditions server-side (the second combat brain: mipVars
-      namespace, cooldown state, hp/sp threshold evaluation all browser-only,
-      dead when browser closed). OWN FOCUSED SESSION: needs protocols.md (MIP)
-      loaded, prefs plumbing for conditions config, and a live combat test
-      window. This is the code that decides when a character heals — do NOT
-      batch or rush it.
-- [ ] Step 5c — retire client_command for state-mutating verbs. AUDIT DONE
-      2026-07-11: server already handles #end/#zap, #math, #var(scalar+indexed),
-      #unvar, #ticker, #unticker, #list, #ifttt, #format, #cat, #line oneshot/gag,
-      #replace, #if, #regex, #delay, #undelay. Remaining mutating fall-throughs:
-      **#loop and #foreach only** (client iterates + writes vars via var_ops) +
-      #local (ephemeral by definition; low stakes). Display verbs (#showme/#echo/
-      #bell/...) stay client-side by design — that's rendering, not state.
+- [x] **Step 5b SHIPPED 2026-07-11 (f507d2f, gate 1307/1307, 8/8 players resumed
+      through the restart)** — MIP conditions evaluate SERVER-side: conditions
+      load from the prefs blob in wmt.db (loadMipConditions at auth/resume/
+      restore + live-refresh when a prefs save lands via /data-sync), evaluated
+      on every FFF stats update (mipVarsOf mirrors the client derivation
+      field-for-field; evalMipCond is a verbatim port incl. loose ==; 5s
+      cooldown; combatOnly round-gate; AND/OR subConditions), firing through
+      executeExpandedInline. DOUBLE-FIRE-PROOF transition: server evaluates ONLY
+      for clients that declared `mipCond:1` at auth; old cached tabs keep their
+      local brain (ServerVarEngine T20, negative-controlled). Delegation rides
+      the persist payload → a suspended phone's heal-gating survives deploys.
+      Client evaluator retired (TypedVarRouting T48/49). Gate: SVE T18 (fires on
+      low hp), T19 (cooldown), T20 (capability gate) — all red on pre-change
+      server. Per-char JSONL logs `mip_condition` rows on every fire.
+      ⏳ LIVE CHECK (Nathan): next real fight with a heal condition enabled —
+      watch it gate. Also on it: mip_debug echo of server fires is NOT ported
+      (client mipDebug flag only affected local eval) — check JSONL instead.
+- [x] **Step 5c SHIPPED 2026-07-11 (same deploy)** — #loop/#foreach/#break/
+      #continue execute server-side (exact client parity: 1000-iteration cap,
+      #break stops after the current body, table-form value iteration with
+      numeric-then-lexicographic key order, braced/semicolon list fallback;
+      iteration vars stamp _varServerModified; view gets ONE final var_update —
+      inner parts are server-substituted per-iteration). PLUS a server-only
+      safety the browser never needed: 10k total-iteration budget shared across
+      nesting (a runaway nested loop on a shared single-threaded server stalls
+      EVERYONE, not just the author). Gate: SVE T14-T17, red on pre-change
+      server. #local left client-side (ephemeral by definition, zero divergence
+      surface). Invalid arg shapes still fall through → client prints its usage
+      errors (parity).
 - [ ] Server verb-layer refactor (was "pre-step-3"; verified 2026-07-11 as NOT
       required for Step 3): verb dispatch table + one executeExpanded() helper +
       one state-mutation choke point (kills the ~6× copy-paste). Verified by read:
@@ -166,6 +182,14 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
 - [x] ✅ Review F6 FIXED (2026-07-11): known-failures are now per-SUITE-label
       (`KNOWN_FAILING_SUITES` set), not a global count — a subset budget can't
       absorb an unrelated real failure. Currently empty (every failure blocks).
+- [ ] Gate runner: retry ONCE on ssh transport failures ("Connection timed out
+      during banner exchange") — two 2026-07-11 gate runs each lost one suite to
+      this flake (SelfAlerts, then SessionPersist); both re-ran green solo; each
+      flake cost a full 10-min re-gate. Distinguish transport failure from test
+      failure (the fail-closed parse already catches silent-no-output cases).
+- [ ] Manual-suite note (2026-07-11): back-to-back MANUAL ServerVarEngine runs
+      contaminate each other via mock-MUD reconnect state (T9 c3=NaN) — restart
+      mock-mud + wmt-server between manual runs. The real gate is unaffected.
 - [ ] Review F7b: gate/abort block copy-pasted in 5 dispatcher sites. DEFERRED —
       refactoring the critical deploy dispatcher for cosmetic gain, right after
       adding all the new gate logic, is how a subtle deploy-breaking bug slips in.
