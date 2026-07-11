@@ -1393,6 +1393,7 @@ class WMTClient {
             case 'ftp_deleted':   this._onFtpDeleted(data); break;
             case 'ftp_renamed':   this._onFtpRenamed(data); break;
             case 'ftp_rmdir_ok':  this._onFtpRmdirOk(data); break;
+            case 'var_query_result': this._onVarQueryResult(data); break;
 
             case 'bot_status': {
                 const prevActive = this.botState.active;
@@ -13226,6 +13227,14 @@ class WMTClient {
                     this.appendOutput(`#VARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
                 }
             }
+            // Cross-check the SERVER store for exact-name queries (Phase 3
+            // step-3 precursor): triggers/#if evaluate the server's copy, and
+            // the two can diverge across session boundaries — `#var ring`
+            // showed a stale client "on" for two days while the server saw
+            // undefined. A silent match stays silent; divergence is flagged.
+            if (!/[*?%]/.test(pattern) && keys.length === 0 && this.connection && this.connection.connected) {
+                this.connection.send('var_query', { name });
+            }
             return;
         }
 
@@ -14547,6 +14556,26 @@ class WMTClient {
         str = str.replace(/\x00DOLLAR\x00/g, '$');
 
         return str;
+    }
+
+    // Server-store cross-check response for a `#var name` query. Silent when
+    // the stores agree; loud when they diverge — the divergence is exactly the
+    // failure mode that hid the $ring outage (client "on", server undefined).
+    _onVarQueryResult(data) {
+        const name = data.name;
+        const clientHas = this.variables[name] !== undefined;
+        const clientVal = this.variables[name];
+        if (!data.defined && !clientHas) return;                      // both unset — nothing to say
+        if (!data.defined && clientHas) {
+            this.appendOutput(`⚠ SERVER has NO variable {${name}} — triggers/#if see it as undefined! (browser copy shown above is not what fires)`, 'error');
+            return;
+        }
+        const same = JSON.stringify(clientVal) === JSON.stringify(data.value);
+        if (data.defined && !clientHas) {
+            this.appendOutput(`⚠ SERVER has {${name}} = ${this.formatVariableValue(data.value)} (this browser has no copy)`, 'error');
+        } else if (!same) {
+            this.appendOutput(`⚠ SERVER value differs: {${name}} = ${this.formatVariableValue(data.value)} — the server copy is what triggers/#if evaluate`, 'error');
+        }
     }
 
     // Set a simple variable (convenience method)

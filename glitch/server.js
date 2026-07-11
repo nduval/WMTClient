@@ -8812,6 +8812,27 @@ wss.on('connection', (ws, req) => {
           }
           break;
 
+        case 'var_query':
+          // Phase 3 step-3 precursor (2026-07-11): the client's #var display
+          // cross-checks the SERVER store — the authoritative one triggers/#if
+          // evaluate against. Born from the $ring incident: `#var ring` showed
+          // the browser's stale "on" while the server evaluated undefined for
+          // two days. Response carries defined+value so the client can flag
+          // divergence explicitly (including "defined here, missing there").
+          {
+            const qName = typeof data.name === 'string' ? data.name : '';
+            if (!qName) break;
+            const vars = session.variables || {};
+            const has = Object.prototype.hasOwnProperty.call(vars, qName);
+            sendToClient(session, {
+              type: 'var_query_result',
+              name: qName,
+              defined: has,
+              value: has ? vars[qName] : null,
+            });
+          }
+          break;
+
         case 'set_variables':
           // LEGACY full-store push (cached clients only — new clients send var_ops).
           // Merge client variables instead of wholesale replace.

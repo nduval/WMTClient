@@ -337,6 +337,10 @@ switch ($action) {
             errorResponse($limitCheck['error']);
         }
 
+        // Snapshot the prior version before overwriting (scripts had no version
+        // history — the 'twist stone' clobber scare, 2026-07-11).
+        backupScriptFile($filePath);
+
         if (file_put_contents($filePath, $content) === false) {
             errorResponse('Failed to save script');
         }
@@ -422,6 +426,8 @@ switch ($action) {
         if (!$limitCheck['allowed']) {
             errorResponse($limitCheck['error']);
         }
+
+        backupScriptFile($filePath);   // snapshot prior version before an upload overwrites it
 
         if (!move_uploaded_file($file['tmp_name'], $filePath)) {
             errorResponse('Failed to save uploaded file');

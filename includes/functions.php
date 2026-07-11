@@ -886,6 +886,56 @@ function saveJsonFile(string $path, array $data, int $rotations = 0): bool {
 }
 
 /**
+ * Rotate + snapshot a .tin/.txt script file BEFORE it is overwritten.
+ *
+ * Scripts had ZERO version history — a clobbered save (multi-device, a stale
+ * editor tab, a bad write) was gone forever. This gives them the same three-tier
+ * protection triggers/aliases already have:
+ *   - .1 .. .N per-save rotations (rapid undo)
+ *   - .daily.YYYY-MM-DD  (kept 14 days)
+ *   - .weekly.YYYY-Www   (kept 8 weeks)
+ * Call with the destination path BEFORE writing the new content. No-op if the
+ * file doesn't exist yet (first save). Born from the 'twist stone' scare, 2026-07-11.
+ */
+function backupScriptFile(string $path, int $rotations = 10): void {
+    if (!file_exists($path)) return;   // nothing to protect on first write
+
+    $today = date('Y-m-d');
+    $dailyPath = "$path.daily.$today";
+    if (!file_exists($dailyPath)) {
+        @copy($path, $dailyPath);
+        foreach (glob("$path.daily.*") as $old) {
+            $dateStr = substr($old, strrpos($old, '.daily.') + 7);
+            if ($dateStr < date('Y-m-d', strtotime('-14 days'))) @unlink($old);
+        }
+    }
+
+    $week = date('Y-\WW');
+    $weeklyPath = "$path.weekly.$week";
+    if (!file_exists($weeklyPath)) {
+        @copy($path, $weeklyPath);
+        foreach (glob("$path.weekly.*") as $old) {
+            $weekStr = substr($old, strrpos($old, '.weekly.') + 8);
+            if ($weekStr < date('Y-\WW', strtotime('-8 weeks'))) @unlink($old);
+        }
+    }
+
+    // Per-save rotations: .N is oldest, .1 is the most recent prior version.
+    for ($i = $rotations; $i >= 1; $i--) {
+        $older = "$path.$i";
+        if ($i === $rotations) {
+            @unlink($older);
+        }
+        if ($i > 1) {
+            $newer = "$path." . ($i - 1);
+            if (file_exists($newer)) @rename($newer, $older);
+        } else {
+            @copy($path, $older);
+        }
+    }
+}
+
+/**
  * Get user's profile file path
  */
 function getProfilePath(string $userId): string {
