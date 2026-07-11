@@ -425,8 +425,41 @@ def deploy_test_server():
         return False
 
 
-def run_test_suites():
-    """Run all WMT test suites on sandbox. Returns (total_passed, total_failed, details)."""
+# Suites that exercise the CLIENT bundle (vm-load assets/js/app.js|connection.js).
+# Relevant to an app.js/connection.js change.
+CLIENT_SUITE_SCRIPTS = {
+    'test_var_sync_flush.js', 'test_var_class_scope.js', 'test_reconnect_gate.js',
+    'test_login_conflict.js', 'test_resume_startup_guard.js',
+}
+# Suites that exercise PHP (PhpLogin boots php -S over includes/+config/+api;
+# ScriptBackup is a pure PHP CLI test of functions.php). Relevant to a PHP change.
+PHP_SUITE_SCRIPTS = {'test_php_login.js', 'test_script_backup.php'}
+
+
+def relevant_test_scripts(files):
+    """Which suite scripts to run for a set of changed IONOS files. PHP files
+    (api/, includes/, config/, *.php) pull the PHP suites; app.js/connection.js
+    pulls the client-VM suites. CSS/docs/images pull nothing. Server suites are
+    NOT included here — a server.js change runs the FULL gate separately."""
+    scripts = set()
+    php_changed = any(
+        f.startswith(('api/', 'includes/', 'config/')) or f.endswith('.php')
+        for f in files
+    )
+    client_changed = any(
+        f in ('assets/js/app.js', 'assets/js/connection.js') for f in files
+    )
+    if php_changed:
+        scripts |= PHP_SUITE_SCRIPTS
+    if client_changed:
+        scripts |= CLIENT_SUITE_SCRIPTS
+    return scripts
+
+
+def run_test_suites(only_scripts=None):
+    """Run WMT test suites on sandbox. Returns (total_passed, total_failed, details).
+    only_scripts: if given (a set of script filenames), run just those — the
+    relevant-subset gate for a client/PHP-only deploy (full gate otherwise)."""
     print("\n=== Running test suites on sandbox ===")
     ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
     host = '18.225.235.28'
@@ -548,6 +581,15 @@ def run_test_suites():
         # the transition model for sections connected by non-compass exits. Skips if no map db.
         ('NamedExitTracking', 'test_named_exit_tracking.js'),
     ]
+
+    # Relevant-subset gate: run only the suites for what changed (client/PHP-only
+    # deploy). None = full gate (server.js changed, or an explicit full run).
+    if only_scripts is not None:
+        suites = [s for s in suites if s[1] in only_scripts]
+        print(f"  (relevant subset: {len(suites)} suite(s) for the changed files)")
+        if not suites:
+            print("  No suites map to the changed files — skipping gate.")
+            return 0, 0, []
 
     total_passed = 0
     total_failed = 0
@@ -1024,6 +1066,20 @@ def main():
             success = False
 
     elif args.target == 'ionos':
+        # Explicit IONOS deploy pushes all PHP + client files → gate both suite
+        # sets first (unless --force). Closes the ungated-PHP-deploy hole.
+        subset = PHP_SUITE_SCRIPTS | CLIENT_SUITE_SCRIPTS
+        print(f"\n=== Gating IONOS deploy ({len(subset)} PHP + client suites) ===")
+        if deploy_test_server():
+            passed, failed, details = run_test_suites(only_scripts=subset)
+            if failed > 0 and not args.force:
+                print(f"\nWARNING: {failed} sandbox test(s) failed. Aborting. Use --force to override.")
+                dstatus("FAILED: subset gate blocked IONOS deploy")
+                sys.exit(1)
+        elif not args.force:
+            print("\nWARNING: sandbox deploy failed. Aborting. Use --force to override.")
+            dstatus("FAILED: sandbox deploy blocked IONOS deploy")
+            sys.exit(1)
         if not deploy_ionos():
             success = False
 
@@ -1080,6 +1136,25 @@ def main():
                 sys.exit(1)
             if not deploy_lightsail('server'):
                 success = False
+        elif ionos_files:
+            # Client/PHP-only deploy: server.js unchanged so the full gate above
+            # is skipped, but PHP/app.js still reaches prod. Gate the RELEVANT
+            # subset first (PhpLogin/ScriptBackup for PHP, client-VM suites for
+            # app.js) so auth/api/includes/client changes are no longer shipped
+            # suite-untested. CSS/docs-only IONOS changes map to no suites → no gate.
+            subset = relevant_test_scripts(ionos_files)
+            if subset:
+                print(f"\n=== Gating client/PHP change ({len(subset)} relevant suite(s)) ===")
+                if deploy_test_server():
+                    passed, failed, details = run_test_suites(only_scripts=subset)
+                    if failed > 0 and not args.force:
+                        print(f"\nWARNING: {failed} sandbox test(s) failed. Aborting. Use --force to override.")
+                        dstatus("FAILED: subset gate blocked IONOS deploy")
+                        sys.exit(1)
+                elif not args.force:
+                    print("\nWARNING: sandbox deploy failed. Aborting. Use --force to override.")
+                    dstatus("FAILED: sandbox deploy blocked IONOS deploy")
+                    sys.exit(1)
         if ionos_files:
             if not deploy_ionos(only_files=ionos_files):
                 success = False

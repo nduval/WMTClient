@@ -111,14 +111,15 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       3 core ones
 - [ ] Gate runner: require the `Results:` line (exit-0-with-unparseable-output
       currently counts as PASS)
-- [ ] ⚠️ PHP-only / client-only deploys SKIP the gate entirely (surfaced
-      2026-07-11): `deploy.py auto`/`ionos` ship api/*, includes/*, app.js to
-      IONOS with only `php -l`/`node --check`, no suite run — because the gate is
-      wired to the server.js/Lightsail path. So the PhpLogin + new ScriptBackup
-      suites only run when server.js also changes. Any auth/api/includes change
-      reaches prod un-suite-tested. Fix: run at least the PHP + client-VM suites
-      before an IONOS-only deploy (needs the sandbox test-server up, which
-      deploy_test_server already does).
+- [x] ⚠️→✅ PHP/client-only deploys were UNGATED (surfaced+fixed 2026-07-11):
+      `deploy.py auto`/`ionos` shipped api/*, includes/*, app.js to IONOS with
+      only `php -l`/`node --check`. FIX: `relevant_test_scripts()` maps changed
+      files → suites (PHP files → PhpLogin+ScriptBackup; app.js/connection.js →
+      the 5 client-VM suites; css/docs → none), and both the auto IONOS-only
+      branch and explicit `ionos` now stage the sandbox + run that subset before
+      shipping (`run_test_suites(only_scripts=...)`), --force to override.
+      Verified end-to-end: PHP subset staged + ran exactly PhpLogin+ScriptBackup
+      (24/24). Server.js changes still run the FULL gate (unchanged).
 - [ ] Delete dead weight: root server.js (stale since Feb), websocket/ Ratchet
       server (vestigial, still deployed), Bot Engine block (server.js ~5166–5529)
       + api/bots.php + getBotsPath, root pcaps/screenshots/db dumps (PII in OneDrive)
