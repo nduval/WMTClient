@@ -303,7 +303,8 @@ def deploy_test_server():
     # commit. Test files live in tests/sandbox/ and target /opt/wmt/tests/.
     test_dir = BASE_DIR / 'tests' / 'sandbox'
     if test_dir.exists():
-        for tf in test_dir.glob('*.js'):
+        _test_files = sorted(list(test_dir.glob('*.js')) + list(test_dir.glob('*.php')))
+        for tf in _test_files:
             dstatus(f"sandbox: pushing test {tf.name}")
             r = run_cmd(
                 f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{tf}" ubuntu@{host}:/tmp/{tf.name}',
@@ -490,6 +491,10 @@ def run_test_suites():
         # session lifecycle) + login-stack smoke test. NOTE: PHP 8.3 masks the
         # prod-only multi-cookie race; this guards total breakage + clean cookie.
         ('PhpLogin', 'test_php_login.js'),
+        # PHP CLI suite (run with `php`, not node): script-file backup rotation +
+        # backup-artifact detection + storage-count exclusion. Guards the
+        # 'twist stone' version-history feature and the quota-wedge fix.
+        ('ScriptBackup', 'test_script_backup.php'),
         # Guild-file editor: MIP download (CDF/CCF/CEF) → browser, and raw paced
         # 3ksendfile upload; round-trips a file with ;/#/$ to prove raw passthrough.
         # Needs the extended mock-mud.js (CDF/CCF/CEF + 3ksendfile + __setmip).
@@ -556,8 +561,13 @@ def run_test_suites():
         # is configured for ubuntu on the sandbox).
         # run_cmd tree-kills on timeout (rc=124) — a wedged ssh can't deadlock
         # the gate the way the 2026-07-08 overnight run did.
+        # PHP CLI suites run with `php` (no ws arg); Node suites with `node <ws>`.
+        if script.endswith('.php'):
+            _cmd = f'cd /opt/wmt/tests && sudo -n php {script}'
+        else:
+            _cmd = f'cd /opt/wmt/tests && sudo -n node {script} ws://localhost:3000'
         result = run_cmd(
-            f'{ssh_cmd} "cd /opt/wmt/tests && sudo -n node {script} ws://localhost:3000"',
+            f'{ssh_cmd} "{_cmd}"',
             shell=True, capture_output=True, text=True, timeout=60
         )
         if result.returncode == 124:

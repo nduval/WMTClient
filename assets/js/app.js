@@ -13227,12 +13227,22 @@ class WMTClient {
                     this.appendOutput(`#VARIABLE: NO MATCHES FOUND FOR {${pattern}}.`, 'system');
                 }
             }
-            // Cross-check the SERVER store for exact-name queries (Phase 3
-            // step-3 precursor): triggers/#if evaluate the server's copy, and
-            // the two can diverge across session boundaries — `#var ring`
-            // showed a stale client "on" for two days while the server saw
-            // undefined. A silent match stays silent; divergence is flagged.
-            if (!/[*?%]/.test(pattern) && keys.length === 0 && this.connection && this.connection.connected) {
+            // Cross-check the SERVER store for exact SCALAR-name queries (Phase 3
+            // step-3 precursor): triggers/#if evaluate the server's copy, and the
+            // two diverge across session boundaries — `#var ring` showed a stale
+            // client "on" for two days while the server saw undefined. Silent on
+            // match; warns on divergence.
+            //   - FLUSH first (finding 4): our own #var writes are debounced 100ms
+            //     and a client-handled #var never hits the sendCommand flush, so
+            //     the query would overtake the write → false "SERVER has NO var".
+            //   - Skip during a bulk #read / silent read (would spray false alarms
+            //     mid-load) and for wildcards (spam).
+            //   - Indexed (keys.length>0) NOT covered yet — deferred (see BACKLOG);
+            //     a nested compare risks the very false-positives we're removing.
+            if (!/[*?%]/.test(pattern) && keys.length === 0
+                && !this.readingSilent && !this._bulkLoading
+                && this.connection && this.connection.connected) {
+                this._flushPendingVarSync();
                 this.connection.send('var_query', { name });
             }
             return;
@@ -14570,12 +14580,30 @@ class WMTClient {
             this.appendOutput(`⚠ SERVER has NO variable {${name}} — triggers/#if see it as undefined! (browser copy shown above is not what fires)`, 'error');
             return;
         }
-        const same = JSON.stringify(clientVal) === JSON.stringify(data.value);
+        // Order-insensitive compare (finding 6): a table rebuilt in a different
+        // key order (server restore vs client incremental writes) is equal in
+        // content — comparing raw JSON.stringify would cry-wolf on identical data.
+        const same = this._canonicalJson(clientVal) === this._canonicalJson(data.value);
         if (data.defined && !clientHas) {
             this.appendOutput(`⚠ SERVER has {${name}} = ${this.formatVariableValue(data.value)} (this browser has no copy)`, 'error');
         } else if (!same) {
             this.appendOutput(`⚠ SERVER value differs: {${name}} = ${this.formatVariableValue(data.value)} — the server copy is what triggers/#if evaluate`, 'error');
         }
+    }
+
+    // Deterministic JSON with recursively sorted object keys — for content
+    // (not insertion-order) equality of variable values.
+    _canonicalJson(v) {
+        const norm = (x) => {
+            if (Array.isArray(x)) return x.map(norm);
+            if (x && typeof x === 'object') {
+                const out = {};
+                for (const k of Object.keys(x).sort()) out[k] = norm(x[k]);
+                return out;
+            }
+            return x;
+        };
+        try { return JSON.stringify(norm(v)); } catch (e) { return String(v); }
     }
 
     // Set a simple variable (convenience method)

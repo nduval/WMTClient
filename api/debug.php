@@ -75,6 +75,7 @@ switch ($action) {
         if (is_dir($scriptsPath)) {
             foreach (scandir($scriptsPath) as $file) {
                 if ($file === '.' || $file === '..') continue;
+                if (isBackupArtifact($file)) continue;   // hide backup artifacts (2026-07-11 review finding 9a)
                 $scripts[] = [
                     'name' => $file,
                     'size' => filesize($scriptsPath . '/' . $file)

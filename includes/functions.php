@@ -675,6 +675,17 @@ function getUserDataPath(string $userId): string {
 /**
  * Calculate total size of a directory recursively
  */
+/**
+ * Is this a SYSTEM-generated backup artifact (rotation / daily / weekly / temp)?
+ * These are safety overhead, not user data — excluded from the storage quota so
+ * accumulated backups can't wedge a user at the file-count limit while their
+ * visible file list shows only a handful of scripts (2026-07-11 review finding).
+ * Tight patterns so user-named files (e.g. hp.tin.bak-summonsfix) are NOT matched.
+ */
+function isBackupArtifact(string $filename): bool {
+    return (bool) preg_match('/(\.\d+|\.daily\.\d{4}-\d{2}-\d{2}|\.weekly\.\d{4}-W\d{2}|\.tmp\.[A-Za-z0-9.]+)$/', $filename);
+}
+
 function getDirectorySize(string $path): int {
     $size = 0;
     if (!is_dir($path)) {
@@ -686,7 +697,7 @@ function getDirectorySize(string $path): int {
     );
 
     foreach ($iterator as $file) {
-        if ($file->isFile()) {
+        if ($file->isFile() && !isBackupArtifact($file->getFilename())) {
             $size += $file->getSize();
         }
     }
@@ -695,7 +706,8 @@ function getDirectorySize(string $path): int {
 }
 
 /**
- * Count total files in a directory recursively
+ * Count total files in a directory recursively (excludes backup artifacts —
+ * see isBackupArtifact; they must not count toward the file-count quota).
  */
 function getDirectoryFileCount(string $path): int {
     $count = 0;
@@ -708,7 +720,7 @@ function getDirectoryFileCount(string $path): int {
     );
 
     foreach ($iterator as $file) {
-        if ($file->isFile()) {
+        if ($file->isFile() && !isBackupArtifact($file->getFilename())) {
             $count++;
         }
     }
@@ -818,14 +830,17 @@ function saveJsonFile(string $path, array $data, int $rotations = 0): bool {
             }
         }
 
-        $week = date('Y-\WW');
+        // ISO year ('o'), not calendar year ('Y') — see the same fix in
+        // backupScriptFile (2026-07-11 review finding 7); a year-boundary
+        // 'Y' label sorts older than the cutoff and self-prunes on creation.
+        $week = date('o-\WW');
         $weeklyPath = "$path.weekly.$week";
         if (!file_exists($weeklyPath)) {
             @copy($path, $weeklyPath);
             // Prune weekly snapshots older than 8 weeks
             foreach (glob("$path.weekly.*") as $old) {
                 $weekStr = substr($old, strrpos($old, '.weekly.') + 8);
-                if ($weekStr < date('Y-\WW', strtotime('-8 weeks'))) {
+                if ($weekStr < date('o-\WW', strtotime('-8 weeks'))) {
                     @unlink($old);
                 }
             }
@@ -910,13 +925,17 @@ function backupScriptFile(string $path, int $rotations = 10): void {
         }
     }
 
-    $week = date('Y-\WW');
+    // ISO week uses the ISO year ('o'), NOT the calendar year ('Y') — at a
+    // year boundary the ISO week can belong to the next/prev year, and a 'Y'
+    // label like 2026-W01 sorts older than the -8wk cutoff and gets pruned the
+    // instant it's written (2026-07-11 review finding 7).
+    $week = date('o-\WW');
     $weeklyPath = "$path.weekly.$week";
     if (!file_exists($weeklyPath)) {
         @copy($path, $weeklyPath);
         foreach (glob("$path.weekly.*") as $old) {
             $weekStr = substr($old, strrpos($old, '.weekly.') + 8);
-            if ($weekStr < date('Y-\WW', strtotime('-8 weeks'))) @unlink($old);
+            if ($weekStr < date('o-\WW', strtotime('-8 weeks'))) @unlink($old);
         }
     }
 
@@ -1422,13 +1441,16 @@ function duplicateCharacter(string $userId, string $sourceId, string $label = ''
         syncDataToDb(['type' => 'preferences', 'character_id' => $newId, 'data' => $srcPrefs]);
     }
 
-    // Copy scripts directory if it exists
+    // Copy scripts directory if it exists. Skip backup artifacts — duplicating
+    // a char shouldn't clone its .1/.daily.*/.weekly.* history into the new one
+    // (doubles the file-count footprint for no value; 2026-07-11 review finding 9b).
     $scriptsDir = $sourcePath . '/scripts';
     if (is_dir($scriptsDir)) {
         $newScriptsDir = $newPath . '/scripts';
         mkdir($newScriptsDir, 0755, true);
         foreach (glob($scriptsDir . '/*') as $script) {
-            copy($script, $newScriptsDir . '/' . basename($script));
+            if (is_file($script) && isBackupArtifact(basename($script))) continue;
+            if (is_file($script)) copy($script, $newScriptsDir . '/' . basename($script));
         }
     }
 

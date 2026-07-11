@@ -702,6 +702,12 @@ switch ($action) {
                     continue;
                 }
 
+                // Snapshot the target before an overwrite copy clobbers it — this
+                // bulk copy-scripts-with-overwrite path is the same silent-clobber
+                // class as a stale editor save (2026-07-11 review finding 1).
+                if (file_exists($dstFile)) {
+                    backupScriptFile($dstFile);
+                }
                 if (copy($srcFile, $dstFile)) {
                     $scriptsCopied++;
                 } else {

@@ -481,6 +481,14 @@ switch ($action) {
         if (!unlink($filePath)) {
             errorResponse('Failed to delete script');
         }
+        // Sweep this script's backup artifacts (.N/.daily.*/.weekly.*). An
+        // explicit, confirmed delete means the user is done with this script;
+        // orphaned backups are invisible in every listing yet block the empty-
+        // folder cleanup below and the rmdir action (2026-07-11 review finding 3).
+        // Overwrite protection is unaffected — that guards the silent-clobber case.
+        foreach (glob($filePath . '.*') as $sib) {
+            if (isBackupArtifact(basename($sib))) @unlink($sib);
+        }
         syncDataToDb(['type' => 'script_delete', 'character_id' => $characterId, 'filename' => $basePath . '.' . $ext]);
 
         // Clean up empty parent directories (up to scripts root)

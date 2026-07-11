@@ -5,16 +5,37 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
-## SHIPPED 2026-07-11 (commit 5813499, gate 1231/1231, both sides, seamless restart 6/6)
+## SHIPPED 2026-07-11 (commit 5813499 + review-fix batch)
 - **`var_query` `#var` server cross-check** (Phase 3 step-3 precursor). Client
   `#var <name>` asks the server for the authoritative value and warns on
-  divergence — the diagnostic that would have surfaced the $ring incident on the
-  first check. Gate: ServerVarEngine T10. ⏳ Fable reviewer pass in flight.
-- **Script backup rotation** — `backupScriptFile()` + save/upload call sites;
-  3-tier (.1–.10 + daily/weekly) before overwrite. Closes the 'twist stone'
-  zero-history gap. ⏳ Fable reviewer flagged to check rename/other write paths.
-- **RECEIVED INPUT dedup — still deferred** (see Phase 3 Step 4 below). Needs live
-  idle-system verification, not a batch ride-along.
+  divergence — the $ring-incident diagnostic. Gate: ServerVarEngine T10.
+- **Script backup rotation** — `backupScriptFile()` 3-tier (.1–.10 + daily/weekly)
+  before overwrite. Closes the 'twist stone' zero-history gap. Gate: ScriptBackup
+  (new PHP CLI suite; deploy.py now runs *.php suites with `php`).
+
+### Fable reviewer (commit 5813499) → ACCEPT-WITH-CONDITIONS → all conditions fixed:
+- F1 ✅ export.php copy-character overwrite now backs up first (was an uncovered
+  clobber path — the exact class the feature was built for).
+- F2 ✅ backup artifacts excluded from the storage quota (`isBackupArtifact` in
+  getDirectorySize/getDirectoryFileCount) — was a slow file-count wedge.
+- F3 ✅ script delete now sweeps its backup siblings (was orphaning them + wedging
+  empty-folder deletion).
+- F4 ✅ var_query flushes pending writes first + skips during bulk #read (was a
+  false "SERVER has NO variable" on set-then-query — would train users to ignore it).
+- F6 ✅ order-insensitive value compare (`_canonicalJson`) — was crying wolf on
+  key-reordered tables.
+- F7 ✅ ISO-year weekly label (`o` not `Y`) in BOTH backupScriptFile AND the
+  pre-existing saveJsonFile (year-boundary weekly self-pruned on creation).
+- F9a ✅ debug.php `state` listing filters backups; F9b ✅ duplicateCharacter no
+  longer clones backup files.
+- F10 ✅ ScriptBackup PHP test added (16 cases); ghost gate suites committed.
+- **F5 DEFERRED (documented, not silent)** → see Phase 3 open items: indexed
+  `#var hp[self]` gets no cross-check yet. A nested compare risks the false-
+  positives F4/F6 just removed; needs the server to echo keys (a wmt-server change)
+  to do right. Scalar — the proven $ring case — is fully covered.
+- F8 (dedupe backupScriptFile vs saveJsonFile into one helper) → open, below.
+- **RECEIVED INPUT dedup — still deferred** (Phase 3 Step 4). Needs live idle-system
+  verification, not a batch ride-along.
 
 ## 🔥 ACTIVE: Phase 3 — single-owner variable model completion ("client as view")
 The cure for the client/server variable-divergence class. Two fresh bite marks
@@ -29,6 +50,10 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       blip-queued ops flush via the before-every-command path), stale op queues
       (>60s untouched = suspended tab) dropped instead of sent, set_functions
       gated on non-empty like events (2026-07-11, gate: ResumeStartupGuard T6-T8)
+- [ ] Step 3-precursor followup — indexed `#var name[key]` server cross-check
+      (F5 from the 2026-07-11 review). Needs server var_query to echo the queried
+      keys so the client resolves+compares the nested slice without a false-positive
+      nested compare. wmt-server change → own deploy.
 - [ ] Step 3 — route typed `#var`/`#math`/`#list`/`#unvar` to the SERVER store;
       client store becomes view-only (var_update + resume pull). This is the one
       that makes `#var ring` tell the truth.
@@ -77,6 +102,8 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       hash; reject if the file changed since it was opened). This is the piece that
       actually PREVENTS the multi-device clobber; rotations only make it recoverable.
       NOT started.
+- [ ] Dedupe backupScriptFile vs saveJsonFile rotation logic into one shared
+      helper (review F8) — two copies now, same scheme; next fix should land once.
 
 ## Repo / infra (review architecture items + leftovers)
 - [ ] Commit remaining ghosts: glitch/maplib.js (REQUIRED by server.js, still
