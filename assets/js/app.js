@@ -4576,7 +4576,14 @@ class WMTClient {
 
         // Track last user input for idle disconnect (deadman switch)
         this.lastUserInput = Date.now();
-        this.fireEvent('RECEIVED INPUT', rawInput);
+        // Phase 3 Step 4: RECEIVED INPUT fires ONLY on the server (per 'command'
+        // message, server.js dispatchServerEvent — it owns $idle and every other
+        // input-reset variable). The local fire here made every handler run TWICE
+        // (client + server): idempotent bodies (#var idle 0) converged, cumulative
+        // ones (#math c $c+1) double-counted, and a handler that sent a MUD command
+        // re-entered the server dispatch for a third fire. Local-only typed lines
+        // (# queries etc.) no longer count as "input" — matching lastInputAt, which
+        // only ever stamped on commands that actually went to the game.
 
         // Check if this is the #verbatim toggle command itself (always allow it)
         const trimmed = rawInput.trim().toLowerCase();
