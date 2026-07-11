@@ -494,8 +494,12 @@ def run_test_suites(only_scripts=None):
     host = '18.225.235.28'
     ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 ubuntu@{host}'
 
-    # Known test failures that are accepted and should not block deploy.
-    KNOWN_FAILURES = 0
+    # Accepted known-failing suites, by LABEL — a failure in one of these does not
+    # block deploy. Per-SUITE, not a global count (review F6): a global allowance
+    # would let a subset run's budget silently absorb an UNRELATED real failure
+    # (e.g. a 2-suite PHP subset where both fail nets to "0 unexpected"). Empty =
+    # every failure blocks (current state).
+    KNOWN_FAILING_SUITES = set()   # e.g. {'SomeFlakySuite'}
 
     suites = [
         ('Pipeline',     'test_wmt_client.js'),
@@ -667,14 +671,15 @@ def run_test_suites(only_scripts=None):
         if match:
             passed = int(match.group(1))
             failed = int(match.group(2))
-        elif result.returncode == 0:
-            # No parseable results but exited OK — count as 1 pass
-            passed = 1
-            failed = 0
         else:
-            # Can't parse and non-zero exit — count as failure
+            # No 'X passed, Y failed' line — the suite did NOT report, even on a
+            # 0 exit. This must NOT count as a pass (review F7c): a harness that
+            # dies early or prints nothing would silently green the gate — and in
+            # a 1-2 suite subset that could be the ENTIRE gate. Fail closed. (Every
+            # current suite emits the line, so this only fires on a broken suite.)
             passed = 0
             failed = 1
+            failure_output[label] = output + f"\n(no parseable 'X passed, Y failed' line; exit={result.returncode})"
 
         total_passed += passed
         total_failed += failed
@@ -703,10 +708,11 @@ def run_test_suites(only_scripts=None):
 
     dstatus(f"gate: done — {total_passed} passed, {total_failed} failed")
 
-    # Subtract known/accepted failures so they don't block deploy
-    unexpected_failures = max(0, total_failed - KNOWN_FAILURES)
+    # Block on failures EXCEPT those in known-failing suites (per-suite — review F6).
+    unexpected_failures = sum(f for (label, script, p, f, st) in details
+                              if f > 0 and label not in KNOWN_FAILING_SUITES)
     if total_failed > 0 and unexpected_failures == 0:
-        print(f"\n  ({total_failed} known failure(s) — not blocking deploy)")
+        print(f"\n  ({total_failed} failure(s), all in known-failing suites — not blocking deploy)")
 
     return total_passed, unexpected_failures, details
 

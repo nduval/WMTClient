@@ -54,11 +54,11 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       (F5 from the 2026-07-11 review). Needs server var_query to echo the queried
       keys so the client resolves+compares the nested slice without a false-positive
       nested compare. wmt-server change → own deploy.
+- [x] Step 3-precursor (scalar) — `#var <name>` cross-checks + flags the SERVER
+      value. SHIPPED 5813499 + review-fixes (see SHIPPED section), gate ServerVarEngine T10.
 - [ ] Step 3 — route typed `#var`/`#math`/`#list`/`#unvar` to the SERVER store;
       client store becomes view-only (var_update + resume pull). This is the one
       that makes `#var ring` tell the truth.
-- [~] Step 3-precursor — `#var <name>` cross-checks + flags the SERVER value.
-      CODE WRITTEN, uncommitted (see HAND-OFF STATE). Needs gate + deploy + live check.
 - [ ] Step 4 — RECEIVED INPUT dedup (remove client fireEvent at app.js ~4589).
       Server dispatch confirmed (server.js:8449). STARTED then REVERTED for the
       hand-off — needs live verification of $idle reset + idle auto-#end before
@@ -95,24 +95,31 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       confirm it stopped after Nathan's next clean relaunch; if not, dig
 
 ## Scripts (.tin) durability
-- [~] Backup rotations for .tin saves — CODE WRITTEN, uncommitted (see HAND-OFF
-      STATE). 3-tier scheme like triggers/aliases. Needs deploy (IONOS-only) + a
-      live save→verify-backup-appears check.
+- [x] Backup rotations for .tin saves — SHIPPED (82daa64, gate ScriptBackup 16/16
+      + review-fix batch). 3-tier scheme; excluded from quota; delete sweeps them.
 - [ ] Stale-save guard for the script editor (save carries loaded-version mtime/
       hash; reject if the file changed since it was opened). This is the piece that
       actually PREVENTS the multi-device clobber; rotations only make it recoverable.
-      NOT started.
-- [ ] Dedupe backupScriptFile vs saveJsonFile rotation logic into one shared
-      helper (review F8) — two copies now, same scheme; next fix should land once.
+      NOT started — a real feature, needs the editor to send the loaded mtime/hash.
+- [ ] Review F8: dedupe backupScriptFile vs saveJsonFile rotation logic into one
+      shared helper. DEFERRED deliberately — saveJsonFile is the core persistence
+      fn for all triggers/aliases and is NOT exercised by any gate suite, so a
+      refactor regression wouldn't be caught. The F7 correctness fix already landed
+      in both copies. Do this in isolation WITH a saveJsonFile test first, not bundled.
 
 ## Repo / infra (review architecture items + leftovers)
-- [ ] Commit remaining ghosts: glitch/maplib.js (REQUIRED by server.js, still
-      untracked!), .htaccess, tests/sandbox strays; sandbox-only suites beyond the
-      3 core ones
-- [ ] Gate runner: require the `Results:` line (exit-0-with-unparseable-output
-      currently counts as PASS) — review F7c notes this is AMPLIFIED by subsets:
-      in a 1-2 suite gate, one harness dying early at rc=0 can be the entire
-      "green" gate.
+- [x] Commit ghosts: maplib.js + .htaccess (0e4a41e); the 6 untracked gate suites
+      (82daa64). Remaining: verify no sandbox-only suite is still uncommitted.
+- [x] ✅ Review F7c FIXED (2026-07-11): gate no longer counts exit-0-without-a-
+      results-line as a pass — fails closed (a silent/early-dying harness can't
+      green the gate, esp. a 1-2 suite subset). Every current suite emits the line.
+- [x] ✅ Review F6 FIXED (2026-07-11): known-failures are now per-SUITE-label
+      (`KNOWN_FAILING_SUITES` set), not a global count — a subset budget can't
+      absorb an unrelated real failure. Currently empty (every failure blocks).
+- [ ] Review F7b: gate/abort block copy-pasted in 5 dispatcher sites. DEFERRED —
+      refactoring the critical deploy dispatcher for cosmetic gain, right after
+      adding all the new gate logic, is how a subtle deploy-breaking bug slips in.
+      Do in isolation after this soaks.
 - [ ] Behavioral suites for the suite-uncovered api/ endpoints (review F3):
       preferences (the default-deny whitelist foot-gun), aliases/triggers/tickers/
       classes, characters, export/copy, the admin + discord/report proxies. They
