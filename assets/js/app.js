@@ -1229,6 +1229,11 @@ class WMTClient {
                 this._applyVarUpdate(data);
                 break;
 
+            case 'delay_list':
+                // Phase 3 Step 5a: server's answer to a typed #delay list / #undelay.
+                this._onDelayList(data);
+                break;
+
             case 'authoritative_state':
                 // Server is telling us the canonical DB state of aliases/triggers/tickers.
                 // Replace our in-memory copies so subsequent bulk_replace messages are
@@ -4661,7 +4666,9 @@ class WMTClient {
                 // line 2 using $x would substitute against a not-yet-updated
                 // view (a stale-$x race that local synchronous execution
                 // doesn't have). Single typed lines (the normal case) route.
-                if (commands.length === 1 && this._shouldRouteTypedVarLine(command)) {
+                if (commands.length === 1 && this._tryRouteTypedDelayQuery(command)) {
+                    // handled: typed #delay list / #undelay answered by delay_list
+                } else if (commands.length === 1 && this._shouldRouteTypedVarLine(command)) {
                     this._routeTypedVarLine(command);
                 } else {
                     await this.executeCommandString(command);
@@ -14929,7 +14936,68 @@ class WMTClient {
         // #unvar with EXACTLY one bare name (server-handled). Wildcards → local.
         m = p.match(/^#(?:unvar|unvariable)\s+\{?([A-Za-z_]\w*)\}?\s*$/i);
         if (m) return { kind: 'unvar', base: m[1], keys: [], display: m[1] };
+        // Phase 3 Step 5a — #delay SCHEDULE forms route (server has full #delay:
+        // fire-time substitution, restart persistence; a routed typed delay
+        // survives phone sleep, a local one dies with the tab). Schedule is
+        // silent on both sides (tt++ parity) so no echo entry. Seconds must be
+        // numeric or a $var (server substitutes+clamps); a literal bad seconds
+        // stays local so the client's error message still prints. List forms
+        // (0-1 args) are handled by the delay_query path, not routed as commands.
+        m = p.match(/^#delay\s+\{(\d+(?:\.\d+)?|\$\{?\w+\}?)\}\s+\{[\s\S]+\}\s*$/i)
+         || p.match(/^#delay\s+(\d+(?:\.\d+)?)\s+(?!\{)\S[\s\S]*$/i)
+         || p.match(/^#delay\s+\{([^{}]+)\}\s+\{[\s\S]+\}\s+\{(\d+(?:\.\d+)?|\$\{?\w+\}?)\}\s*$/i);
+        if (m) return { kind: 'delay', base: null, keys: [], display: null };
+        // #undelay in a CHAIN routes silently (server removes, wildcard-capable).
+        // A single-part typed #undelay is handled by the delay_query path instead
+        // (which reports the removed count).
+        m = p.match(/^#undelay\s+\{?([^{}\s]+)\}?\s*$/i);
+        if (m) return { kind: 'undelay', base: null, keys: [], display: null };
         return null;
+    }
+
+    // Phase 3 Step 5a: single-part typed `#delay` (list), `#delay {pat}` (filtered
+    // list) and `#undelay {pat}` are answered by the SERVER's pending-delay set via
+    // delay_query — server delays (including trigger-scheduled ones, previously
+    // invisible) are the authoritative timers. Returns true when routed. Falls
+    // back to the local implementation when disconnected / bulk-reading.
+    _tryRouteTypedDelayQuery(line) {
+        if (!this.connection || !this.connection.connected || this.connection.mudLinkDead) return false;
+        if (this._bulkLoading || this.readingSilent || this._silent) return false;
+        const p = line.trim();
+        let m = p.match(/^#delay\s*$/i);
+        if (m) { this.connection.send('delay_query', { pattern: '*' }); return true; }
+        m = p.match(/^#delay\s+\{?([^{}\s]+)\}?\s*$/i);
+        if (m && !/^\d+(?:\.\d+)?$/.test(m[1])) {
+            // Single non-numeric arg = wildcard list filter. (A single NUMERIC
+            // arg is a malformed schedule — leave local for the usage error.)
+            this.connection.send('delay_query', { pattern: m[1] });
+            return true;
+        }
+        m = p.match(/^#undelay\s+\{?([^{}\s]+)\}?\s*$/i);
+        if (m) { this.connection.send('delay_query', { pattern: m[1], remove: true }); return true; }
+        return false;
+    }
+
+    // Render the server's answer: removal feedback (typed #undelay) or the
+    // pending-delay listing in the local cmdDelay format (remaining seconds).
+    _onDelayList(data) {
+        if (data.removed !== undefined && data.removed !== null) {
+            if (data.removed > 0) {
+                this.appendOutput(`#OK: ${data.removed} DELAY${data.removed > 1 ? 'S' : ''} REMOVED.`, 'system');
+            }
+            return;
+        }
+        const delays = data.delays || [];
+        if (!delays.length) {
+            this.appendOutput(
+                data.pattern && data.pattern !== '*'
+                    ? `#DELAY: NO MATCHES FOUND FOR {${data.pattern}}.`
+                    : '#DELAY: no delays defined.', 'system');
+            return;
+        }
+        for (const d of delays) {
+            this.appendOutput(`#DELAY {${d.name}} {${d.command}} {${d.remaining}}`, 'system');
+        }
     }
 
     // Route a typed #-first line to the server iff EVERY part is plain or a
@@ -14957,7 +15025,9 @@ class WMTClient {
         // writes still queued land on the server before this line executes.)
         for (const part of this.parseCommands(line)) {
             const c = this._classifyRoutablePart(part);
-            if (c && c.kind !== 'plain') this._queueTypedVarEcho(c);
+            // Only var/math/unvar have feedback echoes; #delay/#undelay are
+            // silent by tt++ parity (base is null for those kinds).
+            if (c && c.kind !== 'plain' && c.base) this._queueTypedVarEcho(c);
         }
         this.connection.sendCommand(line);
     }

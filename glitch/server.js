@@ -8833,6 +8833,30 @@ wss.on('connection', (ws, req) => {
           }
           break;
 
+        case 'delay_query':
+          // Phase 3 Step 5a (2026-07-11): typed `#delay` list / typed `#undelay`.
+          // Server delays were previously INVISIBLE (trigger-scheduled ones had
+          // no listing at all); this answers with the authoritative pending set,
+          // remaining seconds computed from each timer's _wmt_fireAt. A dedicated
+          // message = typed origin by construction, so removal can report a count
+          // without the inline #undelay verb (trigger bodies, silent) needing
+          // origin awareness.
+          {
+            const pattern = (typeof data.pattern === 'string' && data.pattern.trim()) ? data.pattern.trim() : '*';
+            const removed = data.remove ? removeDelaysMatching(session, pattern) : null;
+            const rx = delayWildRegExp(pattern);
+            const now = Date.now();
+            const delays = Object.entries(session._delays || {})
+              .filter(([name]) => rx.test(name))
+              .map(([name, timer]) => ({
+                name,
+                command: timer._wmt_command || '',
+                remaining: Math.max(0, Math.round(((timer._wmt_fireAt || now) - now) / 100) / 10),
+              }));
+            sendToClient(session, { type: 'delay_list', pattern, removed, delays });
+          }
+          break;
+
         case 'set_variables':
           // LEGACY full-store push (cached clients only — new clients send var_ops).
           // Merge client variables instead of wholesale replace.
@@ -11463,19 +11487,43 @@ function serverProcessInlineCommand(cmd, session) {
     }
   }
 
-  // #undelay {name}
+  // #undelay {pattern} — wildcard-capable (* / ?, case-insensitive), matching the
+  // client's cmdUndelay semantics. Was exact-name-only, so a trigger-body
+  // `#undelay {heal*}` silently no-opped — the same parity class as the
+  // #unticker wildcard fix (review F4). Silent here (trigger origin); TYPED
+  // #undelay goes through delay_query {remove:true} and gets a removed-count.
   const undelayMatch = trimmed.match(/^#undelay\s+(.*)/i);
   if (undelayMatch) {
     const uargs = parseBracedArgs(undelayMatch[1]);
-    const name = uargs[0] || undelayMatch[1].trim();
-    if (session._delays && session._delays[name]) {
-      clearTimeout(session._delays[name]);
-      delete session._delays[name];
-    }
+    removeDelaysMatching(session, uargs[0] || undelayMatch[1].trim());
     return true;
   }
 
   return false;
+}
+
+// * / ? wildcard name pattern → anchored case-insensitive RegExp (same idiom as
+// the #unticker matcher).
+function delayWildRegExp(pattern) {
+  return new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+}
+
+// Remove pending #delay timers whose NAME matches the wildcard pattern.
+// Shared by the inline #undelay verb (trigger/alias/routed chains, silent) and
+// the delay_query {remove:true} handler (typed #undelay, reports the count).
+function removeDelaysMatching(session, pattern) {
+  if (!pattern || !session._delays) return 0;
+  const rx = delayWildRegExp(pattern);
+  let removed = 0;
+  for (const name of Object.keys(session._delays)) {
+    if (rx.test(name)) {
+      clearTimeout(session._delays[name]);
+      delete session._delays[name];
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**

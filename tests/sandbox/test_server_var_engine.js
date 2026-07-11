@@ -41,6 +41,7 @@ const token = crypto.randomBytes(32).toString('hex');
 let varUpdates = [];
 let clientCmds = [];
 let varQueryResults = [];
+let delayLists = [];
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log('  PASS: ' + n); };
 const bad = (n, m) => { fail++; console.log('  FAIL: ' + n + (m ? ' — ' + m : '')); };
@@ -64,6 +65,7 @@ async function main() {
         if (m.type === 'var_update' && m.variables) varUpdates.push(m.variables);
         if (m.type === 'client_command' && m.command) clientCmds.push(m.command);
         if (m.type === 'var_query_result') varQueryResults.push(m);
+        if (m.type === 'delay_list') delayLists.push(m);
       } catch (e) {}
     });
 
@@ -221,6 +223,47 @@ async function main() {
         && absent && absent.defined === false)
       ok('T10: var_query returns defined+value for a live var and defined=false for an absent one');
     else bad('T10: var_query cross-check', `present=${JSON.stringify(present)} absent=${JSON.stringify(absent)}`);
+
+    // ── Phase 3 Step 5a: delay_query — the authoritative pending-delay listing ──
+    // Server delays were previously invisible (no listing existed at all).
+    // T11: schedule two named delays via the command path (the same route typed
+    //      lines take), then delay_query lists both with remaining>0 + command text.
+    send('command', { command: '#delay {dqa} {say never-a} {600};#delay {dqb} {say never-b} {600}' });
+    await sleep(400);
+    delayLists = [];
+    send('delay_query', { pattern: '*' });
+    await sleep(400);
+    let dl = delayLists[delayLists.length - 1];
+    const dqa = dl && dl.delays.find(d => d.name === 'dqa');
+    const dqb = dl && dl.delays.find(d => d.name === 'dqb');
+    if (dqa && dqb && dqa.remaining > 500 && dqa.remaining <= 600 && dqa.command === 'say never-a' && dl.removed === null)
+      ok('T11: delay_query lists scheduled delays with remaining seconds + command');
+    else bad('T11: delay_query listing', JSON.stringify(dl));
+
+    // T12: delay_query {remove:true} = typed #undelay — removes by wildcard,
+    //      reports the count, and the follow-up listing is empty.
+    delayLists = [];
+    send('delay_query', { pattern: 'dq?', remove: true });
+    await sleep(400);
+    send('delay_query', { pattern: 'dq*' });
+    await sleep(400);
+    const rem = delayLists[0];
+    const after = delayLists[1];
+    if (rem && rem.removed === 2 && after && after.removed === null && after.delays.length === 0)
+      ok('T12: delay_query remove:true removes by wildcard and reports count=2');
+    else bad('T12: typed #undelay via delay_query', JSON.stringify(delayLists));
+
+    // T13: inline #undelay (trigger/chain path) is now WILDCARD-capable — was
+    //      exact-name-only, so `#undelay {heal*}` silently no-opped (F4-class).
+    send('command', { command: '#delay {healx} {say never-c} {600};#delay {healy} {say never-d} {600};#undelay {heal*}' });
+    await sleep(400);
+    delayLists = [];
+    send('delay_query', { pattern: 'heal*' });
+    await sleep(400);
+    dl = delayLists[delayLists.length - 1];
+    if (dl && dl.delays.length === 0)
+      ok('T13: inline #undelay wildcard removed both delays in the same chain');
+    else bad('T13: inline #undelay wildcard', JSON.stringify(dl));
 
   } catch (e) {
     bad('harness', e.message);
