@@ -1,0 +1,20 @@
+# WMT Client - Root .htaccess
+#
+# This file is intentionally minimal. IONOS shared hosting restricts
+# AllowOverride such that `Header` and `Options` directives in per-directory
+# .htaccess are NOT honored — verified empirically 2026-04-11 by setting
+# `Header set X-Test-Marker "active"` and observing it never landed on
+# response headers.
+#
+# Consequence:
+#   - Security response headers (HSTS, X-Frame-Options, X-Content-Type-Options,
+#     Referrer-Policy) are emitted from PHP via emitSecurityHeaders() in
+#     includes/security.php instead of via this .htaccess.
+#   - F11 (Apache mod_negotiation MultiViews leaking file enumeration via
+#     `300 Multiple Choices`) cannot be fixed at the application layer on
+#     this host. The `Options -MultiViews` directive is silently ignored.
+#     If migrated off IONOS shared hosting, add `Options -MultiViews` here.
+#
+# Per-directory deny rules (data/, config/, includes/, tools/) DO work in
+# .htaccess on this host because they use `Require all denied`, which is
+# permitted under the AuthConfig override class.
