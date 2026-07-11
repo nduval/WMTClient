@@ -85,13 +85,21 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       T30/T31 (T30 regex negative-controlled against pre-change app.js), subset
       79/79. Behavior note: local-only typed lines (# queries) no longer count as
       "input" — matches lastInputAt, which only ever stamped on real sends.
-- [ ] Step 5a — typed `#delay`/`#undelay` routing. Server ALREADY has full #delay
-      (anon+named, fire-time substitution, persist/restore, 24h cap) + #undelay —
-      trigger-driven delays have been server-side all along; only TYPED ones run
-      in the browser (die on phone sleep). Blocker to do it right: bare `#delay`
-      (list) must show SERVER delays → needs a small server list responder =
-      server.js change → full gate + wmt-server restart deploy (needs Nathan's
-      window). Route via the Step-3 classifier once the responder exists.
+- [x] **Step 5a SHIPPED 2026-07-11 (f08414a, gate 1298/1298, 4/4 live players
+      resumed through the restart — elminster/donovan/mimic/hooligan, buffered
+      MUD data delivered)** — typed `#delay` schedule forms route to the server
+      (survive phone sleep; silent, tt++ parity); NEW `delay_query`/`delay_list`
+      messages (var_query pattern): bare `#delay` lists the AUTHORITATIVE pending
+      set incl. trigger-scheduled delays that were previously INVISIBLE (name,
+      command, remaining secs from _wmt_fireAt); typed `#undelay {pat}` removes
+      with wildcard + prints the count. BONUS parity fix: inline #undelay
+      (trigger bodies) was exact-name-only — `#undelay {heal*}` silently no-opped
+      (F4 class); now wildcard-capable via shared removeDelaysMatching(). Gate:
+      ServerVarEngine T11-T13 (negative-controlled: 3 FAIL on pre-change server),
+      TypedVarRouting T32-T47. Stays local: literal-bad-seconds (client usage
+      error), mixed-brace forms (conservative), #read scripts, offline (a delay
+      created offline lives client-side + won't appear in the server listing —
+      tiny window, still fires).
 - [ ] Step 5b — MIP conditions server-side (the second combat brain: mipVars
       namespace, cooldown state, hp/sp threshold evaluation all browser-only,
       dead when browser closed). OWN FOCUSED SESSION: needs protocols.md (MIP)
