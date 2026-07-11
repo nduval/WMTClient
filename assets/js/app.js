@@ -764,8 +764,13 @@ class WMTClient {
         this.connection.setAliases(this.getFilteredAliases());
         this.connection.setTickers(this.getFilteredTickers());
         this.sendDiscordPrefsToServer();
-        this.syncVariablesToServer();
-        this.syncFunctionsToServer();
+        // Phase 3 step 2 (2026-07-11): NO variable push at connect — resume is
+        // pull-only (session_resumed delivers the server store). Legit ops queued
+        // during a brief blip still flush via the before-every-command flush; a
+        // suspended tab's stale queue is dropped by the age guard in _sendVarOps.
+        // Functions: same empty-guard as events below — a fresh page load pushing
+        // {} here (before the startup #read defines them) wiped server functions.
+        if (Object.keys(this.functions || {}).length > 0) this.syncFunctionsToServer();
         // set_events is a full replace with no server-side protection: a fresh
         // page load pushing {} here (before the startup-script #read registers
         // handlers) wiped the server's handlers (review F2 / audit window 3).
@@ -14621,6 +14626,7 @@ class WMTClient {
         if (!this._pendingVarOps) this._pendingVarOps = { set: new Set(), del: new Set() };
         if (kind === 'set') { this._pendingVarOps.set.add(name); this._pendingVarOps.del.delete(name); }
         else { this._pendingVarOps.del.add(name); this._pendingVarOps.set.delete(name); }
+        this._pendingVarOpsTouchedAt = Date.now();   // staleness stamp — see _sendVarOps
         this.syncVariablesToServer();
     }
 
@@ -14647,6 +14653,17 @@ class WMTClient {
     _sendVarOps() {
         if (!this._pendingVarOps) return;
         if (!this.connection || !this.connection.connected) return;
+        // Stale-queue guard (Phase 3 step 2): a queue last touched over a minute
+        // ago means this tab was SUSPENDED since (mobile background, laptop lid) —
+        // its values are from a frozen world and must not overwrite the server's
+        // live store. Drop it; the server state is the truth the tab just adopted.
+        // A live tab can't hit this: the 100ms debounce or the before-every-command
+        // flush sends ops within moments of queueing.
+        if (this._pendingVarOpsTouchedAt && (Date.now() - this._pendingVarOpsTouchedAt) > 60000) {
+            console.warn('[var-sync] dropped stale op queue (tab was suspended):', [...this._pendingVarOps.set], [...this._pendingVarOps.del]);
+            this._pendingVarOps = null;
+            return;
+        }
         const del = new Set(this._pendingVarOps.del);
         const set = {};
         for (const n of this._pendingVarOps.set) {

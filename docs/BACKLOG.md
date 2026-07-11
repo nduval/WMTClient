@@ -14,9 +14,10 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
 - [x] Step 1 — per-key `var_ops` replaces full-store push (cea2836, 2026-07-08)
 - [x] (unplanned) resume-startup `#var` = init-if-absent — the phone-hop bot-killer
       (94310d1, 2026-07-10, gate: ResumeStartupGuard)
-- [ ] Step 2 — stop pushing variables/events at connect-time; resume = pull-only
-      (review doc: drop the pushes in sendFilteredTriggersAndAliases; events push
-      already gated by F2 — verify variables side)
+- [x] Step 2 — connect-time variable flush removed (resume = pull-only; legit
+      blip-queued ops flush via the before-every-command path), stale op queues
+      (>60s untouched = suspended tab) dropped instead of sent, set_functions
+      gated on non-empty like events (2026-07-11, gate: ResumeStartupGuard T6-T8)
 - [ ] Step 3 — route typed `#var`/`#math`/`#list`/`#unvar` to the SERVER store;
       client store becomes view-only (var_update + resume pull). This is the one
       that makes `#var ring` tell the truth.
