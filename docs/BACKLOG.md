@@ -110,16 +110,52 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       untracked!), .htaccess, tests/sandbox strays; sandbox-only suites beyond the
       3 core ones
 - [ ] Gate runner: require the `Results:` line (exit-0-with-unparseable-output
-      currently counts as PASS)
-- [x] ⚠️→✅ PHP/client-only deploys were UNGATED (surfaced+fixed 2026-07-11):
-      `deploy.py auto`/`ionos` shipped api/*, includes/*, app.js to IONOS with
-      only `php -l`/`node --check`. FIX: `relevant_test_scripts()` maps changed
-      files → suites (PHP files → PhpLogin+ScriptBackup; app.js/connection.js →
-      the 5 client-VM suites; css/docs → none), and both the auto IONOS-only
-      branch and explicit `ionos` now stage the sandbox + run that subset before
-      shipping (`run_test_suites(only_scripts=...)`), --force to override.
-      Verified end-to-end: PHP subset staged + ran exactly PhpLogin+ScriptBackup
-      (24/24). Server.js changes still run the FULL gate (unchanged).
+      currently counts as PASS) — review F7c notes this is AMPLIFIED by subsets:
+      in a 1-2 suite gate, one harness dying early at rc=0 can be the entire
+      "green" gate.
+- [ ] Behavioral suites for the suite-uncovered api/ endpoints (review F3):
+      preferences (the default-deny whitelist foot-gun), aliases/triggers/tickers/
+      classes, characters, export/copy, the admin + discord/report proxies. They
+      parse-check now but nothing tests their logic. Highest value: preferences.
+- [ ] Review F2: explicit `deploy.py ionos` (and the auto IONOS gate) now call
+      deploy_test_server, which restarts the sandbox wmt-server with the
+      WORKING-TREE server.js. A broken/mid-edit server.js or a down sandbox blocks
+      an UNRELATED urgent PHP hotfix, and --force conflates "ignore gate results"
+      with "skip sandbox prereqs". None of the 7 subset suites needs that restart
+      (PhpLogin boots its own php -S; ScriptBackup is CLI; client-VM suites read
+      files) — EXCEPT verify whether LoginConflict/ReconnectGate connect to
+      ws://localhost:3000. Fix: stage only what the subset needs, or don't fail
+      the gate on the wmt-server-restart step when no selected suite uses it.
+- [ ] Review F6: `KNOWN_FAILURES` is a global count applied to subset runs too.
+      Currently 0 (latent). If ever >0, a 2-suite subset where both fail could
+      compute unexpected=0 and deploy. Scope known-failures per-suite/label.
+- [ ] Review F7b: the gate/abort block is copy-pasted in 5 sites (all/lightsail/
+      ionos/auto-server/auto-ionos) with drifting wording + print_prod_db_health
+      present in some. Extract one helper before the next semantics change.
+- [ ] Review F5 (memory note, not code): deploy_test_server clobbers the
+      sandbox-only staged server.js on every gated deploy now — the ON-HOLD
+      block-trigger job's uncommitted sandbox code is thus unviable to keep there.
+- [x] ⚠️→✅ PHP/client-only deploys were UNGATED (surfaced+fixed 2026-07-11,
+      reviewed → fixed conditions). `deploy.py auto`/`ionos` shipped api/*,
+      includes/*, app.js to IONOS with NO suite run and (turns out) NO php -l
+      either — deploy.py never linted. FIX: `relevant_test_scripts()` maps changed
+      files → suites (PHP → PhpLogin+ScriptBackup; app.js/connection.js → the 5
+      client-VM suites; css/docs → none); auto IONOS-only branch + explicit `ionos`
+      stage the sandbox + run that subset (`run_test_suites(only_scripts=...)`),
+      PLUS `php_lint_changed()` runs `php -l` on EVERY changed PHP file. Server.js
+      changes still run the FULL gate. Drift guard: a requested suite missing from
+      the live list aborts (can't silently skip). Ungated files (css/.htaccess)
+      print a loud "UNGATED → prod" line. Verified: PHP subset ran exactly
+      PhpLogin+ScriptBackup (24/24); php -l negative-controlled (catches a parse
+      error, passes good files).
+      ⚠️ HONEST COVERAGE (review F3): the two PHP suites exercise only the auth
+      login-cycle (api/auth.php + the login include chain) and functions.php
+      backup rotation. Most api/ endpoints (preferences, aliases, triggers,
+      tickers, classes, characters, export, discord/report proxies, admin) are
+      now PARSE-CHECKED (php -l) but NOT behaviorally suite-covered — a green gate
+      on a preferences.php change proves it parses + login still works, NOT that
+      preferences logic is correct. Real behavioral coverage for those = new
+      suites (below).
 - [ ] Delete dead weight: root server.js (stale since Feb), websocket/ Ratchet
       server (vestigial, still deployed), Bot Engine block (server.js ~5166–5529)
       + api/bots.php + getBotsPath, root pcaps/screenshots/db dumps (PII in OneDrive)

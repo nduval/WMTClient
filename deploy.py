@@ -376,6 +376,7 @@ def deploy_test_server():
             f'{ssh_cmd} "sudo rm -rf /opt/wmt/phpsrc && sudo mkdir -p /opt/wmt/phpsrc '
             f'&& sudo cp -r /tmp/phpsrc/* /opt/wmt/phpsrc/ '
             f'&& sudo rm -f /opt/wmt/phpsrc/config/render_admin_key.php '
+            f'/opt/wmt/phpsrc/config/ipinfo.php /opt/wmt/phpsrc/config/sendgrid.php '
             f'&& sudo chmod -R a+rX /opt/wmt/phpsrc"',
             shell=True, capture_output=True, text=True
         )
@@ -585,11 +586,24 @@ def run_test_suites(only_scripts=None):
     # Relevant-subset gate: run only the suites for what changed (client/PHP-only
     # deploy). None = full gate (server.js changed, or an explicit full run).
     if only_scripts is not None:
+        # DRIFT GUARD (review F1): the subset sets (PHP_/CLIENT_SUITE_SCRIPTS) are
+        # a hand-maintained parallel registry. If a suite is renamed in `suites`
+        # without updating them, the filter silently shrinks — worst case to empty,
+        # which must NOT read as a clean pass and deploy ungated. Any requested
+        # script not in the live suites list = drift → abort loudly (failed>0).
+        all_scripts = {s[1] for s in suites}
+        missing = set(only_scripts) - all_scripts
+        if missing:
+            print(f"  ERROR: requested suite(s) not in the gate list — registry DRIFT: {sorted(missing)}")
+            print("  Fix PHP_SUITE_SCRIPTS / CLIENT_SUITE_SCRIPTS or the suites list. Refusing to gate.")
+            return 0, len(missing), []
         suites = [s for s in suites if s[1] in only_scripts]
         print(f"  (relevant subset: {len(suites)} suite(s) for the changed files)")
         if not suites:
-            print("  No suites map to the changed files — skipping gate.")
-            return 0, 0, []
+            # only_scripts non-empty (callers guard with `if subset:`) yet nothing
+            # matched despite passing the drift check — impossible; fail closed.
+            print("  ERROR: subset filtered to zero suites — refusing to pass.")
+            return 0, 1, []
 
     total_passed = 0
     total_failed = 0
@@ -685,6 +699,41 @@ def print_prod_db_health():
         print(out if out else "  (no snapshot yet — db-stats cron has not run)")
     except Exception as e:
         print(f"\n=== Production database health ===\n  (unavailable: {e})")
+
+
+def php_lint_changed(php_files):
+    """`php -l` every changed PHP file on the sandbox (review F3). The PHP suites
+    (PhpLogin/ScriptBackup) exercise only the login chain + functions.php backup —
+    most api/ endpoints and root pages are gated-but-unexercised, and deploy.py
+    ran NO parse check at all, so a syntax error in e.g. preferences.php shipped
+    to prod uncaught (a fatal in a site-wide include = full outage). This gives
+    every changed PHP file at least a parse check. Returns True if all parse.
+    scp's each file to a flat temp name (avoids basename collisions across dirs)."""
+    if not php_files:
+        return True
+    ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
+    host = '18.225.235.28'
+    ssh_cmd = f'ssh -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{host}'
+    print("\n=== php -l (parse check) on changed PHP ===")
+    ok = True
+    for f in php_files:
+        local = BASE_DIR / f
+        if not local.exists():
+            continue
+        tmp = '/tmp/_lint_' + f.replace('/', '_').replace('\\', '_')
+        scp = run_cmd(
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "{local}" ubuntu@{host}:{tmp}',
+            shell=True, capture_output=True, text=True, timeout=30)
+        if scp.returncode != 0:
+            print(f"  {f}: scp failed — cannot lint"); ok = False; continue
+        r = run_cmd(f'{ssh_cmd} "php -l {tmp} && rm -f {tmp}"', shell=True, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            print(f"  {f}: OK")
+        else:
+            print(f"  {f}: PARSE ERROR")
+            print("   " + (r.stdout + r.stderr).strip()[-400:])
+            ok = False
+    return ok
 
 
 def deploy_ionos(only_files=None):
@@ -1066,6 +1115,9 @@ def main():
             success = False
 
     elif args.target == 'ionos':
+        if args.dry_run:
+            print("  [dry-run] `ionos` would stage the sandbox, gate PHP+client suites, then deploy all IONOS files. No changes made.")
+            return
         # Explicit IONOS deploy pushes all PHP + client files → gate both suite
         # sets first (unless --force). Closes the ungated-PHP-deploy hole.
         subset = PHP_SUITE_SCRIPTS | CLIENT_SUITE_SCRIPTS
@@ -1139,9 +1191,19 @@ def main():
         elif ionos_files:
             # Client/PHP-only deploy: server.js unchanged so the full gate above
             # is skipped, but PHP/app.js still reaches prod. Gate the RELEVANT
-            # subset first (PhpLogin/ScriptBackup for PHP, client-VM suites for
-            # app.js) so auth/api/includes/client changes are no longer shipped
-            # suite-untested. CSS/docs-only IONOS changes map to no suites → no gate.
+            # subset (PhpLogin/ScriptBackup for PHP, client-VM suites for app.js)
+            # + `php -l` EVERY changed PHP file (most api/ endpoints aren't
+            # exercised by the suites — the lint at least catches parse errors).
+            php_changed = [f for f in ionos_files
+                           if f.startswith(('api/', 'includes/', 'config/')) or f.endswith('.php')]
+            # F4: surface IONOS files reaching prod with NO suite AND no lint
+            # (css, images, .htaccess — .htaccess is outage-class). Make it a
+            # visible decision, not silence.
+            ungated = [f for f in ionos_files
+                       if f not in php_changed
+                       and f not in ('assets/js/app.js', 'assets/js/connection.js')]
+            if ungated:
+                print(f"  ⚠ UNGATED → prod (no suite/lint covers these): {', '.join(ungated)}")
             subset = relevant_test_scripts(ionos_files)
             if subset:
                 print(f"\n=== Gating client/PHP change ({len(subset)} relevant suite(s)) ===")
@@ -1155,6 +1217,10 @@ def main():
                     print("\nWARNING: sandbox deploy failed. Aborting. Use --force to override.")
                     dstatus("FAILED: sandbox deploy blocked IONOS deploy")
                     sys.exit(1)
+            if php_changed and not php_lint_changed(php_changed) and not args.force:
+                print("\nWARNING: PHP parse error above. Aborting. Use --force to override.")
+                dstatus("FAILED: php -l blocked IONOS deploy")
+                sys.exit(1)
         if ionos_files:
             if not deploy_ionos(only_files=ionos_files):
                 success = False
