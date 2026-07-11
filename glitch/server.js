@@ -2111,6 +2111,11 @@ function serializeActiveSessions(includeChat) {
         runtimeTickers: serializedRuntimeTickers,
         // #event handlers are session-only too (set_events, no DB backing).
         events: (session.events && Object.keys(session.events).length > 0) ? session.events : undefined,
+        // Phase 3 Step 5b: whether the last-authed client delegated MIP-condition
+        // evaluation to the server. Must survive a restart so a SUSPENDED phone's
+        // heal-gating keeps running through a deploy (conditions themselves reload
+        // from the prefs DB at restore).
+        mipCond: !!session._mipServerConditions,
         actualMudChar: session._actualMudChar || null
       });
     }
@@ -2955,6 +2960,12 @@ async function restorePersistentSessions() {
       session._actualMudChar = ps.actualMudChar;
     }
 
+    // Phase 3 Step 5b: restore the MIP-condition delegation flag and reload the
+    // conditions from the prefs DB — so a suspended phone's heal-gating keeps
+    // evaluating straight through a deploy, browser absent.
+    session._mipServerConditions = !!ps.mipCond;
+    loadMipConditions(session);
+
     // Load chat history from DB — authoritative source for chat.
     if (wmtDb && ps.characterId) {
       try {
@@ -3008,17 +3019,7 @@ async function restorePersistentSessions() {
         const fireDelay = remainingMs > 0 ? remainingMs : 50; // 50ms for "should have already fired"
         const timer = setTimeout(() => {
           delete session._delays[d.name];
-          const expanded = expandCommandWithAliases(d.command, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
-          expanded.forEach(ec => {
-            const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
-            if (repeatMatch) {
-              executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
-            } else if (ec.startsWith('#')) {
-              sendToClient(session, { type: 'client_command', command: ec });
-            } else if (session.mudSocket && !session.mudSocket.destroyed) {
-              mudSendExpanded(session, ec);
-            }
-          });
+          executeExpandedInline(session, d.command);
         }, fireDelay);
         timer._wmt_fireAt = Date.now() + fireDelay;
         timer._wmt_command = d.command;
@@ -5032,6 +5033,12 @@ const server = http.createServer(async (req, res) => {
         switch (data.type) {
           case 'preferences':
             dbSavePreferences(data.character_id, data.data || {});
+            // Phase 3 Step 5b: a prefs save may carry edited mip_conditions —
+            // refresh any live session for this character so the server
+            // evaluator picks up editor changes immediately.
+            for (const s of sessions.values()) {
+              if (s.characterId === data.character_id) loadMipConditions(s);
+            }
             break;
           case 'script':
             // Upsert a script file into DB
@@ -6754,6 +6761,114 @@ function parseFFFStats(session, data) {
       // Combat ended (mob died or fled) — handled by kill detection
     }
   }
+
+  // Phase 3 Step 5b: evaluate MIP conditions on the authoritative side, on every
+  // stats update — heal-gating keeps working with the browser closed/suspended.
+  checkMipConditionsServer(session);
+}
+
+// ── Phase 3 Step 5b: server-side MIP conditions (retires the browser combat brain) ──
+// The browser evaluator (checkMipConditions) gated hp/sp threshold commands on a
+// never-synced mipVars namespace with browser-only cooldowns — dead the moment the
+// phone slept. The server already parses the full MIP stat stream (parseFFFStats
+// above), so evaluation moves here: same condition shape, same operators, same
+// 5s cooldown, firing through the standard command pipeline. Config stays in the
+// prefs blob (client editor UI unchanged); the server reads it from wmt.db.
+// DOUBLE-FIRE GUARD: evaluation is gated on session._mipServerConditions, set only
+// when the connecting client declared `mipCond: 1` at auth (new app.js). Old cached
+// tabs never set it and keep evaluating locally — one brain in every pairing.
+
+const MIP_COND_COOLDOWN_MS = 5000;   // matches the client's mipConditionCooldown
+
+// Load mip_conditions from the character's prefs blob (wmt.db — the same store
+// /admin/preferences serves). Called at session create/resume/restore and when a
+// preferences save lands via /data-sync (live editor updates).
+function loadMipConditions(session) {
+  if (!session) return;
+  session._mipCondLastFired = session._mipCondLastFired || {};
+  if (!wmtDb || !session.characterId) { session.mipConditions = session.mipConditions || []; return; }
+  try {
+    const row = dbStmts.getPreferences.get(session.characterId);
+    let conds = [];
+    if (row && row.data) {
+      try {
+        const prefs = JSON.parse(row.data);
+        if (Array.isArray(prefs.mip_conditions)) conds = prefs.mip_conditions;
+      } catch (e) {}
+    }
+    session.mipConditions = conds;
+  } catch (e) {
+    session.mipConditions = session.mipConditions || [];
+  }
+}
+
+// Derive the evaluation namespace from session.mipStats — field-for-field the
+// browser's updateMipVars derivation (hp/sp/gp triples + pct, names, enemy,
+// round, room, exits, guild_*).
+function mipVarsOf(session) {
+  const s = session.mipStats;
+  const pct = (c, m) => (m > 0 ? Math.round((c / m) * 100) : 0);
+  const v = {
+    hp: s.hp.current, hp_max: s.hp.max, hp_pct: pct(s.hp.current, s.hp.max),
+    sp: s.sp.current, sp_max: s.sp.max, sp_pct: pct(s.sp.current, s.sp.max),
+    gp1: s.gp1.current, gp1_max: s.gp1.max, gp1_pct: pct(s.gp1.current, s.gp1.max), gp1_name: s.gp1.label || 'GP1',
+    gp2: s.gp2.current, gp2_max: s.gp2.max, gp2_pct: pct(s.gp2.current, s.gp2.max), gp2_name: s.gp2.label || 'GP2',
+    enemy: s.enemy || 0, round: s.round || 0,
+    room: s.room || '', exits: s.exits || ''
+  };
+  if (s.guildVars) {
+    for (const [k, val] of Object.entries(s.guildVars)) v['guild_' + k] = val;
+  }
+  return v;
+}
+
+// Verbatim port of the browser's evaluateMipCondition (loose == / != included —
+// guild vars can be strings).
+function evalMipCond(vars, variable, operator, value) {
+  const cur = vars[variable];
+  if (cur === undefined) return false;
+  const cmp = parseFloat(value);
+  switch (operator) {
+    case '<': return cur < cmp;
+    case '<=': return cur <= cmp;
+    case '>': return cur > cmp;
+    case '>=': return cur >= cmp;
+    case '==': return cur == cmp;
+    case '!=': return cur != cmp;
+    default: return false;
+  }
+}
+
+function checkMipConditionsServer(session) {
+  if (!session._mipServerConditions) return;                       // old client owns it locally
+  if (!session.mipStats || !(session.mipStats.hp.max > 0)) return; // mipReady parity: real stats seen
+  const conds = session.mipConditions;
+  if (!conds || !conds.length) return;
+  const vars = mipVarsOf(session);
+  const now = Date.now();
+  if (!session._mipCondLastFired) session._mipCondLastFired = {};
+  for (const cond of conds) {
+    if (!cond || !cond.enabled || !cond.command) continue;
+    if (cond.combatOnly && !vars.round) continue;
+    const key = cond.id || (cond.variable + cond.operator + cond.value);
+    if (now - (session._mipCondLastFired[key] || 0) < MIP_COND_COOLDOWN_MS) continue;
+    let triggered = evalMipCond(vars, cond.variable, cond.operator, cond.value);
+    if (cond.subConditions && cond.subConditions.length > 0) {
+      for (const sub of cond.subConditions) {
+        const r = evalMipCond(vars, sub.variable, sub.operator, sub.value);
+        if (sub.logic === 'AND') triggered = triggered && r;
+        else if (sub.logic === 'OR') triggered = triggered || r;
+      }
+    }
+    if (triggered) {
+      session._mipCondLastFired[key] = now;
+      writeSessionLog(session, 'mip_condition', {
+        cond: `${cond.variable}${cond.operator}${cond.value}`,
+        cmd: cond.command
+      });
+      executeExpandedInline(session, cond.command);
+    }
+  }
 }
 
 /**
@@ -7872,6 +7987,13 @@ wss.on('connection', (ws, req) => {
               });
               writeSessionLog(session, 'session', { event: 'resume', mudConnected: oldMudConnected, disconnectedFor: disconnectDuration });
 
+              // Phase 3 Step 5b: (re)capture the client's MIP-condition delegation
+              // on EVERY auth — an old cached tab taking over must switch the
+              // server evaluator off (it evaluates locally), a new one switches
+              // it on. Conditions reload from prefs in case they changed.
+              session._mipServerConditions = !!data.mipCond;
+              loadMipConditions(session);
+
               // If Discord prefs are empty, fetch from PHP backend
               if (Object.keys(session.discordChannelPrefs).length === 0) {
                 fetchDiscordPrefsFromPHP(session.userId, session.characterId, session);
@@ -7982,6 +8104,10 @@ wss.on('connection', (ws, req) => {
             });
             writeSessionLog(session, 'session', { event: 'resume', mudConnected, disconnectedFor: disconnectDuration });
 
+            // Phase 3 Step 5b: (re)capture MIP-condition delegation on every auth.
+            session._mipServerConditions = !!data.mipCond;
+            loadMipConditions(session);
+
             // If Discord prefs are empty, fetch from PHP backend
             // This handles the case where server restarted while browser was disconnected
             if (Object.keys(session.discordChannelPrefs).length === 0) {
@@ -8062,6 +8188,11 @@ wss.on('connection', (ws, req) => {
                 }
               } catch (e) {}
             }
+
+            // Phase 3 Step 5b: capture MIP-condition delegation + load conditions
+            // from the prefs DB (fresh session).
+            session._mipServerConditions = !!data.mipCond;
+            loadMipConditions(session);
 
             // Fetch Discord prefs from PHP backend (survives server restarts)
             // Do this async so we don't block the session creation
@@ -10880,6 +11011,26 @@ function parseIfChain(str) {
 // Commands with serverInline: true are handled here:
 //   #math, #var/#variable, #unvar/#unvariable, #format, #cat, #replace,
 //   #line oneshot, #line gag, #if
+// Execute a command string through the full server pipeline: alias expansion +
+// inline verb execution (serverProcessInlineCommand runs inside
+// expandCommandWithAliases — regression rule 12's handled-gating applies), then
+// per result: #N repeats, unhandled # → client_command, plain → MUD. This is the
+// one shared shape for every asynchronous server-side executor (#delay fire,
+// restored-delay fire, #loop/#foreach bodies, MIP condition commands).
+function executeExpandedInline(session, commandString) {
+  const expanded = expandCommandWithAliases(commandString, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+  expanded.forEach(ec => {
+    const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+    if (repeatMatch) {
+      executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+    } else if (ec.startsWith('#')) {
+      sendToClient(session, { type: 'client_command', command: ec });
+    } else if (session.mudSocket && !session.mudSocket.destroyed) {
+      mudSendExpanded(session, ec);
+    }
+  });
+}
+
 function serverProcessInlineCommand(cmd, session) {
   if (!cmd || !session) return false;
   const trimmed = cmd.trim();
@@ -11464,17 +11615,7 @@ function serverProcessInlineCommand(cmd, session) {
       const delayMs = seconds * 1000;
       const timer = setTimeout(() => {
         delete session._delays[name];
-        const expanded = expandCommandWithAliases(command, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
-        expanded.forEach(ec => {
-          const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
-          if (repeatMatch) {
-            executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
-          } else if (ec.startsWith('#')) {
-            sendToClient(session, { type: 'client_command', command: ec });
-          } else if (session.mudSocket && !session.mudSocket.destroyed) {
-            mudSendExpanded(session, ec);
-          }
-        });
+        executeExpandedInline(session, command);
       }, delayMs);
       // Attach metadata for serialization during persist. Node's
       // setTimeout doesn't expose remaining time, so we store the
@@ -11496,6 +11637,118 @@ function serverProcessInlineCommand(cmd, session) {
   if (undelayMatch) {
     const uargs = parseBracedArgs(undelayMatch[1]);
     removeDelaysMatching(session, uargs[0] || undelayMatch[1].trim());
+    return true;
+  }
+
+  // ── Phase 3 Step 5c: #loop / #foreach — the LAST state-mutating verbs that fell
+  // through to the browser. Iteration variables now write the authoritative store;
+  // body commands run through the full pipeline (inner #var/#math inline, unhandled
+  // # forwarded per-iteration WITH server-substituted values, plains to the MUD).
+  // The view gets ONE var_update with the final iteration value — inner parts were
+  // already substituted server-side, so per-iteration pushes would be pure spam.
+  // Parity notes (mirrors the client exactly): 1000-iteration cap; #break stops
+  // AFTER the current body completes (the client checks its flag between
+  // iterations too); #continue is a between-iterations no-op; invalid args return
+  // false → forwarded → the client prints its usage error.
+
+  // #break / #continue — meaningful only inside a #loop/#foreach body.
+  if (/^#break\s*$/i.test(trimmed)) { session._loopBreak = true; return true; }
+  if (/^#continue\s*$/i.test(trimmed)) { return true; }
+
+  // #loop {start} {end} {var} {commands}
+  const loopMatch = trimmed.match(/^#loop\s+(.*)/i);
+  if (loopMatch) {
+    const largs = parseBracedArgs(loopMatch[1]);
+    if (largs.length < 4) return false;   // client prints the usage error
+    const start = parseInt(substituteUserVariables(largs[0], session.variables || {}, session.functions || {}));
+    const end = parseInt(substituteUserVariables(largs[1], session.variables || {}, session.functions || {}));
+    if (isNaN(start) || isNaN(end)) return false;  // client prints "must be numbers"
+    const varName = largs[2];
+    const body = largs[3];
+    if (!session.variables) session.variables = {};
+    if (!session._varServerModified) session._varServerModified = {};
+    // Total-work budget shared across NESTED loops: 1000 iterations/level matches
+    // the client cap, but nesting multiplies (1000×1000 = a full event-loop stall
+    // that on a shared server hurts EVERY session, not just the author's browser).
+    // 10k total per top-level loop is far above any real bot usage.
+    const topLevel = !session._loopDepth;
+    if (topLevel) session._loopIterBudget = 10000;
+    session._loopDepth = (session._loopDepth || 0) + 1;
+    try {
+      const step = start <= end ? 1 : -1;
+      let iters = 0;
+      session._loopBreak = false;
+      for (let i = start; step > 0 ? i <= end : i >= end; i += step) {
+        if (++iters > 1000) break;   // client parity: per-loop hard cap
+        if (--session._loopIterBudget < 0) break;
+        session.variables[varName] = String(i);
+        session._varServerModified[varName] = Date.now();
+        executeExpandedInline(session, body);
+        if (session._loopBreak) { session._loopBreak = false; break; }
+      }
+    } finally {
+      session._loopDepth--;
+    }
+    sendToClient(session, { type: 'var_update', variables: { [varName]: session.variables[varName] } });
+    return true;
+  }
+
+  // #foreach {list} {var} {commands} — table form `$name[%*]` iterates the
+  // table's VALUES (objects preserved, numeric-then-lexicographic key order);
+  // otherwise brace-separated {{a}{b}} then semicolon-separated fallback.
+  const feMatch = trimmed.match(/^#foreach\s+(.*)/i);
+  if (feMatch) {
+    const fargs = parseBracedArgs(feMatch[1]);
+    if (fargs.length < 3) return false;   // odd/legacy shapes keep client behavior
+    const varName = fargs[1];
+    const body = fargs[2];
+    let items = [];
+    const tableMatch = fargs[0].match(/^\$(\w+)\[%\*\]$/);
+    if (tableMatch) {
+      const tv = (session.variables || {})[tableMatch[1]];
+      if (typeof tv === 'object' && tv !== null) {
+        const keys = Object.keys(tv).sort((a, b) => {
+          const na = parseInt(a), nb = parseInt(b);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          return String(a).localeCompare(String(b));
+        });
+        items = keys.map(k => tv[k]);
+      }
+    }
+    if (items.length === 0) {
+      const listStr = substituteUserVariables(fargs[0], session.variables || {}, session.functions || {});
+      if (listStr.includes('{') && listStr.includes('}')) {
+        const re = /\{([^{}]*)\}/g;
+        let m2;
+        while ((m2 = re.exec(listStr)) !== null) items.push(m2[1]);
+      }
+      if (items.length === 0) {
+        items = listStr.split(';').map(s => s.trim()).filter(s => s.length > 0);
+      }
+    }
+    if (!session.variables) session.variables = {};
+    if (!session._varServerModified) session._varServerModified = {};
+    // Same shared nesting budget as #loop (see comment there).
+    const feTop = !session._loopDepth;
+    if (feTop) session._loopIterBudget = 10000;
+    session._loopDepth = (session._loopDepth || 0) + 1;
+    try {
+      let iters = 0;
+      session._loopBreak = false;
+      for (const item of items) {
+        if (++iters > 1000) break;
+        if (--session._loopIterBudget < 0) break;
+        session.variables[varName] = item;   // objects preserved (table form)
+        session._varServerModified[varName] = Date.now();
+        executeExpandedInline(session, body);
+        if (session._loopBreak) { session._loopBreak = false; break; }
+      }
+    } finally {
+      session._loopDepth--;
+    }
+    if (items.length > 0) {
+      sendToClient(session, { type: 'var_update', variables: { [varName]: session.variables[varName] } });
+    }
     return true;
   }
 

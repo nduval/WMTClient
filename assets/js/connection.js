@@ -101,6 +101,11 @@ class MudConnection {
                     characterName: this.characterName,
                     isWizard: this.isWizard,
                     packetPatch: this.packetPatch,
+                    // Phase 3 Step 5b capability: this client does NOT evaluate MIP
+                    // conditions locally — the server owns them. Old cached clients
+                    // omit this, so the server won't evaluate for them (no double-fire
+                    // in any old/new pairing).
+                    mipCond: 1,
                     autoReconnect: this._nextConnectIsAuto,
                     clientVersion: (typeof WMT_CLIENT_VERSION !== 'undefined' ? WMT_CLIENT_VERSION : 'unknown'),
                     connDiag: { attempts: this._connAttempts, auto: this._nextConnectIsAuto, last: this._lastConnClose }

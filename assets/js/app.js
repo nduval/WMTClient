@@ -1627,6 +1627,17 @@ class WMTClient {
 
     // Check all MIP conditions and execute commands
     checkMipConditions() {
+        // Phase 3 Step 5b: the SERVER evaluates MIP conditions (it parses the same
+        // stat stream into session.mipStats and fires through the command pipeline
+        // — so heal-gating works with the browser closed/suspended, against the
+        // authoritative variable store). This client declared that capability at
+        // auth (mipCond:1), so evaluating here too would double-fire every
+        // condition. When disconnected there is no MIP data flow and no way to
+        // send the command, so there is no meaningful local fallback either.
+        // Condition CONFIG (the editor UI + prefs save) remains client-side.
+        return;
+        // eslint-disable-next-line no-unreachable — retired local evaluator below,
+        // kept briefly for reference; delete on the next cleanup pass.
         // Don't evaluate conditions until we've received valid MIP stats
         if (!this.mipReady) return;
 
