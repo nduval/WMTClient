@@ -56,18 +56,37 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       nested compare. wmt-server change → own deploy.
 - [x] Step 3-precursor (scalar) — `#var <name>` cross-checks + flags the SERVER
       value. SHIPPED 5813499 + review-fixes (see SHIPPED section), gate ServerVarEngine T10.
-- [ ] Step 3 — route typed `#var`/`#math`/`#list`/`#unvar` to the SERVER store;
-      client store becomes view-only (var_update + resume pull). This is the one
-      that makes `#var ring` tell the truth.
+- [x] **Step 3 SHIPPED 2026-07-11** — typed `#var`(set, incl. indexed)/`#math`
+      (scalar)/`#unvar`(exact) lines route WHOLE + UNSUBSTITUTED to the server's
+      command executor (the same gate-covered pipeline every alias/trigger chain
+      uses); the client store is a VIEW for those writes (var_update applies via
+      the new `_applyVarUpdate` choke point; typed #OK/#math feedback prints from
+      the AUTHORITATIVE round-trip value). ZERO server.js changes — the server
+      pipeline already owned these verbs for every other path. Gate:
+      TypedVarRouting (30 cases, negative-controlled: 0/20 on pre-change app.js),
+      full gate 1277/1277.
+      **Stays LOCAL by design (documented decisions, not gaps):** queries/
+      wildcards (display + var_query cross-check), `#list` (server F10 corrupts
+      associative objects — route AFTER F10 is fixed), table-creation values
+      `{{k}{v}...}` (server would store a string), chains containing any
+      non-routed verb (#end/#ticker/#showme keep their typed semantics),
+      multi-line PASTES (async routing would stale-substitute line 2), bulk
+      `#read`/silent contexts (class scoping + init-if-absent), disconnected
+      fallback (local + ops queue as before). Trigger/event/#delay/MIP executors
+      still client-side = Step 5.
+      ⏳ LIVE CHECK pending (Nathan): hard refresh → `#var ring on` → #OK line
+      appears (round-trip working) → `#var ring` shows it, var_query silent.
 - [ ] Step 4 — RECEIVED INPUT dedup (remove client fireEvent at app.js ~4589).
       Server dispatch confirmed (server.js:8449). STARTED then REVERTED for the
       hand-off — needs live verification of $idle reset + idle auto-#end before
       shipping (touches the player-disconnect system; do NOT batch it).
 - [ ] Step 5 (deferred by design) — MIP conditions + #delay server-side; retire
       client_command by porting the remainder
-- [ ] Pre-step-3 server refactor (recommended by review): verb dispatch table +
-      one executeExpanded() helper + one state-mutation choke point that stamps
-      `_varServerModified` and emits view updates (kills the ~6× copy-paste)
+- [ ] Server verb-layer refactor (was "pre-step-3"; verified 2026-07-11 as NOT
+      required for Step 3): verb dispatch table + one executeExpanded() helper +
+      one state-mutation choke point (kills the ~6× copy-paste). Verified by read:
+      every mutation site ALREADY stamps `_varServerModified` + emits var_update,
+      so the choke-point PROPERTY holds today. Do this as prep for Step 5.
 
 ## Variable model — review findings batch (same doc)
 - [ ] F6–F13 batch (parser drift, misc) — "behind new negative-controlled gate
