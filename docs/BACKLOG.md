@@ -76,12 +76,35 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       still client-side = Step 5.
       ⏳ LIVE CHECK pending (Nathan): hard refresh → `#var ring on` → #OK line
       appears (round-trip working) → `#var ring` shows it, var_query silent.
-- [ ] Step 4 — RECEIVED INPUT dedup (remove client fireEvent at app.js ~4589).
-      Server dispatch confirmed (server.js:8449). STARTED then REVERTED for the
-      hand-off — needs live verification of $idle reset + idle auto-#end before
-      shipping (touches the player-disconnect system; do NOT batch it).
-- [ ] Step 5 (deferred by design) — MIP conditions + #delay server-side; retire
-      client_command by porting the remainder
+- [x] **Step 4 SHIPPED 2026-07-11 (49b791a)** — RECEIVED INPUT dedup: the client's
+      local fireEvent (app.js sendCommand) DELETED; the server's per-'command'
+      dispatch (server.js:8448, skips name prompt) is the ONLY fire. $idle reset
+      was already server-side (Phase 1) — unaffected. Cumulative handlers
+      (#math c $c+1) stop double-counting; a handler sending a MUD command no
+      longer triple-fires. lastUserInput deadman stamp KEPT. Gate: TypedVarRouting
+      T30/T31 (T30 regex negative-controlled against pre-change app.js), subset
+      79/79. Behavior note: local-only typed lines (# queries) no longer count as
+      "input" — matches lastInputAt, which only ever stamped on real sends.
+- [ ] Step 5a — typed `#delay`/`#undelay` routing. Server ALREADY has full #delay
+      (anon+named, fire-time substitution, persist/restore, 24h cap) + #undelay —
+      trigger-driven delays have been server-side all along; only TYPED ones run
+      in the browser (die on phone sleep). Blocker to do it right: bare `#delay`
+      (list) must show SERVER delays → needs a small server list responder =
+      server.js change → full gate + wmt-server restart deploy (needs Nathan's
+      window). Route via the Step-3 classifier once the responder exists.
+- [ ] Step 5b — MIP conditions server-side (the second combat brain: mipVars
+      namespace, cooldown state, hp/sp threshold evaluation all browser-only,
+      dead when browser closed). OWN FOCUSED SESSION: needs protocols.md (MIP)
+      loaded, prefs plumbing for conditions config, and a live combat test
+      window. This is the code that decides when a character heals — do NOT
+      batch or rush it.
+- [ ] Step 5c — retire client_command for state-mutating verbs. AUDIT DONE
+      2026-07-11: server already handles #end/#zap, #math, #var(scalar+indexed),
+      #unvar, #ticker, #unticker, #list, #ifttt, #format, #cat, #line oneshot/gag,
+      #replace, #if, #regex, #delay, #undelay. Remaining mutating fall-throughs:
+      **#loop and #foreach only** (client iterates + writes vars via var_ops) +
+      #local (ephemeral by definition; low stakes). Display verbs (#showme/#echo/
+      #bell/...) stay client-side by design — that's rendering, not state.
 - [ ] Server verb-layer refactor (was "pre-step-3"; verified 2026-07-11 as NOT
       required for Step 3): verb dispatch table + one executeExpanded() helper +
       one state-mutation choke point (kills the ~6× copy-paste). Verified by read:
