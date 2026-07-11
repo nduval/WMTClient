@@ -250,8 +250,13 @@ def deploy_lightsail(target='server', force_bridge=False):
         print(f"WARNING: Service status is '{status}' — check journalctl -u wmt-server")
     return True
 
-def deploy_test_server():
-    """Deploy server.js to the test sandbox. Returns True on success, False on failure."""
+def deploy_test_server(restart_server=True):
+    """Deploy server.js to the test sandbox. Returns True on success, False on failure.
+    restart_server=False (client/PHP-only gate): stage the suite inputs (test files,
+    app.js/connection.js, phpsrc) but do NOT push the working-tree server.js or
+    restart wmt-server with it — for a client/PHP change server.js is unchanged, so
+    the sandbox's existing build is the right thing to test against. Decouples the
+    PHP/client gate from server.js WIP / a wmt-server-won't-boot condition (review F2)."""
     print("\n=== Deploying server.js to test sandbox ===")
     ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
     host = '18.225.235.28'
@@ -380,6 +385,29 @@ def deploy_test_server():
             f'&& sudo chmod -R a+rX /opt/wmt/phpsrc"',
             shell=True, capture_output=True, text=True
         )
+
+    # Client/PHP-only gate: inputs are staged above; do NOT deploy the
+    # working-tree server.js or restart with it (review F2 — a broken/WIP
+    # server.js must not block an unrelated PHP hotfix). The 3 client-VM suites
+    # that open a real WS just need SOME running wmt-server; use the sandbox's
+    # existing build (its server.js == the last server deploy, i.e. what's on
+    # prod for an unchanged-server.js deploy). PHP suites need no server at all.
+    if not restart_server:
+        status = run_cmd(f'{ssh_cmd} "systemctl is-active wmt-server"',
+                         shell=True, capture_output=True, text=True).stdout.strip()
+        if status != 'active':
+            # Not running — restart the EXISTING sandbox binary (no push).
+            run_cmd(f'{ssh_cmd} "sudo systemctl restart wmt-server"',
+                    shell=True, capture_output=True, text=True)
+            time.sleep(2)
+            status = run_cmd(f'{ssh_cmd} "systemctl is-active wmt-server"',
+                             shell=True, capture_output=True, text=True).stdout.strip()
+        if status == 'active':
+            print("  Sandbox staged (server.js NOT redeployed — using existing build).")
+            return True
+        print(f"  WARNING: sandbox wmt-server is '{status}' and no server.js change to deploy.")
+        print("  Run a server-side deploy to repair the sandbox, or --force to skip the gate.")
+        return False
 
     # Copy + restart. As of 2026-05-25 the allowedServers allowlist lives in
     # /opt/wmt/config/allowed_servers.json (created once per box) rather than
@@ -1122,7 +1150,7 @@ def main():
         # sets first (unless --force). Closes the ungated-PHP-deploy hole.
         subset = PHP_SUITE_SCRIPTS | CLIENT_SUITE_SCRIPTS
         print(f"\n=== Gating IONOS deploy ({len(subset)} PHP + client suites) ===")
-        if deploy_test_server():
+        if deploy_test_server(restart_server=False):
             passed, failed, details = run_test_suites(only_scripts=subset)
             if failed > 0 and not args.force:
                 print(f"\nWARNING: {failed} sandbox test(s) failed. Aborting. Use --force to override.")
@@ -1207,7 +1235,7 @@ def main():
             subset = relevant_test_scripts(ionos_files)
             if subset:
                 print(f"\n=== Gating client/PHP change ({len(subset)} relevant suite(s)) ===")
-                if deploy_test_server():
+                if deploy_test_server(restart_server=False):
                     passed, failed, details = run_test_suites(only_scripts=subset)
                     if failed > 0 and not args.force:
                         print(f"\nWARNING: {failed} sandbox test(s) failed. Aborting. Use --force to override.")

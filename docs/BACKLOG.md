@@ -117,15 +117,16 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       preferences (the default-deny whitelist foot-gun), aliases/triggers/tickers/
       classes, characters, export/copy, the admin + discord/report proxies. They
       parse-check now but nothing tests their logic. Highest value: preferences.
-- [ ] Review F2: explicit `deploy.py ionos` (and the auto IONOS gate) now call
-      deploy_test_server, which restarts the sandbox wmt-server with the
-      WORKING-TREE server.js. A broken/mid-edit server.js or a down sandbox blocks
-      an UNRELATED urgent PHP hotfix, and --force conflates "ignore gate results"
-      with "skip sandbox prereqs". None of the 7 subset suites needs that restart
-      (PhpLogin boots its own php -S; ScriptBackup is CLI; client-VM suites read
-      files) — EXCEPT verify whether LoginConflict/ReconnectGate connect to
-      ws://localhost:3000. Fix: stage only what the subset needs, or don't fail
-      the gate on the wmt-server-restart step when no selected suite uses it.
+- [x] ✅ Review F2 FIXED (2026-07-11): `deploy_test_server(restart_server=False)`.
+      The client/PHP gate no longer pushes the working-tree server.js or restarts
+      wmt-server with it — it stages the suite inputs (tests, app.js/connection.js,
+      phpsrc) and runs against the sandbox's EXISTING build (server.js unchanged for
+      a client/PHP deploy == what's on prod). Verified: 3 client-VM suites DO open a
+      real WS (VarClassScope/ReconnectGate/LoginConflict) — they pass 71/71 against
+      the existing server without a redeploy. So a broken/WIP server.js can no longer
+      block an unrelated PHP hotfix. If the sandbox wmt-server is somehow down, the
+      light path restarts the EXISTING binary (no working-tree push) and, failing
+      that, reports clearly (--force still available).
 - [ ] Review F6: `KNOWN_FAILURES` is a global count applied to subset runs too.
       Currently 0 (latent). If ever >0, a 2-suite subset where both fail could
       compute unexpected=0 and deploy. Scope known-failures per-suite/label.
