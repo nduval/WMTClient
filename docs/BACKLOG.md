@@ -5,44 +5,16 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
-## ⚠️ HAND-OFF STATE 2026-07-11 (Opus session → Nathan swapping to Fable to evaluate)
-There is UNCOMMITTED, UNDEPLOYED work in the tree — 4 files, +106 lines, all
-ADDITIVE (verified `git diff --stat`; all 4 pass php -l / node --check on sandbox).
-NOT gated, NOT deployed — left local ON PURPOSE so Fable can review the diff before
-anything touches prod or the DB (Nathan: "opus has done harm to my code and database").
-Nothing here has written to prod or the DB. What the diff contains:
-
-1. **Phase 3 step-3 PRECURSOR — `#var` server cross-check** (glitch/server.js +
-   assets/js/app.js). New `var_query` WS message (server reads session.variables,
-   returns `{defined, value}`); client `cmdVar` single-name display sends it and
-   `_onVarQueryResult` flags divergence ("⚠ SERVER has NO variable {ring}…"). Pure
-   read on the server; additive on the client. This is the fix that would have
-   surfaced the $ring outage on the first `#var ring`.
-   → TO SHIP: gate (VarSyncFlush/ServerVarEngine unaffected; add a var_query gate
-     case ideally) + deploy.py auto (client+server → wmt-server restart → verify
-     seamless resume). LIVE CHECK: `#var somevar` when client/server agree = silent;
-     force a divergence = the warning shows.
-
-2. **Script backup rotation** (includes/functions.php `backupScriptFile()` +
-   api/scripts.php save & upload paths). Mirrors the triggers/aliases 3-tier scheme
-   (.1–.10 rotations + .daily kept 14d + .weekly kept 8w) BEFORE an overwrite.
-   Closes the 'twist stone' zero-history gap. Backup files have non-tin/txt
-   extensions → `listScripts` (scripts.php:188) filters them from the list and
-   they're not loadable. @copy/@unlink are best-effort (won't break a save).
-   → NOT covered: delete path keeps no backup (deletes are explicit+confirmed,
-     lower clobber risk); storage-limit check runs before the write and doesn't
-     count the backup bytes (modest, best-effort — a near-limit user slightly
-     overshoots, harmless). IONOS-only deploy (no server restart), but NEEDS the
-     stale-save guard too (below) to actually stop the multi-device clobber.
-
-3. **RECEIVED INPUT dedup — REVERTED, deliberately not shipped.** Opus started it
-   then reverted (the diff is clean of it). Reason: it changes the idle/auto-#end
-   system, which has a real history of wrongly disconnecting players
-   (bug_serverside_end_idle_active_kick). Server dispatch is confirmed present
-   (server.js:8449) so the dedup is CORRECT per plan — but it needs LIVE
-   verification ($idle still resets on input; idle auto-#end still fires when
-   genuinely idle; no client-only event regressions) before shipping, not a
-   ride-along in a batch. Left as an open step below.
+## SHIPPED 2026-07-11 (commit 5813499, gate 1231/1231, both sides, seamless restart 6/6)
+- **`var_query` `#var` server cross-check** (Phase 3 step-3 precursor). Client
+  `#var <name>` asks the server for the authoritative value and warns on
+  divergence — the diagnostic that would have surfaced the $ring incident on the
+  first check. Gate: ServerVarEngine T10. ⏳ Fable reviewer pass in flight.
+- **Script backup rotation** — `backupScriptFile()` + save/upload call sites;
+  3-tier (.1–.10 + daily/weekly) before overwrite. Closes the 'twist stone'
+  zero-history gap. ⏳ Fable reviewer flagged to check rename/other write paths.
+- **RECEIVED INPUT dedup — still deferred** (see Phase 3 Step 4 below). Needs live
+  idle-system verification, not a batch ride-along.
 
 ## 🔥 ACTIVE: Phase 3 — single-owner variable model completion ("client as view")
 The cure for the client/server variable-divergence class. Two fresh bite marks
