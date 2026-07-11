@@ -1224,19 +1224,9 @@ class WMTClient {
                 break;
 
             case 'var_update':
-                // Server-side variable change (from #math/#var/#format/#cat/#replace in alias/trigger expansion).
-                // Update our local copy so the next sync doesn't overwrite the server's value.
-                if (data.variables) {
-                    for (const [key, val] of Object.entries(data.variables)) {
-                        this.variables[key] = val;
-                    }
-                }
-                if (data.deleted) {
-                    for (const key of data.deleted) {
-                        delete this.variables[key];
-                        delete this.variableClasses[key];
-                    }
-                }
+                // Server-side variable change (from #math/#var/#format/#cat/#replace in alias/trigger
+                // expansion — and, since Phase 3 Step 3, typed #var/#math/#unvar routed to the server).
+                this._applyVarUpdate(data);
                 break;
 
             case 'authoritative_state':
@@ -4656,7 +4646,19 @@ class WMTClient {
 
             // Check for client-side # commands
             if (command.startsWith('#')) {
-                await this.executeCommandString(command);
+                // Phase 3 Step 3: typed variable mutations execute on the SERVER
+                // (single owner). Falls through to local execution for queries,
+                // #list, mixed chains, bulk reads, and disconnected sessions.
+                // commands.length === 1: multi-line PASTES stay fully local —
+                // a routed line 1 would return asynchronously, so a pasted
+                // line 2 using $x would substitute against a not-yet-updated
+                // view (a stale-$x race that local synchronous execution
+                // doesn't have). Single typed lines (the normal case) route.
+                if (commands.length === 1 && this._shouldRouteTypedVarLine(command)) {
+                    this._routeTypedVarLine(command);
+                } else {
+                    await this.executeCommandString(command);
+                }
             } else {
                 // Substitute variables before sending (allows alias names with $vars like celstep$num)
                 let expandedCommand = this.substituteVariables(command);
@@ -14881,6 +14883,148 @@ class WMTClient {
     }
 
     // Execute a command string (may contain multiple commands separated by ;)
+    // ── PHASE 3 STEP 3: single-owner routing for TYPED variable mutations ──
+    // Typed #var/#math/#unvar lines are sent WHOLE and UNSUBSTITUTED to the
+    // server, whose command pipeline (the same gate-covered executor every
+    // alias/trigger chain uses) executes them sequentially against the
+    // AUTHORITATIVE store and pushes var_update back to this view. This kills
+    // the typed-write divergence class ($ring showed a stale client "on" for
+    // two days while the server evaluated undefined). Plain-first chains
+    // ("kill orc;#var engaged 1") already run server-side; this closes the
+    // #-first half. Local execution remains for: queries/wildcards (display),
+    // #list (server F10: #list add corrupts associative objects — route after
+    // that's fixed), table-creation values (server stores them as strings),
+    // any chain containing a non-routed # verb (#end/#ticker/#showme/... keep
+    // their typed semantics), bulk #read contexts, and disconnected fallback.
+
+    // Classify one semicolon-part. Returns {kind:'plain'} for non-# commands,
+    // {kind:'var'|'math'|'unvar', base, keys, display} for a routable mutating
+    // verb, or null — meaning the part forces the WHOLE line to stay local.
+    _classifyRoutablePart(part) {
+        const p = part.trim();
+        if (!p) return { kind: 'plain' };
+        if (!p.startsWith('#')) return { kind: 'plain' };
+        // #var/#variable SET, scalar or indexed. Query forms (no value) do not
+        // match — they stay local for display + the var_query cross-check.
+        let m = p.match(/^#(?:var|variable)\s+\{?([A-Za-z_]\w*)((?:\[[^\]]*\])*)\}?\s+(\S[\s\S]*)$/i);
+        if (m) {
+            const value = m[3].trim();
+            // Table-creation syntax {{k}{v}...}: the client builds a real object,
+            // the server's #var would store a string — shape divergence, keep local.
+            if (value.startsWith('{') && value.endsWith('}') && value.slice(1, -1).includes('{')) return null;
+            const keys = (m[2].match(/\[([^\]]*)\]/g) || []).map(b => b.slice(1, -1));
+            return { kind: 'var', base: m[1], keys, display: m[1] + (m[2] || '') };
+        }
+        // #math with a SCALAR target (server-handled; verified parity). Indexed
+        // #math targets fall through on the server → keep those lines local.
+        m = p.match(/^#math\s+\{?([A-Za-z_]\w*)\}?\s+\S/i);
+        if (m) return { kind: 'math', base: m[1], keys: [], display: m[1] };
+        // #unvar with EXACTLY one bare name (server-handled). Wildcards → local.
+        m = p.match(/^#(?:unvar|unvariable)\s+\{?([A-Za-z_]\w*)\}?\s*$/i);
+        if (m) return { kind: 'unvar', base: m[1], keys: [], display: m[1] };
+        return null;
+    }
+
+    // Route a typed #-first line to the server iff EVERY part is plain or a
+    // routable mutating verb, at least one part mutates, and the server can
+    // actually receive it (WS up, MUD link alive, not inside a #read).
+    _shouldRouteTypedVarLine(line) {
+        if (!this.connection || !this.connection.connected || this.connection.mudLinkDead) return false;
+        if (this._bulkLoading || this.readingSilent || this._silent) return false;
+        const parts = this.parseCommands(line);
+        let hasRouted = false;
+        for (const part of parts) {
+            const c = this._classifyRoutablePart(part);
+            if (!c) return false;
+            if (c.kind !== 'plain') hasRouted = true;
+        }
+        return hasRouted;
+    }
+
+    _routeTypedVarLine(line) {
+        // Queue the local feedback echoes FIRST (printed when the var_update
+        // round-trips with the authoritative value), then send the line whole
+        // and unsubstituted — the server substitutes each part AFTER executing
+        // prior parts, so `#var x 1;dostep$x` sequences correctly by design.
+        // (sendCommand's wrapper flushes pending var_ops first, so any local
+        // writes still queued land on the server before this line executes.)
+        for (const part of this.parseCommands(line)) {
+            const c = this._classifyRoutablePart(part);
+            if (c && c.kind !== 'plain') this._queueTypedVarEcho(c);
+        }
+        this.connection.sendCommand(line);
+    }
+
+    _queueTypedVarEcho(c) {
+        if (!this._typedVarEcho) this._typedVarEcho = new Map();
+        const q = this._typedVarEcho.get(c.base) || [];
+        q.push({ kind: c.kind, keys: c.keys, display: c.display, expires: Date.now() + 4000 });
+        this._typedVarEcho.set(c.base, q);
+    }
+
+    // Consume the oldest live pending echo for a base name (FIFO — the server
+    // emits var_updates in execution order, so multi-writes to the same name
+    // in one chain pair up correctly). Expired entries (e.g. a #math whose
+    // expression the server evaluator returned null for) are dropped silently.
+    _takeTypedVarEcho(base) {
+        if (!this._typedVarEcho) return null;
+        const q = this._typedVarEcho.get(base);
+        if (!q || !q.length) return null;
+        while (q.length && q[0].expires < Date.now()) q.shift();
+        const e = q.shift() || null;
+        if (!q.length) this._typedVarEcho.delete(base);
+        return e;
+    }
+
+    // Print the same feedback the local verb would have printed, but with the
+    // AUTHORITATIVE value that just arrived. (A trigger-driven update to the
+    // same name racing in this window would print its value instead — the
+    // printed value is still the real current store value, so never a lie.)
+    _printTypedVarEcho(echo, baseVal) {
+        if (echo.kind === 'math') {
+            this.appendOutput(`#math: $${echo.display} = ${baseVal}`, 'system');
+            return;
+        }
+        if (echo.kind === 'var') {
+            let val = baseVal;
+            if (echo.keys.length && baseVal && typeof baseVal === 'object') {
+                let obj = baseVal;
+                for (let k of echo.keys) {
+                    k = this.substituteVariables(k);
+                    if (obj && typeof obj === 'object' && obj[k] !== undefined) obj = obj[k];
+                    else { obj = undefined; break; }
+                }
+                if (obj !== undefined) val = obj;
+            }
+            this.appendOutput(`#OK: #VARIABLE {${echo.display}} HAS BEEN SET TO ${this.formatVariableValue(val)}.`, 'system');
+        }
+    }
+
+    // The ONE place a server var_update is applied to the client view.
+    // Direct assignment (no _touchVar) is the echo-prevention: applying a
+    // server push must never queue a var_op back at the server. Also prints
+    // the typed-mutation feedback (#OK/#math lines) for routed typed verbs.
+    _applyVarUpdate(data) {
+        if (data.variables) {
+            for (const [key, val] of Object.entries(data.variables)) {
+                this.variables[key] = val;
+                const echo = this._takeTypedVarEcho(key);
+                if (echo) this._printTypedVarEcho(echo, val);
+            }
+        }
+        if (data.deleted) {
+            for (const key of data.deleted) {
+                const existed = this.variables[key] !== undefined;
+                delete this.variables[key];
+                delete this.variableClasses[key];
+                const echo = this._takeTypedVarEcho(key);
+                if (echo && echo.kind === 'unvar') {
+                    this.appendOutput(`#OK: ${existed ? 1 : 0} VARIABLE(S) REMOVED.`, 'system');
+                }
+            }
+        }
+    }
+
     async executeCommandString(cmdStr) {
         if (!cmdStr) return;
 

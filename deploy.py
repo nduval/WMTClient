@@ -459,6 +459,7 @@ def deploy_test_server(restart_server=True):
 CLIENT_SUITE_SCRIPTS = {
     'test_var_sync_flush.js', 'test_var_class_scope.js', 'test_reconnect_gate.js',
     'test_login_conflict.js', 'test_resume_startup_guard.js',
+    'test_typed_var_routing.js',
 }
 # Suites that exercise PHP (PhpLogin boots php -S over includes/+config/+api;
 # ScriptBackup is a pure PHP CLI test of functions.php). Relevant to a PHP change.
@@ -525,6 +526,11 @@ def run_test_suites(only_scripts=None):
         # bot-killer, elminster 2026-07-10). #var is init-if-absent during
         # _resumeInitRead; normal force-set semantics everywhere else.
         ('ResumeStartupGuard', 'test_resume_startup_guard.js'),
+        # Phase 3 Step 3: typed #var/#math/#unvar route to the server (single
+        # owner); client store is a view. Asserts the routing predicate, every
+        # local-fallback exclusion, the non-substitution contract (no stale $x
+        # baked into routed chains), and view/echo application.
+        ('TypedVarRouting', 'test_typed_var_routing.js'),
         ('VarClassScope', 'test_var_class_scope.js'),
         ('ReconnectGate', 'test_reconnect_gate.js'),
         # Bridge-mode harness — spawns its own bridge.js + wmt-server(BRIDGE_URL)
