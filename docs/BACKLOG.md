@@ -117,6 +117,15 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       ⏳ LIVE CHECK (Nathan): next real fight with a heal condition enabled —
       watch it gate. Also on it: mip_debug echo of server fires is NOT ported
       (client mipDebug flag only affected local eval) — check JSONL instead.
+      ⚠️→✅ **HOTFIX 2e586f1 (~31 min after 5b shipped)**: loadMipConditions read
+      `prefs.mip_conditions` (snake) but the REAL key preferences.php writes is
+      `mipConditions` (camelCase) — 16 live characters carry conditions under it;
+      for them server evaluation loaded NOTHING (and new clients no longer eval
+      locally). Caught by the cold-archive verification pass, fixed + gated
+      (SVE re-seeded with the REAL key shape) + deployed same hour.
+      ⭐ LESSON: seed suite fixtures from a REAL production record's shape, never
+      from the author's assumption — the original test seeded the same wrong key
+      and greenly masked the bug.
 - [x] **Step 5c SHIPPED 2026-07-11 (same deploy)** — #loop/#foreach/#break/
       #continue execute server-side (exact client parity: 1000-iteration cap,
       #break stops after the current body, table-form value iteration with
@@ -238,9 +247,30 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       on a preferences.php change proves it parses + login still works, NOT that
       preferences logic is correct. Real behavioral coverage for those = new
       suites (below).
-- [ ] Delete dead weight: root server.js (stale since Feb), websocket/ Ratchet
-      server (vestigial, still deployed), Bot Engine block (server.js ~5166–5529)
-      + api/bots.php + getBotsPath, root pcaps/screenshots/db dumps (PII in OneDrive)
+- [x] **Dead weight DELETED 2026-07-12** (Nathan's go): root server.js + websocket/
+      Ratchet (git rm + removed from deploy.py IONOS list + deleted from the IONOS
+      server incl. its deny-all .htaccess); Bot Engine block cut from glitch/server.js
+      (11.8k chars: engine block + template + 6 reference points, 0 session.bot refs
+      remain; full gate = the referee); 5 orphaned PHP path builders removed
+      (getClassesPath never existed); PII purged from the OneDrive tree (db_users.json,
+      2 pcaps, 12 screenshots, mimic_prefs backup).
+      **DEFERRED as a pair:** api/bots.php + getBotsPath + the CLIENT bot panel code
+      (app.js bot_status/bot_start/fetches) — the dead panel still fetches the
+      endpoint; remove both sides together so it degrades to invisible, not to
+      console errors. NOTE: bots.json files went in the cold sweep BEFORE bots.php
+      (sequencing slip, zero harm — loadJsonFile(missing)→[] so the dead panel
+      lists empty).
+- [x] **JSON cold archive DELETED 2026-07-11**: 1671 files / 15MB (aliases/triggers/
+      tickers/preferences/classes/bots/mip_conditions .json + all rotations) swept
+      from IONOS data/users/*/characters/*/, 0 failures. Coldness PROVEN first:
+      zero callers of every path builder; get/save_mip_conditions are DB-only.
+      Belt+suspenders: 844 bare .json files archived to sandbox
+      /opt/wmt/offsite-backups/json_cold_archive_2026-07-11.zip (471K).
+      ⭐ The verification pass ALSO caught the mipConditions camelCase key bug in
+      the fresh 5b code (see below).
+- [x] **Prod disk RECLAIMED 2026-07-12**: wmt.db.pre-shrink (6.7G) + 
+      wmt.db.pre_entity_guard.20260503 (1.9G — earlier "already gone" claim was
+      WRONG, I'd checked the unsuffixed name) both deleted; disk 39%→17%.
 - [ ] Extract shared TinTin evaluator (mathexp/tintoi/tineval) into one file used
       by both sides + parity gate suite
 - [ ] Prod disk: delete wmt.db.pre-shrink (6.7G) — shrink stable since 2026-06,
