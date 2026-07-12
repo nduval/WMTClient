@@ -120,7 +120,6 @@ IONOS_DEPLOY_FILES = [
     'config/',
     'includes/',
     'tools/',
-    'websocket/',
     'data/.htaccess',
     'data/users/.htaccess',
     'data/users/index.php',

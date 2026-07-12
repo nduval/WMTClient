@@ -987,41 +987,6 @@ function getCharacterDataPath(string $userId, string $characterId): string {
 }
 
 /**
- * Get character's triggers file path
- */
-function getTriggersPath(string $userId, string $characterId): string {
-    return getCharacterDataPath($userId, $characterId) . '/triggers.json';
-}
-
-/**
- * Get character's aliases file path
- */
-function getAliasesPath(string $userId, string $characterId): string {
-    return getCharacterDataPath($userId, $characterId) . '/aliases.json';
-}
-
-/**
- * Get character's tickers file path
- */
-function getTickersPath(string $userId, string $characterId): string {
-    return getCharacterDataPath($userId, $characterId) . '/tickers.json';
-}
-
-/**
- * Get character's preferences file path
- */
-function getPreferencesPath(string $userId, string $characterId): string {
-    return getCharacterDataPath($userId, $characterId) . '/preferences.json';
-}
-
-/**
- * Get character's MIP conditions file path
- */
-function getMipConditionsPath(string $userId, string $characterId): string {
-    return getCharacterDataPath($userId, $characterId) . '/mip_conditions.json';
-}
-
-/**
  * Initialize user data directory with default files
  * Stores password hash in profile for recovery purposes
  */
