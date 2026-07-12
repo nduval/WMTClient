@@ -243,8 +243,10 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       + api/bots.php + getBotsPath, root pcaps/screenshots/db dumps (PII in OneDrive)
 - [ ] Extract shared TinTin evaluator (mathexp/tintoi/tineval) into one file used
       by both sides + parity gate suite
-- [ ] Prod disk: delete wmt.db.pre-shrink (6.7G) + wmt.db.pre_entity_guard (1.9G)
-      once shrink confirmed stable (it has been since 2026-06)
+- [ ] Prod disk: delete wmt.db.pre-shrink (6.7G) — shrink stable since 2026-06,
+      offsite nightlies running since 2026-07-07; verified still present 2026-07-11,
+      awaiting Nathan's go (destructive). NOTE: wmt.db.pre_entity_guard (1.9G) is
+      ALREADY GONE (verified absent 2026-07-11 — removed at some earlier point).
 - [ ] Bridge-restart runbook (for the eventual forced restart)
 - [ ] Sandbox box = SPOF for the safety story (only gate runner) — document/mitigate
 - [ ] JSON cold archive cleanup: the frozen data/users character JSON files
