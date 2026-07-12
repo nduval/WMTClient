@@ -79,7 +79,10 @@ async function main() {
       db.prepare('INSERT OR REPLACE INTO preferences (character_id, data) VALUES (?, ?)').run(
         'sve-test-char',
         JSON.stringify({
-          mip_conditions: [
+          // mipConditions (camelCase) = the REAL key preferences.php writes.
+          // The suite originally seeded a snake_case key that matched the
+          // server bug and masked it — always seed the production shape.
+          mipConditions: [
             { id: 'mc1', enabled: true, variable: 'hp_pct', operator: '<', value: '50', command: '#var mipfired yes', combatOnly: false },
             { id: 'mc2', enabled: true, variable: 'sp_pct', operator: '<', value: '30', command: '#math mipcount $mipcount+1', combatOnly: false }
           ]

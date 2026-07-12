@@ -6793,7 +6793,16 @@ function loadMipConditions(session) {
     if (row && row.data) {
       try {
         const prefs = JSON.parse(row.data);
-        if (Array.isArray(prefs.mip_conditions)) conds = prefs.mip_conditions;
+        // The REAL prod key is `mipConditions` (camelCase — what preferences.php
+        // save_mip_conditions writes; 16 chars carry it as of 2026-07-11).
+        // `mip_conditions` tolerated as legacy/defensive. The original code read
+        // ONLY the snake key and loaded nothing for every real user — caught by
+        // the cold-archive verification pass 25 min after the 5b deploy; the
+        // gate test had seeded the same wrong key (LESSON: seed tests from a
+        // real production record's shape, not from the author's assumption).
+        const src = Array.isArray(prefs.mipConditions) ? prefs.mipConditions
+                  : (Array.isArray(prefs.mip_conditions) ? prefs.mip_conditions : []);
+        conds = src;
       } catch (e) {}
     }
     session.mipConditions = conds;
