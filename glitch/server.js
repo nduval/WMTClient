@@ -914,26 +914,32 @@ function mergeDevicePush(ws, session, table, serverList, incomingList) {
     incomingContent.add(contentKey(e));
   }
   if (!ws._entityBaseline) ws._entityBaseline = {};
+  // Baseline = ids AND content keys of this device's previous push. Content is
+  // the fallback identity for id-less entities (test harnesses, hand-crafted
+  // pushes): without it they could never be deleted by omission — the gate's
+  // alias suite (#unalias / empty-sync cases) caught exactly that.
   const baseline = ws._entityBaseline[table]; // undefined until this device's first push lands
   const preserved = [];
   for (const e of (serverList || [])) {
     if (!e || e._runtime) continue;
     const id = idOf(e);
+    const key = contentKey(e);
     if (id && incomingIds.has(id)) continue;           // device re-sent it — incoming version wins
-    if (baseline && id && baseline.has(id)) continue;  // device knew it and omitted it — genuine delete
-    if (incomingContent.has(contentKey(e))) continue;  // same content under another id — no double-fire
+    if (baseline && ((id && baseline.ids.has(id)) || baseline.content.has(key)))
+      continue;                                        // device knew it and omitted it — genuine delete
+    if (incomingContent.has(key)) continue;            // same content under another id — no double-fire
     preserved.push(e);
   }
-  ws._entityBaseline[table] = incomingIds;
+  ws._entityBaseline[table] = { ids: incomingIds, content: incomingContent };
   if (preserved.length > 0) {
     writeSessionLog(session, 'entity_merge', {
       what: table,
       preserved: preserved.length,
       incoming: incomingList.length,
-      baseline: baseline ? baseline.size : 'first_push'
+      baseline: baseline ? baseline.ids.size : 'first_push'
     });
     console.log(`ENTITY_MERGE ${table} char=${session.characterId} preserved=${preserved.length} ` +
-      `incoming=${incomingList.length} baseline=${baseline ? baseline.size : 'none'}`);
+      `incoming=${incomingList.length} baseline=${baseline ? baseline.ids.size : 'none'}`);
   }
   return preserved.length ? incomingList.concat(preserved) : incomingList;
 }
