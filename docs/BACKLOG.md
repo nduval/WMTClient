@@ -159,6 +159,19 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
 - [ ] profile.json: fold registered_ip/banned_at into users table, or leave (low value)
 
 ## Multi-device / session identity
+- [ ] 🔥 **ROOT CAUSE PROVEN 2026-07-21: mobile botting dies ~105s after launch**
+      (memory: bug_mobile_bot_multidevice_trigger_clobber). A second attached
+      client (home PC, sec script NOT loaded, 222 triggers/125 aliases) re-pushes
+      its FULL trigger/alias/ticker state every ~100s (riding the stuck
+      `#unticker {hasted}` loop) and set_triggers/set_aliases are last-write-wins
+      bulk replaces → the bot device's script-loaded entities (230/573) are
+      deleted by omission → bot dies at its next trigger dependence ("kill 1 mob
+      then stop"). All 3 deaths on 2026-07-21 match the cadence (104s/107s/109s);
+      entity_guard can't catch it (only guards /admin-patched entities).
+      FIX = extend the Phase-3 single-owner cure to triggers/aliases/tickers:
+      per-entity ops instead of bulk set_* replaces, and/or broadcast entity
+      changes to all attached devices. This supersedes "stale-view confusion"
+      as the concrete multi-device data-loss mechanism.
 - [ ] Rekey ping-pong: a joining device should JOIN, not take the token
       ("coexist, not fight" — project_disconnect_detach_redesign). Still the
       standing suspect for stale-view confusion on device hops.
@@ -166,8 +179,11 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       ResumeStartupGuard fix + phone hard-refresh — validates the 2026-07-10 fix
 - [ ] UNEXPLAINED: aegis bot stop 2026-07-10 05:47, ~20 min after the 05:26
       deploy restart — same delayed-fuse shape, cause unpinned
-- [ ] `#unticker {hasted}` loop (fires every ~100s since 2026-07-10 16:57) —
-      confirm it stopped after Nathan's next clean relaunch; if not, dig
+- [ ] `#unticker {hasted}` loop — STILL LIVE 2026-07-21 (fires every ~100s,
+      verified in today's logs). Now upgraded from cosmetic to AGGRAVATOR: each
+      fire triggers the full-state re-push that clobbers mobile bots (see item
+      above). Lives on the bare client (home PC); a clean relaunch of that tab
+      should stop it — if not, dig.
 
 ## Scripts (.tin) durability
 - [x] Backup rotations for .tin saves — SHIPPED (82daa64, gate ScriptBackup 16/16

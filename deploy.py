@@ -557,6 +557,12 @@ def run_test_suites(only_scripts=None):
         # Multi-device coexistence: 2 devices share one session — both get output,
         # both can send, neither kicked, one MUD connection, detach-safe.
         ('MultiDevice', 'test_multidevice.js'),
+        # Multi-device entity merge guard: a second device's smaller full-state
+        # set_triggers/aliases/tickers push must not delete entities the bot
+        # device created (the 2026-07-21 "bot dies ~105s after mobile launch"
+        # clobber). Baseline = ids the device itself pushed; first push deletes
+        # nothing; content-duplicates don't double-register. Negative-controlled.
+        ('MultiDeviceEntitySync', 'test_multidevice_entity_sync.js'),
         # PHP login flow: boots the real includes/+config/+api under `php -S`
         # (staged at /opt/wmt/phpsrc) — guards the double-login fix (single
         # session lifecycle) + login-stack smoke test. NOTE: PHP 8.3 masks the

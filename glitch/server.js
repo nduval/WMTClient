@@ -867,6 +867,78 @@ function applyGuard(table, charId, incomingList) {
 }
 // ────────────────────────────────────────────────────────────────────────
 
+// Multi-device entity merge guard (2026-07-21).
+//
+// set_triggers/set_aliases/set_tickers are FULL-STATE pushes. With two devices
+// attached to one session, a device that never loaded a bot script (e.g. the
+// idle home-PC tab) re-pushes its smaller state and silently DELETES the
+// entities the other device created — the proven "bot dies ~105s after a
+// mobile launch" clobber (memory: bug_mobile_bot_multidevice_trigger_clobber;
+// all three 2026-07-21 deaths matched the second device's push cadence).
+//
+// Rule: a device may only delete-by-omission entities it has ITSELF pushed on
+// this connection (its baseline = the ids of its previous push). Server
+// entities outside that baseline are preserved. A connection's FIRST push has
+// no baseline and can never delete anything by omission — old cached clients
+// are therefore contained without any client-side change or new message type.
+//
+// Content-duplicate preserves are skipped: the same script loaded on two
+// devices creates identical entities under different client-generated ids,
+// and preserving both would double-fire triggers (step counters +2 — the
+// most bot-lethal regression class, see regression-checklist #12).
+//
+// Known accepted edge: deleting an entity from a device that never pushed it
+// (e.g. #class kill typed on the OTHER device) is suppressed server-side
+// until the owning device syncs the deletion. Runtime (_runtime) tickers are
+// excluded here — updateSessionTickers owns their preservation.
+const ENTITY_MERGE_KEYS = {
+  triggers: (e) => e && typeof e === 'object' ? JSON.stringify({
+    p: e.pattern || '', m: e.matchType || '', a: e.actions || []
+  }) : '',
+  aliases:  (e) => e && typeof e === 'object' ? JSON.stringify({
+    p: e.pattern || '', m: e.matchType || '', r: e.replacement || ''
+  }) : '',
+  tickers:  (e) => e && typeof e === 'object' ? JSON.stringify({
+    n: e.name || '', c: e.command || '', i: e.interval || e.interval_seconds || 0
+  }) : '',
+};
+
+function mergeDevicePush(ws, session, table, serverList, incomingList) {
+  const contentKey = ENTITY_MERGE_KEYS[table];
+  const idOf = (e) => (e && (e.id || e.name)) ? String(e.id || e.name) : null;
+  const incomingIds = new Set();
+  const incomingContent = new Set();
+  for (const e of incomingList) {
+    const id = idOf(e);
+    if (id) incomingIds.add(id);
+    incomingContent.add(contentKey(e));
+  }
+  if (!ws._entityBaseline) ws._entityBaseline = {};
+  const baseline = ws._entityBaseline[table]; // undefined until this device's first push lands
+  const preserved = [];
+  for (const e of (serverList || [])) {
+    if (!e || e._runtime) continue;
+    const id = idOf(e);
+    if (id && incomingIds.has(id)) continue;           // device re-sent it — incoming version wins
+    if (baseline && id && baseline.has(id)) continue;  // device knew it and omitted it — genuine delete
+    if (incomingContent.has(contentKey(e))) continue;  // same content under another id — no double-fire
+    preserved.push(e);
+  }
+  ws._entityBaseline[table] = incomingIds;
+  if (preserved.length > 0) {
+    writeSessionLog(session, 'entity_merge', {
+      what: table,
+      preserved: preserved.length,
+      incoming: incomingList.length,
+      baseline: baseline ? baseline.size : 'first_push'
+    });
+    console.log(`ENTITY_MERGE ${table} char=${session.characterId} preserved=${preserved.length} ` +
+      `incoming=${incomingList.length} baseline=${baseline ? baseline.size : 'none'}`);
+  }
+  return preserved.length ? incomingList.concat(preserved) : incomingList;
+}
+// ────────────────────────────────────────────────────────────────────────
+
 function applyAliasServerModifiedGuard(characterId, incoming) {
   const perChar = serverModifiedAliases.get(characterId);
   if (!perChar || perChar.size === 0) return { aliases: incoming, overridden: 0, cleared: 0 };
@@ -8414,6 +8486,10 @@ wss.on('connection', (ws, req) => {
             }
             incomingTriggers = guardResult.list;
           }
+          // Multi-device merge: this device may only delete entities it has
+          // itself pushed (see mergeDevicePush) — a second attached client's
+          // smaller full-state push must not wipe the bot device's triggers.
+          incomingTriggers = mergeDevicePush(ws, session, 'triggers', session.triggers, incomingTriggers);
           session.triggers = incomingTriggers;
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
           // DB dual-write (gated by user during rollout)
@@ -8449,6 +8525,8 @@ wss.on('connection', (ws, req) => {
             }
             incomingAliases = guarded.aliases;
           }
+          // Multi-device merge (same contract as set_triggers above).
+          incomingAliases = mergeDevicePush(ws, session, 'aliases', session.aliases, incomingAliases);
           session.aliases = incomingAliases;
           writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
           // DB dual-write (gated by user during rollout)
@@ -8485,6 +8563,9 @@ wss.on('connection', (ws, req) => {
               }
               incomingTickers = guardResult.list;
             }
+            // Multi-device merge (same contract as set_triggers above; _runtime
+            // tickers are excluded — updateSessionTickers owns those).
+            incomingTickers = mergeDevicePush(ws, session, 'tickers', session.tickers, incomingTickers);
             updateSessionTickers(session, incomingTickers);
             writeSessionLog(session, 'settings', { what: 'tickers', count: incomingTickers.length });
             if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {
