@@ -509,6 +509,10 @@ def run_test_suites(only_scripts=None):
         ('EntityGuard',  'test_entity_guard.js'),
         ('BlockTrigger', 'test_block_trigger.js'),
         ('SelfAlerts',   'test_self_alerts.js'),
+        # ESP (jedi telepathy) is plain game text the MUD left out of MIP;
+        # the server observes "<Name> thinks . o O ( ... )" blocks (multi-line,
+        # `)`-terminated) and synthesizes mip_chat on the 'esp' channel.
+        ('EspCapture',   'test_esp_capture.js'),
         # ChatMon replay skips hidden ("silenced") channels so a busy silenced
         # channel can't eat the 100-message window (elminster 2026-07-09: 74/100
         # replayed lines were silenced atalk). Live capture stays unfiltered;

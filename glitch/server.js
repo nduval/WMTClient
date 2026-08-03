@@ -6847,6 +6847,125 @@ function processBlockTriggers(session, line) {
 }
 // ────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────
+// ESP capture (jedi telepathy) — ESP is plain game text; the MUD never
+// added it to MIP. Format (sender always first; `(` opens, `)` closes,
+// may span multiple MUD-wrapped lines with indented continuations):
+//   Ukyo thinks . o O (  some thought text
+//              wrapped and indented by the MUD  )
+// Lines are observed PASSIVELY (they still render in the terminal, like
+// trigger-forwarded chatmon) and the completed thought is synthesized as a
+// `mip_chat` on the 'esp' channel — downstream it behaves exactly like a
+// MIP channel: ChatMon tab, resume replay buffer, chat_messages history,
+// per-channel Discord/IFTTT prefs, suppressSelfAlerts.
+const ESP_TIMEOUT_MS = 5000;
+const ESP_START_RE = /^(\w+) thinks (?:to you )?\. o O \(/;
+// Outbound echo — verified capture 2026-08-02:
+//   You think to Elminster . o O (  message  )
+// The `to <Recipient>` part stays in the displayed text, so the target is
+// visible in ChatMon without extra formatting. Untargeted `You think . o O (`
+// is accepted too in case a broadcast form exists.
+const ESP_SELF_RE = /^You think (?:to \w+ )?\. o O \(/;
+
+function escapeEspHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function flushEspBuffer(session) {
+  const esp = session._espBuffer;
+  if (!esp) return;
+  session._espBuffer = null;
+  if (esp.timer) clearTimeout(esp.timer);
+
+  // Reflow the MUD-wrapped lines into one paragraph — ChatMon wraps itself,
+  // and appendChatMessage renders via innerHTML where \n is dead weight.
+  const text = esp.lines.map(l => stripAnsi(l).trim()).filter(Boolean)
+    .join(' ').replace(/\s+/g, ' ');
+  if (!text) return;
+
+  const channel = 'esp';
+  const rawText = `[${channel}] ${text}`;
+  const formatted = `<span style="color:#cc88ff">[${channel}]</span> ${escapeEspHtml(text)}`;
+  const selfAuthored = esp.outbound || isSelfAuthoredChat(session, { sender: esp.sender });
+  const suppressAlert = !!(session.suppressSelfAlerts && selfAuthored);
+  sendToClient(session, {
+    type: 'mip_chat',
+    chatType: 'channel',
+    channel: channel,
+    raw: text,
+    rawText: rawText,
+    message: formatted,
+    sender: esp.sender,
+    outbound: esp.outbound || undefined,
+    suppressAlert: suppressAlert
+  });
+
+  // Server-side Discord/IFTTT forwarding — same contract as the MIP CAA path
+  // (works with the browser closed; keyed on the 'esp' channel prefs).
+  if (!suppressAlert && !esp.outbound) {
+    const channelPrefs = (session.discordChannelPrefs || {})[channel];
+    if (channelPrefs?.discord && channelPrefs?.webhookUrl) {
+      logSessionEvent('DISCORD_SEND', {
+        token: session.token ? session.token.substring(0, 8) : '',
+        user: session.userId,
+        char: effectiveCharName(session),
+        channel: channel,
+        messagePreview: rawText.substring(0, 50)
+      });
+      sendToDiscordWebhook(channelPrefs.webhookUrl, rawText, esp.sender || session.discordUsername);
+    }
+    if (channelPrefs?.ifttt && session.iftttKey) {
+      const eventName = channelPrefs.iftttEvent || '3K';
+      sendToIfttt(session.iftttKey, eventName, esp.sender || effectiveCharName(session), channel, text);
+    }
+  }
+}
+
+// Per-line ESP observer — never consumes the line; caller processes it
+// normally regardless.
+function observeEspLine(session, line) {
+  const stripped = stripAnsi(line);
+  const trimmedEnd = stripped.replace(/\s+$/, '');
+
+  if (session._espBuffer) {
+    // Continuation lines are indented (the MUD wraps under the sender);
+    // blanks are tolerated. The line carrying the closing `)` completes
+    // the thought.
+    if (/^[ \t]/.test(stripped) || stripped.trim() === '') {
+      session._espBuffer.lines.push(line);
+      if (trimmedEnd.endsWith(')')) flushEspBuffer(session);
+      return;
+    }
+    // Foreign non-indented line — the thought never closed. Deliver what we
+    // have; this line falls through to the fresh-start check below.
+    flushEspBuffer(session);
+  }
+
+  let sender = null;
+  let outbound = false;
+  const m = trimmedEnd.match(ESP_START_RE);
+  if (m) {
+    sender = m[1];
+  } else if (ESP_SELF_RE.test(trimmedEnd)) {
+    sender = effectiveCharName(session);
+    outbound = true;
+  }
+  if (!sender) return;
+
+  session._espBuffer = {
+    sender: sender,
+    outbound: outbound,
+    lines: [line],
+    startedAt: Date.now(),
+    // Safety net: if the closing paren never arrives (mangled packet, novel
+    // variant), deliver the partial thought instead of dropping it.
+    timer: setTimeout(() => flushEspBuffer(session), ESP_TIMEOUT_MS)
+  };
+  // Single-line thought: opener and closer on the same line.
+  if (trimmedEnd.endsWith(')')) flushEspBuffer(session);
+}
+// ────────────────────────────────────────────────────────────────────────
+
 function processLine(session, line) {
   // Strip carriage returns (MUD sends \r\n, we split on \n leaving \r)
   line = line.replace(/\r/g, '');
@@ -7042,6 +7161,11 @@ function processLine(session, line) {
   if (/%\d{5}\d{3}[A-Z]{3}/.test(line)) {
     return;
   }
+
+  // ESP capture tap — passive observation only (runs after MIP filtering so
+  // protocol lines can't pollute the buffer, and before triggers so a gag
+  // can't hide a thought from ChatMon). The line still flows normally.
+  observeEspLine(session, line);
 
   // ANSI color: each line is independent. We do NOT carry the last ANSI code
   // from one line to the next. Previously the server tracked

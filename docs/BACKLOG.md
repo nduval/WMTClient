@@ -159,19 +159,37 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
 - [ ] profile.json: fold registered_ip/banned_at into users table, or leave (low value)
 
 ## Multi-device / session identity
-- [ ] 🔥 **ROOT CAUSE PROVEN 2026-07-21: mobile botting dies ~105s after launch**
-      (memory: bug_mobile_bot_multidevice_trigger_clobber). A second attached
-      client (home PC, sec script NOT loaded, 222 triggers/125 aliases) re-pushes
-      its FULL trigger/alias/ticker state every ~100s (riding the stuck
-      `#unticker {hasted}` loop) and set_triggers/set_aliases are last-write-wins
-      bulk replaces → the bot device's script-loaded entities (230/573) are
-      deleted by omission → bot dies at its next trigger dependence ("kill 1 mob
-      then stop"). All 3 deaths on 2026-07-21 match the cadence (104s/107s/109s);
-      entity_guard can't catch it (only guards /admin-patched entities).
-      FIX = extend the Phase-3 single-owner cure to triggers/aliases/tickers:
-      per-entity ops instead of bulk set_* replaces, and/or broadcast entity
-      changes to all attached devices. This supersedes "stale-view confusion"
-      as the concrete multi-device data-loss mechanism.
+- [x] 🔥 **Mobile-botting clobber FIXED 2026-07-21 (199daaf, gate 1315/1315,
+      8/8 live players bridge-resumed through the deploy)** — root cause proven
+      same day from logs (memory: bug_mobile_bot_multidevice_trigger_clobber):
+      a second attached client (home PC, sec script NOT loaded, 222 triggers/
+      125 aliases) re-pushed its FULL trigger/alias/ticker state every ~100s
+      (riding the stuck `#unticker {hasted}` loop); set_triggers/set_aliases/
+      set_tickers were last-write-wins bulk replaces → the bot device's
+      script-loaded entities (230/573) were deleted by omission → bot died at
+      its next trigger dependence ("kill 1 mob then stop"; all 3 deaths matched
+      the push cadence: 104s/107s/109s). FIX: `mergeDevicePush()` in the three
+      set_* handlers — a device may only delete-by-omission entities it ITSELF
+      pushed on this connection (baseline = ids+content of its previous push);
+      a connection's first push deletes nothing; content-duplicates (same
+      script on two devices under different client ids) don't double-register
+      (double-fire = regression-checklist #12 class); _runtime tickers stay
+      owned by updateSessionTickers. Zero client changes, no new message
+      types — old cached tabs are contained, not upgraded. Gate:
+      MultiDeviceEntitySync (8 cases; negative-controlled: T1/T3/T5/T6 red on
+      pre-change server). Observability: `entity_merge` JSONL row + ENTITY_MERGE
+      journal line whenever a push has entities preserved.
+      **NOT covered (explicit):** cross-device deletion (device B deleting
+      entities it never pushed — e.g. `#class kill` typed on the OTHER device —
+      is suppressed server-side until the owning device syncs it); the client's
+      HTTP save path to the DB was not audited this pass (the WS dual-write
+      dbSave* now writes the MERGED set, which stops the observed DB
+      flip-flop); the per-entity-ops refactor (true single-owner for entities,
+      var_ops-style) remains the architectural follow-up — this is the
+      containment fix.
+      ⏳ LIVE CHECK (Nathan): next mobile bot launch with the home PC still
+      online — bot should survive past ~105s; `entity_merge` rows in the
+      per-char JSONL are the tell.
 - [ ] Rekey ping-pong: a joining device should JOIN, not take the token
       ("coexist, not fight" — project_disconnect_detach_redesign). Still the
       standing suspect for stale-view confusion on device hops.
@@ -199,6 +217,17 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       in both copies. Do this in isolation WITH a saveJsonFile test first, not bundled.
 
 ## Repo / infra (review architecture items + leftovers)
+- [ ] 🔥 **ALL outbound email dead since ~Feb 2026 — SendGrid account has 0 credits**
+      (found 2026-07-31, `memory/bug_password_reset_sendgrid_no_credits.md`).
+      Proven: `/v3/user/credits` total=0/remain=0/hard-limit; replayed mail/send
+      → 401 "Maximum credits exceeded"; stats = 6 delivered Jan, 0 requests
+      Feb–Jul. Password-reset flow itself verified sound end-to-end (live repro
+      2026-07-31: token written, 200 returned, nothing reached SendGrid);
+      contact.php uses the same sendEmail() so it's dead too. Client hides the
+      failure by design (anti-enumeration). FIX = Nathan's billing call: pay
+      SendGrid, or swap provider in includes/email.php (SES recommended — AWS
+      account already exists, ~$0.10/1k). Also consider surfacing send-failures
+      somewhere reachable (IONOS error_log destination never found).
 - [x] Commit ghosts: maplib.js + .htaccess (0e4a41e); the 6 untracked gate suites
       (82daa64). Remaining: verify no sandbox-only suite is still uncommitted.
 - [x] ✅ Review F7c FIXED (2026-07-11): gate no longer counts exit-0-without-a-
