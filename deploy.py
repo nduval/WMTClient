@@ -353,6 +353,24 @@ def deploy_test_server(restart_server=True):
                 shell=True, capture_output=True, text=True
             )
 
+    # Push mock-mud.js and restart the mock. Suites drive it via __ test
+    # commands, so a stale mock silently breaks new suites: EspCapture
+    # 2026-08-02 failed because the sandbox mock (Jun 9) predated __emitline —
+    # its red "Unknown test command" reply is itself MUD output that perturbs
+    # line-observing features. Sandbox-only restart; no live players.
+    _mock_local = BASE_DIR / 'glitch' / 'mock-mud.js'
+    if _mock_local.exists():
+        dstatus("sandbox: pushing mock-mud.js")
+        r = run_cmd(
+            f'scp -i "{ssh_key}" -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=10 "{_mock_local}" ubuntu@{host}:/tmp/mock-mud.js',
+            shell=True, capture_output=True, text=True
+        )
+        if r.returncode == 0:
+            run_cmd(
+                f'{ssh_cmd} "sudo cp /tmp/mock-mud.js /opt/wmt/mock-mud.js && sudo chown wmt:wmt /opt/wmt/mock-mud.js && sudo systemctl restart mock-mud"',
+                shell=True, capture_output=True, text=True
+            )
+
     # Stage the PHP auth stack so the PHP login suite (test_php_login.js) can boot
     # the REAL includes/+config/+api under `php -S` against a throwaway data dir.
     # Pushed to /opt/wmt/phpsrc. The admin key is stripped on the sandbox so the
