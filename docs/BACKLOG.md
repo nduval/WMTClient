@@ -5,6 +5,26 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 2026-08-02 (commits f924b71 + 2c33270)
+- **ESP → ChatMon capture** (jedi telepathy — plain game text the MUD left out of
+  MIP). `observeEspLine()` in server.js passively watches output for
+  `<Name> thinks . o O (` / sender echo `You think to <Name> . o O (` (both
+  live-verified formats), buffers indented continuations to the closing `)`
+  (5s safety-net flush), reflows to one paragraph, and emits `mip_chat` on
+  channel **esp** — so it inherits ChatMon tab, resume replay, 30-day DB history,
+  Discord/IFTTT channel prefs, suppressSelfAlerts with ZERO client changes.
+  Raw lines still render in the terminal. Gate: EspCapture (8 scenarios).
+  Verified post-deploy: prod file has the code; all 8 live players bridge-resumed.
+  **NOT covered:** no live ESP thought has flowed through prod yet (Ukyo check
+  pending); Discord/IFTTT for 'esp' untested live (needs channel prefs set);
+  only the two verified formats match — unknown variants (broadcast/emote forms)
+  are ignored by design; a thought line ending in `)` mid-thought flushes early
+  (partial to ChatMon, rest terminal-only).
+- **deploy.py now ships glitch/mock-mud.js + restarts the sandbox mock** during
+  gate staging. The sandbox mock had been frozen since Jun 9 (no `__emitline`) —
+  its red "Unknown test command" replies were fake MUD output inside suites.
+  First gate run failed EspCapture exactly this way; fixed mock → 1323/1323.
+
 ## SHIPPED 2026-07-11 (commit 5813499 + review-fix batch)
 - **`var_query` `#var` server cross-check** (Phase 3 step-3 precursor). Client
   `#var <name>` asks the server for the authoritative value and warns on

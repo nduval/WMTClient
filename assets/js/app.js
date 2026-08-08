@@ -1379,15 +1379,17 @@ class WMTClient {
                 break;
 
             // --- Wizard FTP file editor (project_ftp_wizard_editor) ---
-            case 'ftp_connected': this._onFtpConnected(data); break;
+            // Any successful FTP reply clears a lingering transient foot error
+            // (errors otherwise stuck for the whole connection — mimic 2026-08-07).
+            case 'ftp_connected': this._ftpFootErrorClear(); this._onFtpConnected(data); break;
             case 'ftp_error':     this._onFtpError(data); break;
-            case 'ftp_list':      this._onFtpList(data); break;
-            case 'ftp_file':      this._onFtpFile(data); break;
-            case 'ftp_saved':     this._onFtpSaved(data); break;
-            case 'ftp_mkdir_ok':  this._onFtpMkdirOk(data); break;
-            case 'ftp_deleted':   this._onFtpDeleted(data); break;
-            case 'ftp_renamed':   this._onFtpRenamed(data); break;
-            case 'ftp_rmdir_ok':  this._onFtpRmdirOk(data); break;
+            case 'ftp_list':      this._ftpFootErrorClear(); this._onFtpList(data); break;
+            case 'ftp_file':      this._ftpFootErrorClear(); this._onFtpFile(data); break;
+            case 'ftp_saved':     this._ftpFootErrorClear(); this._onFtpSaved(data); break;
+            case 'ftp_mkdir_ok':  this._ftpFootErrorClear(); this._onFtpMkdirOk(data); break;
+            case 'ftp_deleted':   this._ftpFootErrorClear(); this._onFtpDeleted(data); break;
+            case 'ftp_renamed':   this._ftpFootErrorClear(); this._onFtpRenamed(data); break;
+            case 'ftp_rmdir_ok':  this._ftpFootErrorClear(); this._onFtpRmdirOk(data); break;
             case 'var_query_result': this._onVarQueryResult(data); break;
 
             case 'bot_status': {
@@ -5322,7 +5324,7 @@ class WMTClient {
             : raw.replace(/^5\d\d\s+/, '');   // drop the bare numeric FTP code prefix (e.g. "550 ")
         const msg = `FTP ${data.op || ''} error: ${human}`;
         if (data.op === 'connect') { const s = document.getElementById('ftp-acct-status'); if (s) s.textContent = msg; }
-        const foot = document.getElementById('ftp-foot'); if (foot) { foot.textContent = msg; foot.style.color = '#ff6666'; }
+        this._ftpFootError(msg);   // transient: clears on next successful op or 15s
         if (data.op === 'put') this._ftpUpdateSaveBtn(this._ftp && this._ftp.dirty ? 'dirty' : 'clean');  // un-stick the button on a failed save
         this.appendOutput(msg, 'error');
         // Connection genuinely gone (idle drop / closed) — surface state + offer reconnect.
@@ -5497,7 +5499,7 @@ class WMTClient {
         if (!this._ftp || !this._ftp.connected) return;
         const name = (window.prompt('New folder name:') || '').trim();
         if (!name) return;
-        if (/[\/\\]/.test(name)) { const f = document.getElementById('ftp-foot'); if (f) { f.textContent = 'Folder name cannot contain slashes.'; f.style.color = '#ff6666'; } return; }
+        if (/[\/\\]/.test(name)) { this._ftpFootError('Folder name cannot contain slashes.'); return; }
         this.connection.send('ftp_mkdir', { path: this._ftpJoin(this._ftp.cwd || '.', name) });
     }
 
@@ -5512,7 +5514,7 @@ class WMTClient {
         if (!this._ftpConfirmDiscard()) return;
         const name = (window.prompt('New file name:') || '').trim();
         if (!name) return;
-        if (/[\/\\]/.test(name)) { const f = document.getElementById('ftp-foot'); if (f) { f.textContent = 'File name cannot contain slashes.'; f.style.color = '#ff6666'; } return; }
+        if (/[\/\\]/.test(name)) { this._ftpFootError('File name cannot contain slashes.'); return; }
         const path = this._ftpJoin(this._ftp.cwd || '.', name);
         this._ftp.curFile = path;
         document.getElementById('ftp-filename').textContent = path;
@@ -5717,6 +5719,26 @@ class WMTClient {
         } catch (e) { document.getElementById('ftp-edit-status').textContent = 'local save failed: ' + (e.message || e); }
     }
     _ftpFootMsg(msg, color) { const f = document.getElementById('ftp-foot'); if (f) { f.textContent = msg; f.style.color = color || ''; } }
+
+    // Transient foot error: shown in red, cleared by the NEXT successful FTP
+    // reply (dispatch hook) or after 15s — errors used to persist for the whole
+    // connection. The "connection lost — Reconnect" banner is exempt: the clear
+    // only wipes the foot while it still shows THIS message.
+    _ftpFootError(msg) {
+        this._ftpFootErrMsg = msg;
+        this._ftpFootMsg(msg, '#ff6666');
+        clearTimeout(this._ftpFootErrTimer);
+        this._ftpFootErrTimer = setTimeout(() => this._ftpFootErrorClear(), 15000);
+    }
+
+    _ftpFootErrorClear() {
+        clearTimeout(this._ftpFootErrTimer);
+        const f = document.getElementById('ftp-foot');
+        if (f && this._ftpFootErrMsg && f.textContent === this._ftpFootErrMsg) {
+            f.textContent = ''; f.style.color = '';
+        }
+        this._ftpFootErrMsg = null;
+    }
     async _localNewFolder() {
         if (!this._local || !this._local.dir) { this._ftpFootMsg('Open a local folder first.', '#caa300'); return; }
         const name = (window.prompt('New local folder name:') || '').trim();
