@@ -807,7 +807,7 @@ setcookie($tokenCookieName, $wsToken, [
 
     <!-- Script Editor Modal -->
     <div class="modal-overlay" id="script-editor-modal">
-        <div class="modal" style="width:90%;max-width:700px">
+        <div class="modal" style="width:95%;max-width:1100px">
             <div class="modal-header">
                 <h3 id="script-editor-title">Edit Script</h3>
                 <button class="panel-close" onclick="wmtClient.closeScriptEditor()">&times;</button>

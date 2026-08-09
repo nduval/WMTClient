@@ -6215,7 +6215,7 @@ class WMTClient {
         });
         const addons = [
             'clike.js', 'matchbrackets.js', 'closebrackets.js', 'comment.js', 'searchcursor.js', 'rulers.js', 'active-line.js',
-            'dialog.js', 'jump-to-line.js',
+            'dialog.js', 'jump-to-line.js', 'search.js',   // search needs searchcursor+dialog (loaded above)
             'annotatescrollbar.js', 'matchesonscrollbar.js', 'match-highlighter.js',
             'foldcode.js', 'foldgutter.js', 'brace-fold.js', 'comment-fold.js', 'indent-fold.js',
             'trailingspace.js',   // (hardwrap.js stays vendored but unloaded — the ↦ 80 button was removed)
@@ -10430,40 +10430,43 @@ class WMTClient {
         const contentEl = document.getElementById('script-editor-content');
         if (!titleEl || !contentEl) return;
 
+        // Open the modal first so CodeMirror has a laid-out host to size itself,
+        // then upgrade the textarea (lazy; falls back to the plain textarea if
+        // the vendored CM fails to load).
+        document.getElementById('script-editor-modal').classList.add('open');
+        try { await this._loadScriptCM(); this._initScriptCM(); } catch (e) { /* textarea fallback */ }
+
         if (filename) {
             // Edit existing file
             titleEl.textContent = filename;
-            contentEl.value = 'Loading...';
+            this._setScriptEditorValue('Loading...');
             this.editingScriptFilename = filename;
 
             try {
                 const res = await fetch(this.apiUrl(`api/scripts.php?action=get&filename=${encodeURIComponent(filename)}`));
                 const data = await res.json();
                 if (data.success) {
-                    contentEl.value = data.content;
+                    this._setScriptEditorValue(data.content);
                 } else {
-                    contentEl.value = '';
+                    this._setScriptEditorValue('');
                     alert('Failed to load: ' + (data.error || 'Unknown error'));
                 }
             } catch (e) {
-                contentEl.value = '';
+                this._setScriptEditorValue('');
                 alert('Failed to load file');
             }
         } else {
             // New file
             titleEl.textContent = 'New Script';
-            contentEl.value = '';
+            this._setScriptEditorValue('');
             this.editingScriptFilename = null;
         }
-
-        document.getElementById('script-editor-modal').classList.add('open');
+        if (this._scriptCM) this._scriptCM.focus();
     }
 
-    // Save from the script editor modal
-    async saveScriptFromEditor() {
-        const contentEl = document.getElementById('script-editor-content');
-        if (!contentEl) return;
-
+    // Save from the script editor modal. stayOpen=true (Ctrl-S) keeps editing;
+    // the Save button closes as before.
+    async saveScriptFromEditor(stayOpen = false) {
         let filename = this.editingScriptFilename;
         if (!filename) {
             filename = prompt('Enter filename (e.g. myscript.tin or bots/mybot.tin):');
@@ -10474,7 +10477,7 @@ class WMTClient {
             }
         }
 
-        const content = contentEl.value;
+        const content = this._getScriptEditorValue();
 
         try {
             const res = await fetch(this.apiUrl('api/scripts.php?action=save'), {
@@ -10486,7 +10489,11 @@ class WMTClient {
 
             if (data.success) {
                 this.appendOutput(`Saved: ${filename}`, 'system');
-                this.closeScriptEditor();
+                this._scriptDirty = false;
+                this.editingScriptFilename = filename;   // a new file keeps its name for the next Ctrl-S
+                const titleEl = document.getElementById('script-editor-title');
+                if (titleEl) titleEl.textContent = filename;
+                if (!stayOpen) this.closeScriptEditor();
                 this.loadScriptFilesList();
             } else {
                 alert('Failed to save: ' + (data.error || 'Unknown error'));
@@ -10498,8 +10505,154 @@ class WMTClient {
 
     // Close the script editor modal
     closeScriptEditor() {
+        if (this._scriptDirty && !confirm('Discard unsaved changes?')) return;
         document.getElementById('script-editor-modal')?.classList.remove('open');
         this.editingScriptFilename = null;
+        this._scriptDirty = false;
+    }
+
+    // ── Script editor CodeMirror upgrade (reuses the FTP editor's vendored CM) ──
+    // TinTin++ mode: command-position #commands, {}-grouping with depth-based
+    // indent, $/&/* variables, %N pattern tokens, @func calls, #nop comments
+    // (swallow to the ; separator — tintin-reference/parsing.md Rules 1+2),
+    // \-escapes, <abc> color tags. Tokens map onto the standard CM classes so
+    // one palette serves both editors.
+    _defineTinTinMode() {
+        if (!window.CodeMirror || this._tinModeDefined) return;
+        window.CodeMirror.defineMode('tintin', (config) => ({
+            startState: () => ({ depth: 0, cmdPos: true, nop: false }),
+            token: (stream, state) => {
+                if (stream.sol() && state.depth === 0) { state.cmdPos = true; state.nop = false; }
+                if (state.nop) {   // #nop argument: comment until the ; separator (crosses lines inside braces)
+                    if (stream.skipTo(';')) state.nop = false; else stream.skipToEnd();
+                    return 'comment';
+                }
+                if (stream.eatSpace()) return null;
+                const ch = stream.peek();
+                if (ch === '{') { stream.next(); state.depth++; state.cmdPos = true; return 'bracket'; }
+                if (ch === '}') { stream.next(); if (state.depth > 0) state.depth--; state.cmdPos = false; return 'bracket'; }
+                if (ch === ';') { stream.next(); state.cmdPos = true; return 'operator'; }
+                if (ch === '\\') { stream.next(); stream.next(); return 'string-2'; }   // escape pair rides to the MUD verbatim
+                if (state.cmdPos && ch === '#') {
+                    stream.next(); stream.eatWhile(/\w/);
+                    state.cmdPos = false;
+                    if (stream.current().toLowerCase() === '#nop') { state.nop = true; return 'comment'; }
+                    return 'keyword';
+                }
+                state.cmdPos = false;
+                if (ch === '$' || ch === '&' || ch === '*') {
+                    stream.next();
+                    if (stream.peek() === ch) { stream.next(); return 'string-2'; }   // $$ && ** = escaped literal
+                    if (stream.eat('{')) { if (stream.skipTo('}')) stream.next(); else stream.skipToEnd(); return 'variable-2'; }
+                    if (/[A-Za-z0-9_]/.test(stream.peek() || '')) { stream.eatWhile(/[A-Za-z0-9_]/); return 'variable-2'; }
+                    return null;   // bare $ & * in prose
+                }
+                if (ch === '%') {
+                    stream.next();
+                    if (/\d/.test(stream.peek() || '')) { stream.eatWhile(/\d/); return 'atom'; }   // %0-%99 args
+                    if (/[wWdDsSaApP*+.?!%]/.test(stream.peek() || '')) { stream.next(); return 'atom'; }   // pattern classes
+                    return null;
+                }
+                if (ch === '@') {
+                    stream.next();
+                    if (/[A-Za-z_]/.test(stream.peek() || '')) { stream.eatWhile(/[A-Za-z0-9_]/); return 'def'; }   // @func{...}
+                    return null;
+                }
+                if (ch === '<' && stream.match(/^<[0-9a-fA-F]{3}>/)) return 'tin-color';   // tt++ color tag
+                stream.next(); return null;
+            },
+            indent: (state, textAfter) => {
+                const back = /^\s*\}/.test(textAfter || '') ? 1 : 0;
+                return Math.max(0, state.depth - back) * (config.indentUnit || 4);
+            },
+            electricChars: '}',
+        }));
+        this._tinModeDefined = true;
+    }
+
+    _ensureScriptEditorStyle() {
+        if (document.getElementById('script-cm-style')) return;
+        const st = document.createElement('style');
+        st.id = 'script-cm-style';
+        // Same dark palette as the FTP editor, scoped to this modal (the FTP CSS
+        // is injected only when the wizard-gated FTP editor opens).
+        st.textContent = `
+        #script-editor-modal .modal { display:flex; flex-direction:column; max-height:92vh; }
+        #script-editor-modal .modal-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+        #script-editor-modal .CodeMirror { flex:1; height:62vh; min-height:280px; background:#0b0b14; color:#d6d6e0; font-family:var(--font-mono); font-size:13px; line-height:1.4; border:1px solid var(--border-color); border-radius:4px; }
+        #script-editor-modal .CodeMirror-gutters { background:#0b0b14; border-right:1px solid var(--border-color); }
+        #script-editor-modal .CodeMirror-linenumber { color:#5a5a78; }
+        #script-editor-modal .CodeMirror-cursor { border-left:2px solid #ffd24a; }
+        #script-editor-modal .CodeMirror-selected { background:#2a2a44 !important; }
+        #script-editor-modal .CodeMirror-activeline-background { background:rgba(255,255,255,.03); }
+        #script-editor-modal .CodeMirror-matchingbracket { color:#fff !important; background:#3a3a66; border-bottom:1px solid #89ddff; }
+        #script-editor-modal .CodeMirror-nonmatchingbracket { color:#ff5370 !important; }
+        #script-editor-modal .CodeMirror .cm-keyword { color:#c792ea; font-weight:600; }      /* #commands */
+        #script-editor-modal .CodeMirror .cm-comment { color:#9aa4ba; font-style:italic; }    /* #nop */
+        #script-editor-modal .CodeMirror .cm-variable-2 { color:#80cbc4; }                    /* $vars &vars *vars */
+        #script-editor-modal .CodeMirror .cm-atom { color:#ffab70; }                          /* %N + pattern classes */
+        #script-editor-modal .CodeMirror .cm-def { color:#8ad6ff; }                           /* @functions */
+        #script-editor-modal .CodeMirror .cm-operator { color:#89ddff; font-weight:600; }     /* ; separators */
+        #script-editor-modal .CodeMirror .cm-bracket { color:#ffcb6b; }                       /* {} grouping */
+        #script-editor-modal .CodeMirror .cm-string-2 { color:#addb67; }                      /* \\-escapes + $$ literals */
+        #script-editor-modal .CodeMirror .cm-tin-color { color:#dd7bdd; }                     /* <abc> color tags */
+        #script-editor-modal .CodeMirror-dialog { background:#14142a; color:#d6d6e0; border-bottom:1px solid var(--border-color); }
+        #script-editor-modal .CodeMirror-dialog input { background:#0b0b14; color:#d6d6e0; border:1px solid var(--border-color); }
+        `;
+        document.head.appendChild(st);
+    }
+
+    _loadScriptCM() {
+        return Promise.resolve(this._ftpLoadCM()).then(() => {
+            if (!window.CodeMirror) throw new Error('CodeMirror unavailable');
+            this._defineTinTinMode();
+            this._ensureScriptEditorStyle();
+        });
+    }
+
+    _initScriptCM() {
+        if (this._scriptCM || !window.CodeMirror) return;
+        const ta = document.getElementById('script-editor-content');
+        if (!ta) return;
+        const cmSave = () => this.saveScriptFromEditor(true);   // Ctrl-S saves WITHOUT closing
+        this._scriptCM = window.CodeMirror.fromTextArea(ta, {
+            lineNumbers: true, mode: 'tintin', matchBrackets: true, autoCloseBrackets: true, styleActiveLine: true,
+            indentUnit: 4, tabSize: 4, indentWithTabs: false, lineWrapping: false,
+            foldGutter: true, gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+            showTrailingSpace: true,
+            highlightSelectionMatches: { showToken: /\w/, annotateScrollbar: true, minChars: 2 },
+            extraKeys: {
+                'Ctrl-S': cmSave, 'Cmd-S': cmSave,
+                'Ctrl-F': 'findPersistent', 'Cmd-F': 'findPersistent',   // search addon dialog
+                'Shift-Ctrl-F': 'replace', 'Shift-Cmd-F': 'replace',
+                'Ctrl-G': 'jumpToLine',
+                'Ctrl-Q': (cm) => cm.foldCode(cm.getCursor()),
+                'Tab': (cm) => { cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    ', 'end'); },
+                'Shift-Tab': (cm) => cm.indentSelection('subtract'),
+            },
+        });
+        this._scriptCM.setSize('100%', '100%');
+        this._scriptCM.on('change', () => { if (!this._scriptLoading) this._scriptDirty = true; });
+    }
+
+    _setScriptEditorValue(text) {
+        this._scriptLoading = true;
+        if (this._scriptCM) {
+            this._scriptCM.setValue(text);
+            this._scriptCM.clearHistory();
+            this._scriptCM.refresh();
+        } else {
+            const ta = document.getElementById('script-editor-content');
+            if (ta) ta.value = text;
+        }
+        this._scriptLoading = false;
+        this._scriptDirty = false;
+    }
+
+    _getScriptEditorValue() {
+        if (this._scriptCM) return this._scriptCM.getValue();
+        const ta = document.getElementById('script-editor-content');
+        return ta ? ta.value : '';
     }
 
     async importSettings(file) {
@@ -16711,6 +16864,13 @@ class WMTClient {
     }
 
     closeModal() {
+        // Outside-click reaches here too — don't silently discard script edits.
+        const se = document.getElementById('script-editor-modal');
+        if (se && se.classList.contains('open')) {
+            if (this._scriptDirty && !confirm('Discard unsaved changes?')) return;
+            this._scriptDirty = false;
+            this.editingScriptFilename = null;
+        }
         document.querySelectorAll('.modal-overlay').forEach(modal => {
             modal.classList.remove('open');
         });
