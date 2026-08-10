@@ -813,6 +813,14 @@ setcookie($tokenCookieName, $wsToken, [
                 <button class="panel-close" onclick="wmtClient.closeScriptEditor()">&times;</button>
             </div>
             <div class="modal-body">
+                <div id="script-findbar">
+                    <input id="script-find" type="text" placeholder="Find" spellcheck="false">
+                    <input id="script-replace" type="text" placeholder="Replace with" spellcheck="false">
+                    <button type="button" class="btn btn-secondary" onclick="wmtClient._scriptFindNext()">Find Next</button>
+                    <button type="button" class="btn btn-secondary" onclick="wmtClient._scriptReplaceOne()">Replace</button>
+                    <button type="button" class="btn btn-secondary" onclick="wmtClient._scriptReplaceAll()">Replace All</button>
+                    <span id="script-find-status"></span>
+                </div>
                 <textarea id="script-editor-content" style="width:100%;height:400px;font-family:monospace;font-size:13px;tab-size:4;white-space:pre;resize:vertical;padding:10px;box-sizing:border-box"></textarea>
             </div>
             <div class="modal-footer" style="align-items:center">

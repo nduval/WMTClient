@@ -10603,6 +10603,10 @@ class WMTClient {
         #script-editor-modal .CodeMirror .cm-tin-color { color:#dd7bdd; }                     /* <abc> color tags */
         #script-editor-modal .CodeMirror-dialog { background:#14142a; color:#d6d6e0; border-bottom:1px solid var(--border-color); }
         #script-editor-modal .CodeMirror-dialog input { background:#0b0b14; color:#d6d6e0; border:1px solid var(--border-color); }
+        #script-findbar { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:0 0 8px; }
+        #script-findbar input { flex:1 1 140px; min-width:0; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px 8px; font-size:12px; }
+        #script-findbar .btn { padding:6px 10px; font-size:12px; }
+        #script-find-status { color:var(--text-muted); font-size:11px; white-space:nowrap; }
         #script-outline { max-width:220px; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:5px 6px; font-size:12px; }
         #script-wrap-btn.script-wrap-on { background:#2ecc71; border-color:#2ecc71; color:#161616; }
         #script-key-hints { color:var(--text-muted); font-size:11px; white-space:nowrap; }
@@ -10634,9 +10638,9 @@ class WMTClient {
             highlightSelectionMatches: { showToken: /\w/, annotateScrollbar: true, minChars: 2 },
             extraKeys: {
                 'Ctrl-S': cmSave, 'Cmd-S': cmSave,
-                'Ctrl-F': 'findPersistent', 'Cmd-F': 'findPersistent',   // search addon dialog
-                'Shift-Ctrl-F': 'replace', 'Shift-Cmd-F': 'replace',
-                'Ctrl-H': 'replace',                                     // the hint bar advertises this one
+                // FTP-style find bar (Nathan preferred it over CM's two-step dialogs)
+                'Ctrl-F': () => this._scriptFocusFind('script-find'), 'Cmd-F': () => this._scriptFocusFind('script-find'),
+                'Ctrl-H': () => this._scriptFocusFind('script-replace'),
                 'Ctrl-G': 'jumpToLine',
                 'Ctrl-Q': (cm) => cm.foldCode(cm.getCursor()),
                 'Tab': (cm) => { cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    ', 'end'); },
@@ -10659,6 +10663,60 @@ class WMTClient {
             outline.addEventListener('change', () => this._scriptOutlineJump());
             outline.addEventListener('mousedown', () => this._scriptBuildOutline());   // fresh list on open
         }
+        // Find bar: Enter repeats (focus STAYS in the box — focusing CM mid-keydown
+        // lands the Enter in the editor as a newline, the 2026-06-18 FTP lesson);
+        // Esc jumps to the editor.
+        const findIn = document.getElementById('script-find');
+        const repIn = document.getElementById('script-replace');
+        if (findIn && !findIn._wired) {
+            findIn._wired = true;
+            findIn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this._scriptFindNext(); }
+                if (e.key === 'Escape') { e.preventDefault(); this._scriptCM?.focus(); }
+            });
+            repIn.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this._scriptReplaceOne(); }
+                if (e.key === 'Escape') { e.preventDefault(); this._scriptCM?.focus(); }
+            });
+        }
+    }
+
+    _scriptFocusFind(id) {
+        const f = document.getElementById(id);
+        if (f) { f.focus(); f.select(); }
+    }
+
+    _scriptFindNext() {
+        const cm = this._scriptCM, term = document.getElementById('script-find')?.value;
+        const status = document.getElementById('script-find-status');
+        if (!cm) return;
+        if (this._scriptFindMarks) { this._scriptFindMarks.clear(); this._scriptFindMarks = null; }
+        if (!term) { if (status) status.textContent = ''; return; }
+        if (cm.showMatchesOnScrollbar) this._scriptFindMarks = cm.showMatchesOnScrollbar(term, false, { className: 'CodeMirror-search-match' });
+        let count = 0; const all = cm.getSearchCursor(term, { line: 0, ch: 0 }); while (all.findNext()) count++;
+        let cur = cm.getSearchCursor(term, cm.getCursor('to'));
+        if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { if (status) status.textContent = 'no matches'; return; } }
+        cm.setSelection(cur.from(), cur.to());
+        cm.scrollIntoView({ from: cur.from(), to: cur.to() }, 60);
+        if (status) status.textContent = count + (count === 1 ? ' match' : ' matches');
+    }
+
+    _scriptReplaceOne() {
+        const cm = this._scriptCM, term = document.getElementById('script-find')?.value;
+        if (!cm || !term) return;
+        const rep = document.getElementById('script-replace')?.value ?? '';
+        if (cm.getSelection() === term) cm.replaceSelection(rep);
+        this._scriptFindNext();
+    }
+
+    _scriptReplaceAll() {
+        const cm = this._scriptCM, term = document.getElementById('script-find')?.value;
+        const status = document.getElementById('script-find-status');
+        if (!cm || !term) return;
+        const rep = document.getElementById('script-replace')?.value ?? '';
+        let cur = cm.getSearchCursor(term, { line: 0, ch: 0 }), count = 0;
+        cm.operation(() => { while (cur.findNext()) { cur.replace(rep); count++; } });
+        if (status) status.textContent = count ? `replaced ${count}` : 'no matches';
     }
 
     _scriptSetSaveBtn(state) {
@@ -10732,6 +10790,10 @@ class WMTClient {
         this._scriptDirty = false;
         this._scriptSetSaveBtn('clean');
         this._scriptBuildOutline();
+        // Stale search state from the previous file
+        if (this._scriptFindMarks) { this._scriptFindMarks.clear(); this._scriptFindMarks = null; }
+        const fs = document.getElementById('script-find-status');
+        if (fs) fs.textContent = '';
     }
 
     _getScriptEditorValue() {
