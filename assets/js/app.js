@@ -10750,8 +10750,18 @@ class WMTClient {
         const items = [];
         const count = this._scriptCM.lineCount();
         for (let i = 0; i < count; i++) {
-            const m = this._scriptCM.getLine(i).match(re);
-            if (m) items.push({ line: i, label: `#${m[1].toLowerCase()} ${m[2].trim()}`.slice(0, 48) });
+            const line = this._scriptCM.getLine(i);
+            const m = line.match(re);
+            if (!m) continue;
+            let label = `#${m[1].toLowerCase()} ${m[2].trim()}`;
+            // #class lines come in open/close (or read/kill) PAIRS with identical
+            // first args — show the subcommand so the pair doesn't read as a
+            // duplicate (Nathan's screenshot 2026-08-10: "#class Corpses" twice).
+            if (m[1].toLowerCase() === 'class') {
+                const sub = line.match(/^#class\s*\{?[^{};]+?\}?\s*\{?\s*(\w+)/i);
+                if (sub) label += ` — ${sub[1].toLowerCase()}`;
+            }
+            items.push({ line: i, label: label.slice(0, 48) });
         }
         const cur = sel.value;
         sel.innerHTML = '';
