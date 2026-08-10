@@ -815,9 +815,14 @@ setcookie($tokenCookieName, $wsToken, [
             <div class="modal-body">
                 <textarea id="script-editor-content" style="width:100%;height:400px;font-family:monospace;font-size:13px;tab-size:4;white-space:pre;resize:vertical;padding:10px;box-sizing:border-box"></textarea>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer" style="align-items:center">
+                <span id="script-tools" style="margin-right:auto;display:flex;gap:8px;align-items:center;min-width:0">
+                    <select id="script-outline" title="Jump to definition"><option value="">Outline…</option></select>
+                    <button type="button" class="btn btn-secondary" id="script-wrap-btn" title="Toggle word wrap" onclick="wmtClient._scriptToggleWrap()">⮐ Wrap</button>
+                    <span id="script-key-hints">Ctrl-F find · Ctrl-H replace · Ctrl-G line · Ctrl-S save</span>
+                </span>
                 <button class="btn btn-secondary" onclick="wmtClient.closeScriptEditor()">Cancel</button>
-                <button class="btn btn-primary" onclick="wmtClient.saveScriptFromEditor()">Save</button>
+                <button class="btn btn-primary" id="script-save-btn" onclick="wmtClient.saveScriptFromEditor()">Save</button>
             </div>
         </div>
     </div>

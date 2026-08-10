@@ -10490,6 +10490,7 @@ class WMTClient {
             if (data.success) {
                 this.appendOutput(`Saved: ${filename}`, 'system');
                 this._scriptDirty = false;
+                this._scriptSetSaveBtn('saved');
                 this.editingScriptFilename = filename;   // a new file keeps its name for the next Ctrl-S
                 const titleEl = document.getElementById('script-editor-title');
                 if (titleEl) titleEl.textContent = filename;
@@ -10602,6 +10603,12 @@ class WMTClient {
         #script-editor-modal .CodeMirror .cm-tin-color { color:#dd7bdd; }                     /* <abc> color tags */
         #script-editor-modal .CodeMirror-dialog { background:#14142a; color:#d6d6e0; border-bottom:1px solid var(--border-color); }
         #script-editor-modal .CodeMirror-dialog input { background:#0b0b14; color:#d6d6e0; border:1px solid var(--border-color); }
+        #script-outline { max-width:220px; background:var(--bg-darker); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:5px 6px; font-size:12px; }
+        #script-wrap-btn.script-wrap-on { background:#2ecc71; border-color:#2ecc71; color:#161616; }
+        #script-key-hints { color:var(--text-muted); font-size:11px; white-space:nowrap; }
+        #script-save-btn.script-dirty { background:#caa300; border-color:#caa300; color:#161616; }
+        #script-save-btn.script-saved { background:#2ecc71; border-color:#2ecc71; color:#161616; }
+        @media (max-width:760px) { #script-key-hints { display:none; } }
         `;
         document.head.appendChild(st);
     }
@@ -10629,6 +10636,7 @@ class WMTClient {
                 'Ctrl-S': cmSave, 'Cmd-S': cmSave,
                 'Ctrl-F': 'findPersistent', 'Cmd-F': 'findPersistent',   // search addon dialog
                 'Shift-Ctrl-F': 'replace', 'Shift-Cmd-F': 'replace',
+                'Ctrl-H': 'replace',                                     // the hint bar advertises this one
                 'Ctrl-G': 'jumpToLine',
                 'Ctrl-Q': (cm) => cm.foldCode(cm.getCursor()),
                 'Tab': (cm) => { cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    ', 'end'); },
@@ -10636,7 +10644,78 @@ class WMTClient {
             },
         });
         this._scriptCM.setSize('100%', '100%');
-        this._scriptCM.on('change', () => { if (!this._scriptLoading) this._scriptDirty = true; });
+        this._scriptCM.on('change', () => {
+            if (this._scriptLoading) return;
+            this._scriptDirty = true;
+            this._scriptSetSaveBtn('dirty');
+            clearTimeout(this._scriptOutlineTimer);
+            this._scriptOutlineTimer = setTimeout(() => this._scriptBuildOutline(), 500);
+        });
+        // Saved word-wrap preference
+        if (localStorage.getItem('wmt_script_wrap') === '1') this._scriptToggleWrap(true);
+        const outline = document.getElementById('script-outline');
+        if (outline && !outline._wired) {
+            outline._wired = true;
+            outline.addEventListener('change', () => this._scriptOutlineJump());
+            outline.addEventListener('mousedown', () => this._scriptBuildOutline());   // fresh list on open
+        }
+    }
+
+    _scriptSetSaveBtn(state) {
+        const b = document.getElementById('script-save-btn');
+        if (!b) return;
+        clearTimeout(this._scriptSaveBtnTimer);
+        b.classList.remove('script-dirty', 'script-saved');
+        if (state === 'dirty') { b.classList.add('script-dirty'); b.textContent = '● Save'; }
+        else if (state === 'saved') {
+            b.classList.add('script-saved'); b.textContent = '✓ Saved';
+            this._scriptSaveBtnTimer = setTimeout(() => this._scriptSetSaveBtn('clean'), 1500);
+        }
+        else b.textContent = 'Save';
+    }
+
+    _scriptToggleWrap(force) {
+        if (!this._scriptCM) return;
+        const on = force === true ? true : !this._scriptCM.getOption('lineWrapping');
+        this._scriptCM.setOption('lineWrapping', on);
+        localStorage.setItem('wmt_script_wrap', on ? '1' : '0');
+        document.getElementById('script-wrap-btn')?.classList.toggle('script-wrap-on', on);
+        this._scriptCM.refresh();
+    }
+
+    // Outline: top-level (column-0) definitions worth jumping to in a big bot
+    // file. #var inits are deliberately excluded — they'd flood the list.
+    _scriptBuildOutline() {
+        const sel = document.getElementById('script-outline');
+        if (!sel || !this._scriptCM) return;
+        const re = /^#(alias|action|function|ticker|event|class|button)\s*\{?\s*([^{};]+?)\s*[}{;]/i;
+        const items = [];
+        const count = this._scriptCM.lineCount();
+        for (let i = 0; i < count; i++) {
+            const m = this._scriptCM.getLine(i).match(re);
+            if (m) items.push({ line: i, label: `#${m[1].toLowerCase()} ${m[2].trim()}`.slice(0, 48) });
+        }
+        const cur = sel.value;
+        sel.innerHTML = '';
+        const head = document.createElement('option');
+        head.value = ''; head.textContent = items.length ? `Outline (${items.length})…` : 'Outline…';
+        sel.appendChild(head);
+        for (const it of items) {
+            const o = document.createElement('option');
+            o.value = String(it.line); o.textContent = it.label;
+            sel.appendChild(o);
+        }
+        sel.value = cur && sel.querySelector(`option[value="${cur}"]`) ? cur : '';
+    }
+
+    _scriptOutlineJump() {
+        const sel = document.getElementById('script-outline');
+        if (!sel || !this._scriptCM || sel.value === '') return;
+        const line = parseInt(sel.value, 10);
+        this._scriptCM.setCursor({ line, ch: 0 });
+        this._scriptCM.scrollIntoView({ line, ch: 0 }, 80);
+        this._scriptCM.focus();
+        sel.value = '';
     }
 
     _setScriptEditorValue(text) {
@@ -10651,6 +10730,8 @@ class WMTClient {
         }
         this._scriptLoading = false;
         this._scriptDirty = false;
+        this._scriptSetSaveBtn('clean');
+        this._scriptBuildOutline();
     }
 
     _getScriptEditorValue() {
