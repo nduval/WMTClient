@@ -10577,9 +10577,13 @@ class WMTClient {
         // Same dark palette as the FTP editor, scoped to this modal (the FTP CSS
         // is injected only when the wizard-gated FTP editor opens).
         st.textContent = `
-        #script-editor-modal .modal { display:flex; flex-direction:column; max-height:92vh; }
-        #script-editor-modal .modal-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
-        #script-editor-modal .CodeMirror { flex:1; height:62vh; min-height:280px; background:#0b0b14; color:#d6d6e0; font-family:var(--font-mono); font-size:13px; line-height:1.4; border:1px solid var(--border-color); border-radius:4px; }
+        /* Definite height chain (modal 92vh → body flex → CM flex:1) with overflow
+           hidden — an indefinite chain makes CM size itself to its CONTENT, so it
+           thinks nothing overflows: dead scrollbar + swallowed wheel events
+           (Nathan 2026-08-10). Mirrors the working FTP editor layout. */
+        #script-editor-modal .modal { display:flex; flex-direction:column; height:92vh; max-height:92vh; overflow:hidden; }
+        #script-editor-modal .modal-body { flex:1 1 auto; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
+        #script-editor-modal .CodeMirror { flex:1 1 auto; min-height:0; background:#0b0b14; color:#d6d6e0; font-family:var(--font-mono); font-size:13px; line-height:1.4; border:1px solid var(--border-color); border-radius:4px; }
         #script-editor-modal .CodeMirror-gutters { background:#0b0b14; border-right:1px solid var(--border-color); }
         #script-editor-modal .CodeMirror-linenumber { color:#5a5a78; }
         #script-editor-modal .CodeMirror-cursor { border-left:2px solid #ffd24a; }

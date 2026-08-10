@@ -5,6 +5,24 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 2026-08-09 (commits 0026dd0 + a82c2c8)
+- **Script editor CodeMirror upgrade + TinTin++ syntax highlighting.** The
+  scripts-panel editor modal now lazy-loads the same vendored CM stack as the
+  FTP editor (textarea fallback intact): custom `tintin` mode written against
+  tintin-reference/parsing.md (command-position `#commands`; `#nop` comments
+  styled through to their `;` terminator so the missing-semicolon trap is
+  visible; `{}` depth + auto-indent; `$&*` vars; `%N`/pattern atoms; `@func`;
+  `\`-escapes; `<abc>` color tags; bold `;`), line numbers, folding, find/
+  replace (newly vendored search.js addon — CAUGHT: new untracked file missed
+  the auto-commit → app.js referenced it before it was uploaded; committed +
+  deployed in a82c2c8, verified byte-identical on IONOS), go-to-line, Ctrl-S
+  save-without-close, dirty guard on Cancel/✕/outside-click (outside-click was
+  silently discarding edits even pre-CM). Modal widened to 1100px.
+  Gates 121/121 + php -l. NOT covered: no gate exercises the editor UI —
+  verify live; light-theme palette not done (dark only, matches client).
+  Also committed the ghost EspCapture suite (was untracked, gate ran it from
+  the working tree).
+
 ## SHIPPED 2026-08-02 (commits f924b71 + 2c33270)
 - **ESP → ChatMon capture** (jedi telepathy — plain game text the MUD left out of
   MIP). `observeEspLine()` in server.js passively watches output for
