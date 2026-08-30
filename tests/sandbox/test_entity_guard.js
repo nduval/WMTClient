@@ -167,6 +167,45 @@ async function run() {
       `guarded row should have been re-inserted, found ${row ? row.pattern : 'none'}`);
   });
 
+  await test('T6 (triggers): enabled-ONLY admin patch survives stale bulk_replace', async () => {
+    // The 2026-08-30 live failure: SLOW_REGEX auto-disabled elminster's in-combat
+    // trigger; an admin re-enable (enabled:true, nothing else changed) was clobbered
+    // 1s later by the browser's bulk sync because the guard extractor didn't include
+    // `enabled` in the compared identity — the stale copy looked "caught up".
+    const triggerId = 'tg6_' + Date.now();
+    let r = await httpJson('POST', '/admin/triggers-bulk', {
+      characterId: charId,
+      triggers: [{
+        id: triggerId, pattern: 'COMBAT_PATTERN', matchType: 'tintin',
+        actions: [{ type: 'command', command: '#var combat on' }], priority: 4, enabled: false
+      }]
+    });
+    assert(r.body.success, `bulk seed: ${JSON.stringify(r.body)}`);
+
+    // Admin re-enables — the ONLY field that changes
+    r = await httpJson('POST', '/admin/trigger', {
+      characterId: charId, triggerId, enabled: true
+    });
+    assert(r.body.success, `admin enable: ${JSON.stringify(r.body)}`);
+
+    let row = db.prepare('SELECT enabled FROM triggers WHERE id=?').get(triggerId);
+    assert(row && row.enabled === 1, `after admin: enabled=${row?.enabled}`);
+
+    // Stale browser sync pushes the identical trigger still disabled
+    r = await httpJson('POST', '/admin/triggers-bulk', {
+      characterId: charId,
+      triggers: [{
+        id: triggerId, pattern: 'COMBAT_PATTERN', matchType: 'tintin',
+        actions: [{ type: 'command', command: '#var combat on' }], priority: 4, enabled: false
+      }]
+    });
+    assert(r.body.success, `stale push: ${JSON.stringify(r.body)}`);
+
+    row = db.prepare('SELECT enabled FROM triggers WHERE id=?').get(triggerId);
+    assert(row && row.enabled === 1,
+      `guard failed to protect enabled-only edit — enabled=${row?.enabled} (expected 1)`);
+  });
+
   // ─── TICKERS (proves cross-table works through same generic mechanism) ──
 
   await test('T4 (tickers): admin patch survives stale bulk_replace (cross-table)', async () => {

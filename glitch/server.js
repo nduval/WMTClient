@@ -717,11 +717,18 @@ const GUARD_EXTRACTORS = {
   triggers: (row) => row && typeof row === 'object' ? JSON.stringify({
     pattern:   row.pattern || '',
     matchType: row.matchType || row.match_type || '',
-    actions:   row.actions || []
+    actions:   row.actions || [],
+    // enabled/priority MUST be part of the identity: an admin re-enable changes
+    // ONLY enabled, and without it here the stale browser copy (same pattern/
+    // actions, enabled=false) looked "caught up" → guard cleared → the browser's
+    // next bulk sync re-disabled the trigger 1s after the admin fix (2026-08-30).
+    enabled:  !!(row.enabled === undefined ? true : row.enabled),
+    priority: row.priority ?? 5
   }) : '',
   tickers:  (row) => row && typeof row === 'object' ? JSON.stringify({
     command:  row.command || '',
-    interval: row.interval || row.interval_seconds || 0
+    interval: row.interval || row.interval_seconds || 0,
+    enabled:  !!(row.enabled === undefined ? true : row.enabled)
   }) : '',
   classes:  (row) => row && typeof row === 'object' ? JSON.stringify({
     name:    row.name || '',
@@ -7211,6 +7218,12 @@ function processLine(session, line) {
     });
   }
 
+  // Sub-threshold slow sample — journal only, no disable
+  if (processed.slowRegexWarn) {
+    const w = processed.slowRegexWarn;
+    console.warn(`SLOW_REGEX_WARN user=${session.userId} char=${session.characterName} trigger=${w.id} strike=${w.strikes}/${w.maxStrikes} pattern=${w.pattern.substring(0, 80)} elapsed=${w.elapsedMs}ms`);
+  }
+
   // Handle slow regex (ReDoS protection) - disable the trigger
   if (processed.slowRegex) {
     const slow = processed.slowRegex;
@@ -8949,15 +8962,12 @@ wss.on('connection', (ws, req) => {
           if (data.line) {
             const processed = processTriggers(data.line, session.triggers, null, session.variables || {}, session.functions || {});
 
-            // Handle slow regex (ReDoS protection) — disable the trigger
-            if (processed.slowRegex) {
-              const slow = processed.slowRegex;
-              console.warn(`SLOW_REGEX user=${session.userId} char=${session.characterName} trigger=${slow.id} pattern=${slow.pattern.substring(0, 80)} elapsed=${slow.elapsedMs}ms`);
-              sendToClient(session, {
-                type: 'system',
-                message: `Slow regex detected! Trigger "${slow.name}" took ${slow.elapsedMs}ms to match and has been disabled.`
-              });
-              sendToClient(session, { type: 'disable_trigger', triggerId: slow.id });
+            // Slow regex on a test line: warn only. test_line passes no loopTracker,
+            // so the strike counter can't accumulate — a one-off slow sample here
+            // must never disable a live trigger.
+            if (processed.slowRegexWarn) {
+              const w = processed.slowRegexWarn;
+              console.warn(`SLOW_REGEX_WARN(test_line) user=${session.userId} char=${session.characterName} trigger=${w.id} pattern=${w.pattern.substring(0, 80)} elapsed=${w.elapsedMs}ms`);
             }
 
             // Send to originating client only (not broadcast)
@@ -9689,14 +9699,19 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
     commands: [],
     sound: null,
     loopDetected: null,  // Will contain trigger info if loop detected
-    slowRegex: null,     // Will contain trigger info if regex took too long (ReDoS protection)
+    slowRegex: null,     // Will contain trigger info if regex hit the slow-strike limit (ReDoS protection)
+    slowRegexWarn: null, // Sub-threshold slow sample — log only, trigger stays enabled
     firedOneshots: []    // Oneshot trigger IDs that fired and should be removed
   };
 
   const now = Date.now();
   const LOOP_WINDOW_MS = 2000;  // 2 second window
   const LOOP_THRESHOLD = 50;    // Max fires in window before considered a loop
-  const REGEX_SLOW_MS = 50;     // Disable a trigger if its regex takes >50ms to match
+  const REGEX_SLOW_MS = 50;     // A regex match slower than this counts as a slow strike
+  const SLOW_STRIKES = 3;       // Disable only after this many slow strikes...
+  const SLOW_WINDOW_MS = 60000; // ...within this window. A single slow sample is usually a
+                                // GC pause / CPU contention blip, not ReDoS — one 63ms blip
+                                // permanently killed elminster's combat trigger (2026-08-30).
 
   // Sort triggers by priority (lower = fires first, default 5)
   // TinTin++ processes actions in priority order, first command match wins
@@ -9758,15 +9773,42 @@ function processTriggers(line, triggers, loopTracker = null, variables = {}, fun
         const regexStart = Date.now();
         const match = matchLine.match(regex);
         const regexElapsed = Date.now() - regexStart;
-        // ReDoS protection: if a regex takes too long, flag for disable
+        // ReDoS protection: disable only after SLOW_STRIKES slow matches within
+        // SLOW_WINDOW_MS (strike state rides the session's loopTracker). Below the
+        // threshold it's a logged warning and the completed match is still used —
+        // the cost was already paid, and skipping would let a sibling trigger
+        // (e.g. the out-of-combat Coff body) fire in its place for this line.
+        // With no tracker (test_line, MIP paths) a trigger can never be disabled.
         if (regexElapsed > REGEX_SLOW_MS) {
-          result.slowRegex = {
+          let strikes = 1;
+          if (loopTracker && trigger.id) {
+            if (!loopTracker[trigger.id]) loopTracker[trigger.id] = { count: 0, firstFire: now };
+            const t = loopTracker[trigger.id];
+            if (!t.firstSlow || (now - t.firstSlow) > SLOW_WINDOW_MS) {
+              t.slowCount = 1;
+              t.firstSlow = now;
+            } else {
+              t.slowCount++;
+            }
+            strikes = t.slowCount;
+          }
+          if (strikes >= SLOW_STRIKES) {
+            result.slowRegex = {
+              id: trigger.id,
+              name: trigger.name || pattern,
+              pattern: pattern,
+              elapsedMs: regexElapsed
+            };
+            continue; // Skip this trigger's actions
+          }
+          result.slowRegexWarn = {
             id: trigger.id,
             name: trigger.name || pattern,
             pattern: pattern,
-            elapsedMs: regexElapsed
+            elapsedMs: regexElapsed,
+            strikes: strikes,
+            maxStrikes: SLOW_STRIKES
           };
-          continue; // Skip this trigger's actions
         }
         if (match) {
           matched = true;

@@ -356,6 +356,11 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
       WRONG, I'd checked the unsuffixed name) both deleted; disk 39%→17%.
 - [ ] Extract shared TinTin evaluator (mathexp/tintoi/tineval) into one file used
       by both sides + parity gate suite
+- [ ] tt++ parity: standalone `#elseif`/`#else` after a `;`/newline split
+      (real tt++ remembers the previous #if's result; WMT only parses the chain
+      inside ONE #if command → "Unknown command: #elseif", Nathan 2026-08-10).
+      Touches the protected command pipeline BOTH sides — own change + gate,
+      not a ride-along. Workaround: unbroken chain or positional else.
 - [ ] Prod disk: delete wmt.db.pre-shrink (6.7G) — shrink stable since 2026-06,
       offsite nightlies running since 2026-07-07; verified still present 2026-07-11,
       awaiting Nathan's go (destructive). NOTE: wmt.db.pre_entity_guard (1.9G) is
@@ -364,6 +369,21 @@ Plan lives in `docs/review-2026-07-07-variable-model-findings.md` ("Minimal Phas
 - [ ] Sandbox box = SPOF for the safety story (only gate runner) — document/mitigate
 - [ ] JSON cold archive cleanup: the frozen data/users character JSON files
       (~9.5MB/user backups included) — deletable whenever, zero urgency
+
+## Map — coordinate layer + graphml interchange (PLANNED 2026-08-24)
+Plan: `docs/map-coordinate-layer-plan.md`. Concept agreed with Nathan: every room
+gets a persistent curated x/y (layout moves from runtime to build time); Byron's
+3kdb stays graph truth (regenerated); coords = our layer keyed by vnum, survives
+re-pulls; graphml = import/export curation format (yEd round-trip), NOT storage.
+Trigger: player-submitted `CZ Shadows Map.graphml` — 327 rooms NOT in Byron's map
+(light side only; force-field room desc proves it), perfect 30px grid.
+- [ ] 1. Coordinate layer + offline bake (port existing layout logic, run over 776 areas)
+- [ ] 2. Renderer reads stored coords (skip BFS grid-walk)
+- [ ] 3. Exporter: area → graphml (vnum/name/edge attrs embedded)
+- [ ] 4. Importer: graphml → coords/overlay (vnum-tagged exact; untagged inferred + synthetic vnums)
+- [ ] 5. Prove loop on CZ Shadows (blocked on: how to enter Shadows in-game; how
+      levels connect; meaning of hidden labels — ask the mapmaker)
+- [ ] 6. MAYBE later: player-authored maps (enrich-on-visit = trust mechanism)
 
 ## Parked / declined (so they don't resurface as "open")
 - ChatMon: silenced channels count against the replay window — Nathan explicitly

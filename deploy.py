@@ -525,6 +525,9 @@ def run_test_suites(only_scripts=None):
         ('Triggers',     'test_trigger_compare.js'),
         ('DelayAnon',    'test_delay_anon.js'),
         ('EntityGuard',  'test_entity_guard.js'),
+        # SLOW_REGEX must not disable a trigger on ONE slow sample (GC/CPU blip);
+        # 3 strikes in 60s still disables (2026-08-30 combat-trigger kill).
+        ('SlowRegexGuard', 'test_slow_regex_guard.js'),
         ('BlockTrigger', 'test_block_trigger.js'),
         ('SelfAlerts',   'test_self_alerts.js'),
         # ESP (jedi telepathy) is plain game text the MUD left out of MIP;
