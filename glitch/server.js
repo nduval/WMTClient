@@ -674,6 +674,16 @@ function loadAndPushAuthoritativeState(ws, session) {
       // (probably loaded via the JSON safety net on this character).
       if (msg.aliases || msg.triggers || msg.tickers) {
         ws.send(JSON.stringify(msg));
+        // Echo guard (resume-echo clobber, 2026-09-12): the client's
+        // onSessionResumed handler will echo this authoritative_state right
+        // back via set_*. Record what we sent so mergeDevicePush can tell that
+        // echo apart from entities this device genuinely AUTHORED — otherwise
+        // the echo poisons the device's baseline and a later bare push
+        // "deletes" another device's bot entities (986→125 with no ENTITY_MERGE).
+        ws._echoExpected = { ts: Date.now() };
+        if (msg.aliases)  ws._echoExpected.aliases  = new Set(msg.aliases.map(e => ENTITY_MERGE_KEYS.aliases(e)));
+        if (msg.triggers) ws._echoExpected.triggers = new Set(msg.triggers.map(e => ENTITY_MERGE_KEYS.triggers(e)));
+        if (msg.tickers)  ws._echoExpected.tickers  = new Set(msg.tickers.map(e => ENTITY_MERGE_KEYS.tickers(e)));
       }
     }
   } catch (e) {
@@ -937,7 +947,33 @@ function mergeDevicePush(ws, session, table, serverList, incomingList) {
     if (incomingContent.has(key)) continue;            // same content under another id — no double-fire
     preserved.push(e);
   }
-  ws._entityBaseline[table] = { ids: incomingIds, content: incomingContent };
+  // Echo guard: entities this device is only reflecting back because the server
+  // just sent them as authoritative_state (resume) must NOT enter this device's
+  // authored-baseline. Without this, a resuming bare device echoes the full set,
+  // its baseline is credited with entities it never authored, and its next real
+  // (smaller) push "deletes" them by omission — the 2026-09-12 resume-echo
+  // clobber (elminster 986→125, no ENTITY_MERGE). Time-boxed + content-matched
+  // so a genuine load right after resume (different content) still authors
+  // normally, and it only gates AUTHORSHIP (the baseline), never the session set.
+  let baseIds = incomingIds, baseContent = incomingContent;
+  const echo = ws._echoExpected;
+  const ECHO_WINDOW_MS = 15000;
+  if (echo && echo[table] && (Date.now() - echo.ts) < ECHO_WINDOW_MS) {
+    const echoKeys = echo[table];
+    baseIds = new Set(); baseContent = new Set();
+    let excluded = 0;
+    for (const e of incomingList) {
+      const id = idOf(e); const key = contentKey(e);
+      const priorHad = baseline && ((id && baseline.ids.has(id)) || baseline.content.has(key));
+      if (echoKeys.has(key) && !priorHad) { excluded++; continue; } // echoed, not authored
+      if (id) baseIds.add(id); baseContent.add(key);
+    }
+    if (excluded > 0) {
+      writeSessionLog(session, 'entity_echo_guard', { what: table, excluded });
+      console.log(`ENTITY_ECHO_GUARD ${table} char=${session.characterId} excluded=${excluded} incoming=${incomingList.length}`);
+    }
+  }
+  ws._entityBaseline[table] = { ids: baseIds, content: baseContent };
   if (preserved.length > 0) {
     writeSessionLog(session, 'entity_merge', {
       what: table,

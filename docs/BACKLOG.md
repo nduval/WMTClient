@@ -5,6 +5,36 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 2026-08-30 (commit c2f4937) — SLOW_REGEX false-positive kill + guard blind spot
+- **Root incident:** the ReDoS guard disabled elminster's in-combat
+  `^Coff: ... Mon\(...\)` trigger on ONE 63ms wall-clock sample (02:18:01, a
+  GC/CPU blip — the pattern runs cleanly every 2s all day) → `$combat` stuck
+  off mid-celbot, out-of-combat body ran every round (study spam, $sitting
+  climbing). Same guard killed the trivially-linear "stands fast, resisting
+  your stun" trigger Aug 24 (75ms). Both re-enabled 03:11:18 via /admin/trigger.
+- **Fix A — 3-strike slow-regex disable** (server.js processTriggers): disable
+  only after 3 slow hits (>50ms) within 60s, tracked on session.loopTracker;
+  sub-threshold samples log `SLOW_REGEX_WARN` and the completed match is USED
+  (no skip — skipping let the sibling out-of-combat trigger fire instead).
+  test_line/MIP paths (no tracker) can never disable. Gate: **SlowRegexGuard**
+  (new, T1 red on pre-fix server → green).
+- **Fix B — entity_guard extractor blind spot**: triggers extractor now includes
+  `enabled` + `priority` (tickers: `enabled`) in the compared identity. Without
+  it, an enabled-ONLY admin edit looked "caught up" to the guard → cleared →
+  the browser's next bulk sync re-disabled the trigger **1s** after the admin
+  fix (observed live 02:46:06→02:46:07). Gate: EntityGuard **T6** (red→green).
+- Gate 1326/1326; deploy bridge-resumed all live sessions (elminster
+  bridgeResumed:true, zero fresh logins).
+- **✅ LIVE-VERIFIED 03:18 UTC:** next real fight (Mon(Put)) fired `#var combat on`
+  every round; last out-of-combat body on a combat line was 03:10:29 (pre-fix);
+  zero SLOW_REGEX since deploy. Remaining cosmetic: Nathan's browser holds
+  enabled=false in ITS memory until his next hard refresh — DB is protected by
+  Fix B meanwhile (guard override on his next bulk sync is gate-proven, not yet
+  observed live).
+- NOT changed: loop-detection disable (50 fires/2s) — a genuine signal, kept
+  as-is; client-side disable_trigger persistence (a 3-strike disable still
+  saves as before, intended for real ReDoS).
+
 ## SHIPPED 2026-08-09 (commits 0026dd0 + a82c2c8)
 - **Script editor CodeMirror upgrade + TinTin++ syntax highlighting.** The
   scripts-panel editor modal now lazy-loads the same vendored CM stack as the

@@ -588,6 +588,13 @@ def run_test_suites(only_scripts=None):
         # clobber). Baseline = ids the device itself pushed; first push deletes
         # nothing; content-duplicates don't double-register. Negative-controlled.
         ('MultiDeviceEntitySync', 'test_multidevice_entity_sync.js'),
+        # Resume-echo clobber (2026-09-12): a device resuming gets its full state
+        # replayed via authoritative_state and echoes it back, which used to poison
+        # its merge baseline so a later bare push "deleted" another device's bot
+        # entities (elminster 986→125, no ENTITY_MERGE). Fix: echo guard keeps
+        # echoed entities out of the device's authored-baseline. Negative-controlled
+        # (red on pre-fix server.js).
+        ('ResumeEchoClobber', 'test_resume_echo_clobber.js'),
         # PHP login flow: boots the real includes/+config/+api under `php -S`
         # (staged at /opt/wmt/phpsrc) — guards the double-login fix (single
         # session lifecycle) + login-stack smoke test. NOTE: PHP 8.3 masks the
