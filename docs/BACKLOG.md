@@ -5,6 +5,27 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 2026-09-14 (commit 2ec261e) — resume-echo multi-device clobber (the July recurrence)
+- **Root:** the 2026-07-21 mergeDevicePush fix (199daaf) did NOT cover the resume
+  path. When a 2nd device resumes, the server replays the full entity set via
+  `authoritative_state`; the client echoes it straight back, which credited that
+  device with AUTHORING entities it never created. Its next bare push then
+  deleted them by omission — elminster's aliases 986→125 with ZERO ENTITY_MERGE
+  (2026-09-12). Two-device only; single-device play was always safe.
+- **Fix:** echo guard. `loadAndPushAuthoritativeState` stamps `ws._echoExpected`
+  (content keys just sent, 15s window); `mergeDevicePush` keeps echoed entities
+  OUT of the device's authored-baseline (gates authorship only, never the session
+  set), so an echo can't license a later delete. Logs ENTITY_ECHO_GUARD.
+- **Proof:** new gate suite ResumeEchoClobber (3 tests), NEGATIVE-CONTROLLED —
+  red on HEAD server.js, green on patched; MultiDeviceEntitySync stayed 8/8.
+  Full gate 1329/1329. Prod deploy: 2 live players RESTORE_BRIDGE_RESUME, 0
+  boots/suppressions/fresh-logins; echo-guard code confirmed in /opt/wmt/server.js.
+- **NOT covered / follow-up:** this is still a containment guard on a racy design
+  (any device can win a full-state bulk replace). The durable end is per-entity
+  ownership (single-owner model). Echo window is time+content-boxed (15s) — a
+  genuine load of the SAME content within 15s of resume is treated as echo
+  (harmless: entity already exists). Cross-device explicit deletes unchanged.
+
 ## SHIPPED 2026-08-30 (commit c2f4937) — SLOW_REGEX false-positive kill + guard blind spot
 - **Root incident:** the ReDoS guard disabled elminster's in-combat
   `^Coff: ... Mon\(...\)` trigger on ONE 63ms wall-clock sample (02:18:01, a

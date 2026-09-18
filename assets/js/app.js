@@ -8344,6 +8344,67 @@ class WMTClient {
         banner.appendChild(btnWrap);
     }
 
+    // A PHP save (api/*.php) is authed by the PHP SESSION, which expires (7-day
+    // absolute; also dies when bouncing between machines). The WebSocket is authed
+    // by the 30-day TOKEN, independent of that session, and its set_triggers/
+    // set_aliases/set_tickers handlers persist to the SAME DB. So when the PHP
+    // save fails we persist over the live connection instead of dropping the edit
+    // (mimic's "saved it, reloaded, it was gone" — 2026-09-18), and queue a retry
+    // of the PHP save in case the session is cookie-recoverable.
+    _handleSaveFailure(kind, status, isAuthExpired) {
+        const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+        const wsOk = !!(this.connection && this.connection.isConnected());
+        if (wsOk) {
+            // Durable save via the token-authed WS → DB (same path a normal save
+            // syncs through). This is what actually prevents the data loss.
+            this.sendFilteredTriggersAndAliases();
+        }
+        // Queue a retry of the PHP save; the session often recovers from the
+        // 30-day cookie on a later request.
+        this._pendingSaveRetry = this._pendingSaveRetry || new Set();
+        this._pendingSaveRetry.add(kind);
+        this._scheduleSaveRetry();
+        if (wsOk) {
+            this.showSaveError(
+                `Your web login expired, but your ${kind} change was saved over the live game connection ` +
+                `(it will persist). Log in again to re-sync the web session.`, isAuthExpired);
+        } else {
+            this.showSaveError(
+                `${label} NOT saved (${status || 'offline'}) — the live connection is also down, so this ` +
+                `change exists only in memory. Reconnect or log in again to avoid losing it.`, isAuthExpired);
+        }
+    }
+
+    _scheduleSaveRetry() {
+        if (this._saveRetryTimer) return;               // one timer; reschedules only while failures persist
+        this._saveRetryAttempts = (this._saveRetryAttempts || 0);
+        if (this._saveRetryAttempts >= 5) return;       // give up quietly after ~5 tries; banner stays up
+        this._saveRetryTimer = setTimeout(async () => {
+            this._saveRetryTimer = null;
+            this._saveRetryAttempts++;
+            await this._flushSaveRetries();
+        }, 8000);
+    }
+
+    async _flushSaveRetries() {
+        if (!this._pendingSaveRetry || this._pendingSaveRetry.size === 0) return;
+        for (const kind of Array.from(this._pendingSaveRetry)) {
+            if (kind === 'triggers') await this.saveTriggers();
+            else if (kind === 'aliases') await this.saveAliases();
+            else if (kind === 'tickers') await this.saveTickers();
+        }
+    }
+
+    // Called on a successful PHP save: the session is healthy again for this kind.
+    _clearSaveRetry(kind) {
+        if (this._pendingSaveRetry) this._pendingSaveRetry.delete(kind);
+        if (!this._pendingSaveRetry || this._pendingSaveRetry.size === 0) {
+            this._saveRetryAttempts = 0;
+            if (this._saveRetryTimer) { clearTimeout(this._saveRetryTimer); this._saveRetryTimer = null; }
+            document.getElementById('save-error-banner')?.remove();
+        }
+    }
+
     async saveTriggers() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
@@ -8353,9 +8414,10 @@ class WMTClient {
                 body: JSON.stringify({ triggers: this.triggers })
             });
             if (!res.ok) {
-                this.showSaveError(`Triggers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`, res.status === 401);
+                this._handleSaveFailure('triggers', res.status, res.status === 401);
                 return;
             }
+            this._clearSaveRetry('triggers');
             this.sendFilteredTriggersAndAliases();
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -8363,7 +8425,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save triggers:', e);
-            this.showSaveError('Triggers NOT saved — network error. Your changes exist only in memory and will be lost if you disconnect.');
+            this._handleSaveFailure('triggers', 0, false);
         }
     }
 
@@ -8895,9 +8957,10 @@ class WMTClient {
                 body: JSON.stringify({ aliases: this.aliases })
             });
             if (!res.ok) {
-                this.showSaveError(`Aliases NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`, res.status === 401);
+                this._handleSaveFailure('aliases', res.status, res.status === 401);
                 return;
             }
+            this._clearSaveRetry('aliases');
             this.sendFilteredTriggersAndAliases();
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -8905,7 +8968,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save aliases:', e);
-            this.showSaveError('Aliases NOT saved — network error. Your changes exist only in memory and will be lost if you disconnect.');
+            this._handleSaveFailure('aliases', 0, false);
         }
     }
 
@@ -8918,9 +8981,10 @@ class WMTClient {
                 body: JSON.stringify({ tickers: this.tickers })
             });
             if (!res.ok) {
-                this.showSaveError(`Tickers NOT saved (${res.status}) — your session may have expired. Log in again to avoid losing changes.`, res.status === 401);
+                this._handleSaveFailure('tickers', res.status, res.status === 401);
                 return;
             }
+            this._clearSaveRetry('tickers');
             this.sendFilteredTriggersAndAliases();
             // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
@@ -8928,7 +8992,7 @@ class WMTClient {
             }
         } catch (e) {
             console.error('Failed to save tickers:', e);
-            this.showSaveError('Tickers NOT saved — network error. Your changes exist only in memory and will be lost if you disconnect.');
+            this._handleSaveFailure('tickers', 0, false);
         }
     }
 
