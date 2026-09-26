@@ -166,6 +166,39 @@ async function main() {
     if (idKept && s1StillValid) ok('T8: same-user re-login keeps the id + original cookie still authenticates');
     else bad('T8: idempotent re-login', `idKept=${idKept} (s1=${s1} s2=${s2}), s1StillValid=${s1StillValid}`);
 
+    // T9: SLIDING COOKIE EXPIRY (2026-09-26). PHP only emits the session cookie when it
+    // issues the id, with expires frozen at login+7d — so every browser dropped it exactly
+    // 168h after login (IONOS auth.log: 23 sessions/11 users ended at 168.0h, none longer,
+    // server file still alive). refreshSessionCookie() re-sends the SAME id with a fresh
+    // expiry on authed requests, throttled to once/hour via $_SESSION._cookie_issued_at.
+    //   T9a: right after login the throttle is armed → an authed request emits NO cookie
+    //   T9b: backdate the stamp in the session file → next authed request re-issues the
+    //        same id with expires ≈ now+7d (and no other wmt_session cookie)
+    //   T9c: the refresh re-arms the throttle → the following request emits nothing again
+    // Negative control: on the old code T9b fails (no Set-Cookie is ever emitted).
+    const jar9 = {};
+    await login(jar9);
+    const sid9 = jar9.wmt_session;
+    const sessCookies = (r) => (r.headers['set-cookie'] || []).filter(l => /^wmt_session=/.test(l));
+    const c9a = await check(jar9);
+    if (/"logged_in":true/.test(c9a.body) && sessCookies(c9a).length === 0) ok('T9a: fresh login → authed request emits no session cookie (throttled)');
+    else bad('T9a: throttle armed after login', JSON.stringify(sessCookies(c9a)));
+    const sessFile = `${ROOT}/data/sessions/sess_${sid9}`;
+    let raw = fs.readFileSync(sessFile, 'latin1');
+    if (!/_cookie_issued_at\|i:\d+;/.test(raw)) bad('T9: login stamps _cookie_issued_at', raw.slice(0, 200));
+    raw = raw.replace(/_cookie_issued_at\|i:\d+;/, '_cookie_issued_at|i:1;');
+    fs.writeFileSync(sessFile, raw, 'latin1');
+    const c9b = await check(jar9);
+    const sc9b = sessCookies(c9b);
+    const m9 = sc9b.length === 1 ? /^wmt_session=([^;]*);.*expires=([^;]+)/i.exec(sc9b[0]) : null;
+    const expMs = m9 ? Date.parse(m9[2]) : NaN;
+    const daysAhead = (expMs - Date.now()) / 86400000;
+    if (m9 && m9[1] === sid9 && daysAhead > 6.9 && daysAhead < 7.1 && /"logged_in":true/.test(c9b.body)) ok(`T9b: stale stamp → same id re-issued with expiry ${daysAhead.toFixed(2)}d ahead`);
+    else bad('T9b: sliding refresh', `cookies=${JSON.stringify(sc9b)} sameId=${m9 && m9[1] === sid9} daysAhead=${daysAhead}`);
+    const c9c = await check(jar9);
+    if (sessCookies(c9c).length === 0 && /"logged_in":true/.test(c9c.body)) ok('T9c: refresh re-arms the throttle (next request emits nothing)');
+    else bad('T9c: throttle re-armed', JSON.stringify(sessCookies(c9c)));
+
     // T5: loop with a persistent jar — every login sticks
     let stuck = 0; const N = 20;
     for (let i = 0; i < N; i++) { await login(jar); const c = await check(jar); if (/"logged_in":true/.test(c.body)) stuck++; }

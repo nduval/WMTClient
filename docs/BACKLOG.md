@@ -5,6 +5,27 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## OPEN 2026-09-26 — PHP session dies at exactly 7 days (cookie cliff) — ROOT PROVEN, FIX NOT BUILT
+- **Root (auth.log 08-22→09-26 + session files):** the PHP session cookie is issued once at
+  login with `lifetime = SESSION_LIFETIME` (7d, includes/auth.php initSession) and never
+  re-sent, so it expires in the browser 168h after login regardless of activity. 124 authed
+  sessions >24h in the log: 23 (11 users) end in the 167.5–168.5h band, max span 168.0h.
+  Minutes after each cliff the same character's next API call has `cookie=NOT SET` while
+  `data/sessions/sess_<id>` still exists with user_id. Nathan's 09-25 evening "session died"
+  was two of his sessions (509078a1, 297181ab) hitting 168h.
+- [ ] **Fix:** sliding expiry — re-issue the session cookie with a fresh 7d expiry on authed
+      requests, throttled (once/hour stamp in $_SESSION), NOT on the login response (Set-Cookie
+      churn fed the 2026-06-27 login race). php -l on sandbox first (site-wide include);
+      PhpLogin gate + a new test asserting Set-Cookie refresh after the throttle window.
+- [ ] **Separate, unproven:** 2026-09-26 09:08 CDT loss of a 39h-old session (fa5b029e alive
+      server-side, browser sent no cookie after PC wake). Not the cliff. Needs capture.
+- [x] (shipped e4cccf4, 2026-09-26 09:16 CDT, client-only) `cmdRead` 401-after-retry →
+      `logout()` → login screen instead of the stranded "Failed to read script startup.tin".
+- [ ] Same 401→login treatment for `loadSettings()` (app.js:392) — still fails silently; a
+      dead stale tab re-fires the 7-call list burst every 10–25 min.
+- [ ] `tests/sandbox/test_session_recovery.js` (T1/T2 pass, T3 red = remember-me gap) is
+      untracked — `git add` + decide whether T3 stays red-by-design or a recovery path ships.
+
 ## SHIPPED 2026-09-14 (commit 2ec261e) — resume-echo multi-device clobber (the July recurrence)
 - **Root:** the 2026-07-21 mergeDevicePush fix (199daaf) did NOT cover the resume
   path. When a 2nd device resumes, the server replays the full entity set via

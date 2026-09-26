@@ -1704,6 +1704,13 @@ function requireAuth(): void {
             exit;
         }
     }
+
+    // Authenticated and allowed: slide the session cookie's expiry (throttled, see
+    // refreshSessionCookie in auth.php) so an active player's cookie never hits the
+    // 7-day cliff mid-session.
+    if (function_exists('refreshSessionCookie')) {
+        refreshSessionCookie();
+    }
 }
 
 /**

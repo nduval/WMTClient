@@ -647,6 +647,54 @@ function initSession(): void {
     }
 }
 
+// How often an authenticated request re-issues the session cookie (sliding expiry).
+// Throttled so we don't add Set-Cookie churn to every API call (churn helped the
+// 2026-06-27 login-cookie race) — once an hour is plenty against a 7-day lifetime.
+if (!defined('SESSION_COOKIE_REFRESH_INTERVAL')) {
+    define('SESSION_COOKIE_REFRESH_INTERVAL', 3600);
+}
+
+/**
+ * Sliding session-cookie expiry (2026-09-26).
+ *
+ * PHP emits the session Set-Cookie ONLY when it issues/regenerates the id, with
+ * `expires = now + SESSION_LIFETIME` frozen at that moment. Nothing ever re-sent it, so
+ * every browser dropped the cookie EXACTLY 7 days after login regardless of activity:
+ * IONOS auth.log 2026-08-22→09-26 — of 124 authed sessions >24h, 23 (11 users) ended
+ * in the 167.5–168.5h band and the longest ever seen was 168.0h; minutes after each
+ * cliff the same character's next API call arrived `cookie=NOT SET` while its
+ * data/sessions/sess_<id> file was still alive with user_id. That was the weekly
+ * "session expired / Failed to read startup.tin, login required" for active players.
+ *
+ * Fix: on an AUTHENTICATED request, re-send the same id with a fresh SESSION_LIFETIME
+ * expiry, at most once per SESSION_COOKIE_REFRESH_INTERVAL (stamp kept in the session).
+ * Never called on the login response itself (startUserSession stamps the time instead —
+ * the regenerate already emits the cookie there, and a 2nd Set-Cookie is the churn the
+ * PhpLogin T4/T6 guards exist for). Same id, same params as initSession(): the browser
+ * just replaces the cookie's expiry. Anonymous / dead sessions are never refreshed.
+ */
+function refreshSessionCookie(): void {
+    if (session_status() !== PHP_SESSION_ACTIVE) return;
+    if (!isset($_SESSION['user_id'])) return;
+    if (headers_sent()) return;
+
+    $now = time();
+    $issuedAt = (int)($_SESSION['_cookie_issued_at'] ?? 0);
+    if ($issuedAt > 0 && ($now - $issuedAt) < SESSION_COOKIE_REFRESH_INTERVAL) return;
+
+    $ok = setcookie(session_name(), session_id(), [
+        'expires' => $now + SESSION_LIFETIME,
+        'path' => '/',
+        'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
+        'httponly' => true,
+        'samesite' => 'Lax'
+    ]);
+    if ($ok) {
+        $_SESSION['_cookie_issued_at'] = $now;
+        authLog("session cookie REFRESHED: id=" . session_id() . " (issued " . ($issuedAt ? ($now - $issuedAt) . "s ago" : "never") . ")");
+    }
+}
+
 /**
  * Start user session
  */
@@ -706,6 +754,9 @@ function startUserSession(string $userId, string $username): void {
     $_SESSION['user_id'] = $userId;
     $_SESSION['username'] = $username;
     $_SESSION['logged_in_at'] = time();
+    // The login response emits the session cookie itself (regenerate) — start the
+    // sliding-expiry clock here so refreshSessionCookie() stays quiet for an hour.
+    $_SESSION['_cookie_issued_at'] = time();
 
     authLog("Session data set: user_id={$_SESSION['user_id']}, username={$_SESSION['username']}");
 
@@ -791,7 +842,11 @@ function endUserSession(): void {
  */
 function isLoggedIn(): bool {
     initSession();
-    return isset($_SESSION['user_id']);
+    if (isset($_SESSION['user_id'])) {
+        refreshSessionCookie();
+        return true;
+    }
+    return false;
 }
 
 /**
