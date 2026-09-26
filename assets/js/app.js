@@ -12792,6 +12792,19 @@ class WMTClient {
             }
             const data = await res.json();
 
+            // Auth failure after the one retry = the session is dead (the
+            // laptop-sleep / reconnect "Failed to read script startup.tin,
+            // login required" jank). Don't strand the user with a red line that
+            // needs a manual hard refresh — route straight to the login prompt.
+            // logout() clears the dead session + cookie and navigates to
+            // index.php (same clean state a hard refresh reaches). Gated to AUTH
+            // failures so a genuinely missing file still shows a normal error.
+            if (res.status === 401 || /Authentication required|login required/i.test(data.error || '')) {
+                this.appendOutput('Session expired — taking you to the login screen…', 'error');
+                this.logout();
+                return;
+            }
+
             if (!data.success) {
                 const fromMsg = calledFrom ? ` (from ${calledFrom})` : '';
                 this.appendOutput(`Failed to read script "${filename}"${fromMsg}: ${data.error}`, 'error');
