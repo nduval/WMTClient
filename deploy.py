@@ -480,7 +480,7 @@ CLIENT_SUITE_SCRIPTS = {
 }
 # Suites that exercise PHP (PhpLogin boots php -S over includes/+config/+api;
 # ScriptBackup is a pure PHP CLI test of functions.php). Relevant to a PHP change.
-PHP_SUITE_SCRIPTS = {'test_php_login.js', 'test_script_backup.php'}
+PHP_SUITE_SCRIPTS = {'test_php_login.js', 'test_script_backup.php', 'test_discord_webhook_url.php'}
 
 
 def relevant_test_scripts(files):
@@ -528,6 +528,11 @@ def run_test_suites(only_scripts=None):
         # SLOW_REGEX must not disable a trigger on ONE slow sample (GC/CPU blip);
         # 3 strikes in 60s still disables (2026-08-30 combat-trigger kill).
         ('SlowRegexGuard', 'test_slow_regex_guard.js'),
+        # Server-side #show/#showme is trigger-checked (tt++ do_showme) — proves a trigger's
+        # #show still advances a bot chain with NO browser attached (the 2026-10-13 celbot
+        # stall), fires exactly once when a browser IS attached, keeps the split-row form
+        # browser-side, keeps the typed test_line path, and survives a self-recursive #show.
+        ('ShowmeServerTriggers', 'test_showme_server_triggers.js'),
         ('BlockTrigger', 'test_block_trigger.js'),
         ('SelfAlerts',   'test_self_alerts.js'),
         # ESP (jedi telepathy) is plain game text the MUD left out of MIP;
@@ -604,6 +609,10 @@ def run_test_suites(only_scripts=None):
         # backup-artifact detection + storage-count exclusion. Guards the
         # 'twist stone' version-history feature and the quota-wedge fix.
         ('ScriptBackup', 'test_script_backup.php'),
+        # Pure PHP CLI test of includes/discord_webhook.php: accepted forms (incl.
+        # forum ?thread_id=), refused forms, and "refused ≠ cleared" (2026-10-13:
+        # 21 of mimic's forum webhooks were silently blanked by the old regex).
+        ('DiscordWebhookUrl', 'test_discord_webhook_url.php'),
         # Guild-file editor: MIP download (CDF/CCF/CEF) → browser, and raw paced
         # 3ksendfile upload; round-trips a file with ;/#/$ to prove raw passthrough.
         # Needs the extended mock-mud.js (CDF/CCF/CEF + 3ksendfile + __setmip).

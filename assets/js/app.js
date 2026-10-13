@@ -2576,12 +2576,44 @@ class WMTClient {
                 this.appendOutput(`Failed to save channel preferences (${res.status}) — your session may have expired. Please log in again.`, 'error');
                 return;
             }
+            // The validator may have REFUSED a webhook URL (kept the stored one) —
+            // warn loudly and resync memory BEFORE pushing prefs to the live server.
+            let result = null;
+            try { result = await res.json(); } catch (e) { /* non-JSON body: treat as no rejections */ }
+            this._applyWebhookRejections(result);
             // Also send to server for server-side notifications (works when browser closed)
             this.sendDiscordPrefsToServer();
         } catch (e) {
             console.error('Failed to save channel preferences:', e);
             this.appendOutput('Failed to save channel preferences — network error.', 'error');
         }
+    }
+
+    // api/preferences.php refuses webhook URLs that aren't
+    //   https://discord.com/api/webhooks/<id>/<token>[?thread_id=<forum post id>]
+    // and keeps the previously stored URL instead of blanking it. Before 2026-10-13 a
+    // refusal was SILENT and stored '' — the user's in-memory copy (and the live
+    // wmt-server, which only checks the prefix) kept the bad URL, so Discord "worked"
+    // until the next reload wiped it. Now: tell the user, and overwrite the in-memory
+    // value + the open modal row with what the DB actually kept, so every copy agrees.
+    _applyWebhookRejections(result) {
+        const rejected = result?.rejected?.webhooks;
+        const rejectedGlobal = !!result?.rejected?.discordWebhookUrl;
+        if ((!Array.isArray(rejected) || rejected.length === 0) && !rejectedGlobal) return;
+        const saved = result?.preferences?.channelPrefs || {};
+        const list = Array.isArray(rejected) ? rejected : [];
+        for (const ch of list) {
+            const kept = (saved[ch] && typeof saved[ch].webhookUrl === 'string') ? saved[ch].webhookUrl : '';
+            if (this.channelPrefs[ch]) this.channelPrefs[ch].webhookUrl = kept;
+            const sel = (window.CSS && CSS.escape) ? CSS.escape(ch) : ch;
+            const input = document.querySelector(`#channel-list .channel-row[data-channel="${sel}"] .channel-webhook`);
+            if (input) input.value = kept;
+        }
+        const what = list.length ? `channel${list.length > 1 ? 's' : ''} ${list.join(', ')}` : 'the global Discord webhook';
+        this.appendOutput(
+            `Webhook URL REJECTED for ${what} — NOT saved; the previous URL (if any) was kept. ` +
+            `Accepted form: https://discord.com/api/webhooks/<id>/<token> — for a forum channel add ?thread_id=<post id>. ` +
+            `No spaces or anything else after the token.`, 'error');
     }
 
     // Open channel settings modal
@@ -9518,6 +9550,12 @@ class WMTClient {
                 }
                 return;
             }
+
+            // This save carries channelPrefs too — surface any refused webhook URL and
+            // resync memory before pushing prefs to the live server.
+            let saveResult = null;
+            try { saveResult = await res.json(); } catch (e) { /* non-JSON body */ }
+            this._applyWebhookRejections(saveResult);
 
             this.applyPreferences();
             // Re-sync server-side notification prefs so the suppressSelfAlerts toggle

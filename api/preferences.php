@@ -5,6 +5,7 @@
 
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/discord_webhook.php';
 
 $action = $_GET['action'] ?? '';
 
@@ -134,6 +135,12 @@ switch ($action) {
 
         // Validate and sanitize preferences
         $validated = [];
+        // Webhook URLs the validator REFUSED. A refused URL must never be stored as ''
+        // over the user's existing one (2026-10-13: 21 forum-channel webhooks were
+        // silently blanked that way). They are restored from the DB blob below and
+        // reported back to the client, which warns the user.
+        $rejectedWebhooks = [];
+        $rejectedGlobalWebhook = false;
 
         // Font family (whitelist allowed values)
         $allowedFonts = [
@@ -274,12 +281,15 @@ switch ($action) {
                     'iftttEvent' => ''
                 ];
 
-                // Validate webhook URL if provided
+                // Validate webhook URL if provided (includes/discord_webhook.php — accepts the
+                // forum-channel form …/<token>?thread_id=<post id>). Refused → keep the
+                // stored URL (filled in after the DB fetch below) and report the channel.
                 if (isset($prefs['webhookUrl']) && is_string($prefs['webhookUrl'])) {
-                    $url = trim($prefs['webhookUrl']);
-                    if ($url === '' ||
-                        preg_match('#^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$#', $url)) {
-                        $channelData['webhookUrl'] = $url;
+                    $check = wmtValidateDiscordWebhookUrl($prefs['webhookUrl']);
+                    if ($check['ok']) {
+                        $channelData['webhookUrl'] = $check['url'];
+                    } else {
+                        $rejectedWebhooks[] = $channel;
                     }
                 }
 
@@ -312,13 +322,14 @@ switch ($action) {
             $validated['channelPrefs'] = $validatedChannels;
         }
 
-        // Discord webhook URL (validate format)
+        // Discord webhook URL (validate format — same rules as per-channel webhooks).
+        // Refused → leave the stored value alone (not in $validated) and report it.
         if (isset($preferences['discordWebhookUrl'])) {
-            $url = trim($preferences['discordWebhookUrl']);
-            // Only allow Discord webhook URLs or empty string
-            if ($url === '' ||
-                preg_match('#^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9_-]+$#', $url)) {
-                $validated['discordWebhookUrl'] = $url;
+            $check = wmtValidateDiscordWebhookUrl($preferences['discordWebhookUrl']);
+            if ($check['ok']) {
+                $validated['discordWebhookUrl'] = $check['url'];
+            } else {
+                $rejectedGlobalWebhook = true;
             }
         }
 
@@ -400,10 +411,29 @@ switch ($action) {
             errorResponse('Preferences temporarily unavailable — not saved', 503);
         }
         $existing = (isset($resp['preferences']) && is_array($resp['preferences'])) ? $resp['preferences'] : [];
+
+        // Refused webhook URLs: keep whatever the DB already holds for that channel
+        // ('' if it never had one). Never destroy a working URL on a validation miss.
+        if (!empty($rejectedWebhooks) && isset($validated['channelPrefs'])) {
+            foreach ($rejectedWebhooks as $ch) {
+                if (!isset($validated['channelPrefs'][$ch])) continue;
+                $kept = $existing['channelPrefs'][$ch]['webhookUrl'] ?? '';
+                $validated['channelPrefs'][$ch]['webhookUrl'] = is_string($kept) ? $kept : '';
+            }
+        }
+
         $merged = array_merge($existing, $validated);
 
         syncDataToDb(['type' => 'preferences', 'character_id' => $characterId, 'data' => $merged]);
-        successResponse(['preferences' => $merged]);
+        // `rejected` lets the client warn the user and resync its in-memory copy to what
+        // was actually stored, so the live wmt-server never runs on a URL the DB refused.
+        successResponse([
+            'preferences' => $merged,
+            'rejected' => [
+                'webhooks' => array_values(array_unique($rejectedWebhooks)),
+                'discordWebhookUrl' => $rejectedGlobalWebhook,
+            ],
+        ]);
         break;
 
     case 'reset':

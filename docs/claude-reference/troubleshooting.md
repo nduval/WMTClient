@@ -221,6 +221,36 @@ Produces: `HP: 1832[-160]` — `${hpmax}` resolves to `1832`, brackets are liter
 
 **Solution:** Loop detection tracks fire count per trigger within 2-second window. Threshold of 50 fires auto-disables trigger and notifies user.
 
+### Bot stalls after a kill when no browser is attached — `#show` chain dropped (fixed 2026-10-13)
+
+**Problem:** elminster's celbot stopped after `Basilisk dealt the killing blow` at
+19:25:40Z on 2026-10-13 and sat idle for two hours. Same kill sequence had advanced
+fine ten minutes earlier. Nathan's read: "connected from my phone and my bot died".
+
+**Root cause (JSONL + journal + code):** the post-kill loot answer varies. When the
+MUD says `There is no coins here.` the `coins here.` trigger schedules
+`#delay {celdelay} {k celestial}` directly. When it says `You cannot take that.`
+the script relies on tt++ semantics: that trigger runs `#show coins here.`, whose
+text is trigger-checked and fires the same `coins here.` trigger. The server did not
+do that itself: it forwarded the `#show` to ONE browser as a `client_command` and
+waited for the browser to bounce it back as `test_line`. At 19:25 the only device
+(the phone) had backgrounded three minutes earlier, so the `#show` was buffered for
+nobody and the chain died. Every post-kill `You cannot take that.` on 10-09..10-13
+with a browser attached advanced in 10s; the two with none (10-07 22:59Z, 10-13
+19:25Z) stalled. Zero `coins here.` trigger records ever appeared in JSONL because
+the match happened on the `test_line` path, which did not log.
+
+**Fix:** `serverShowme()` in `glitch/server.js` — server-originated `#show`/`#showme`
+is matched, logged (`src: 'showme'`), displayed to every device and executed
+in-process, exactly as tt++ `do_showme` does. All executors funnel through
+`forwardHashCommand()`. Gate: `ShowmeServerTriggers`. Side effect, also tt++-faithful:
+a gag whose pattern matches your own `#showme` text now suppresses it.
+
+**Lesson:** "the phone kills my bot" was literally true but indirect: the phone
+becomes the only attached device, then backgrounds, and any script step that
+needed a browser round-trip dies. Grep the JSONL for the LAST bot step and diff the
+end of that fight against a fight that advanced; the fork was one MUD reply.
+
 ### Triggers not firing on MUD text but working with #showme (v2.6.7+)
 
 **Problem:** A trigger like `tells you` fires when tested with `#showme` but not on actual MUD output showing the same visible text.
@@ -234,6 +264,32 @@ const matchLine = stripAnsi(line);
 ```
 
 **Lesson:** Always match triggers against stripped text. TinTin++ does this internally.
+
+### Channel webhook "disappears" after a save — URL rejected by the save validator (fixed 2026-10-13)
+
+**Symptom (mimic, 2026-10-13):** she put Discord *forum-channel* webhooks on 21 ChatMon channels
+(all `bchat *`, nine knight channels, soul, tell). Discord kept working for hours, then after a
+reload every one of those channels had an empty webhook URL and the Discord checkbox still on.
+
+**Root cause (prod `change_log` + journal):** a forum-channel webhook URL is
+`https://discord.com/api/webhooks/<id>/<token>?thread_id=<post id>`. The `api/preferences.php`
+save regex required the URL to END at the token, so each save stored `''` for those channels —
+silently, no error. Three validators disagreed: the save path (strict), the WebSocket
+`set_discord_prefs` handler (prefix only) and `api/discord_proxy.php` (prefix only). The browser
+pushed the same URLs to the live server, which posted from memory with zero errors
+(`DISCORD_SEND` 14:02→21:38Z) — "initially working". The next reconnect re-pulled prefs from the
+DB (`loadSettings` on `session_resumed`), pushed the blanked set, and Discord died.
+
+**Fix:** `includes/discord_webhook.php` (`wmtValidateDiscordWebhookUrl`, not site-wide included)
+is the one definition: accepts the plain form and `?thread_id=<digits>`, strips NBSP/zero-width/
+BOM paste junk. `preferences.php` now keeps the STORED URL when a submitted one is refused and
+returns `rejected.webhooks[]`; `app.js _applyWebhookRejections()` prints an error naming the
+channels and the accepted form, and resyncs memory + the modal row before the WS push.
+Gate: `DiscordWebhookUrl` (`tests/sandbox/test_discord_webhook_url.php`).
+
+**How to spot it:** `change_log` rows for `preferences` where `channelPrefs.<ch>.webhookUrl`
+goes `<url>` → `""` while `discord` stays `true`, paired with `DISCORD_PREFS_SET webhookCount`
+NOT dropping at the same second. Old URLs are recoverable from the row's `old_data`.
 
 ### Discord webhooks silently failing when multiple webhooks fire (v2.6.7+)
 

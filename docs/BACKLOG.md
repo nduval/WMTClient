@@ -5,7 +5,62 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
-## OPEN 2026-09-26 — PHP session dies at exactly 7 days (cookie cliff) — ROOT PROVEN, FIX NOT BUILT
+## SHIPPED 2026-10-13 (IONOS-only, no wmt-server restart) — Discord webhook URL silently blanked on save (mimic, 21 forum-channel webhooks)
+- **Root (prod change_log + journal, 2026-10-13):** mimic re-pointed 21 channels (all `bchat *`,
+  9 knight channels, soul, tell) at Discord FORUM-channel webhooks = `…/<token>?thread_id=<post>`.
+  `api/preferences.php` save regex required the URL to END at the token → stored `''` for each,
+  SILENTLY (13:51–14:02Z, 4 modal saves). The live wmt-server (prefix check only) kept the URLs
+  in memory and posted fine all afternoon (DISCORD_SEND, 0 errors) → "initially worked"; the
+  21:38Z reconnect reloaded prefs from the DB and Discord died on those channels. NOT the
+  locrian switch (22:53Z) — that's just when she looked. The typed URLs were not captured
+  anywhere server-side (JSONL/persist/proxy don't log them).
+- [x] NEW `includes/discord_webhook.php` (NOT site-wide included): one validator, accepts
+      `?thread_id=<digits>`, strips NBSP/ZWSP/BOM paste junk. `api/preferences.php` uses it for
+      per-channel + global webhook; a REFUSED URL now keeps the stored one (never `''`) and the
+      save response carries `rejected.webhooks[]` / `rejected.discordWebhookUrl`.
+- [x] `assets/js/app.js` `_applyWebhookRejections()`: error line naming the channels + accepted
+      form, resyncs in-memory `channelPrefs` and the open modal row to what the DB kept BEFORE
+      pushing to the WS server — all three copies agree. Called from saveChannelPrefs +
+      savePreferences.
+- [x] Gate: NEW `DiscordWebhookUrl` (`tests/sandbox/test_discord_webhook_url.php`, PHP CLI) 22/22;
+      registered in deploy.py PHP_SUITE_SCRIPTS. Lint + `node --check` on sandbox.
+- [ ] ⏳ LIVE CONFIRM: mimic re-enters the forum URLs → change_log row shows `?thread_id=` stored
+      (not `''`) + DISCORD_SEND on bchat/knight/soul/tell after her next reload.
+- NOT covered: no e2e test of the save path (needs a PHP session + Lightsail; PhpLogin harness
+  doesn't reach `/admin/preferences`); `api/export.php` import path untouched (doesn't validate
+  webhooks); WS `set_discord_prefs` still prefix-only (client resync makes that moot — no restart).
+  Old 21 URLs remain recoverable from change_log id 579669 if she ever wants them back.
+
+## BUILT + GATED 2026-10-13 — ⏳ DEPLOY PENDING NATHAN'S OK — bot death on phone = `#show` browser hop
+- **Root (prod JSONL 2026-10-13 + journal + code):** a server-side trigger's `#show`/`#showme`
+  was forwarded to ONE browser as a `client_command` and only trigger-checked when that
+  browser bounced it back as `test_line`. With ZERO browsers attached (phone app
+  backgrounded 19:20:39Z, next attach 19:37; none at all 19:55→21:36) the `#show` sat in the
+  replay buffer and the chain died. celbot: `Basilisk dealt the killing blow` 19:25:40Z →
+  MUD said `You cannot take that.` → `#show coins here.` → the `coins here.` trigger
+  (`#delay {celdelay} {k celestial}`) never fired → last step celstep148, idle until 21:37.
+  Every post-kill `You cannot take that.` 10-09..10-13 WITH a browser advanced in 10s.
+  tt++ `src/show.c do_showme` checks triggers on the text itself — WMT now does the same.
+- [x] `glitch/server.js`: `serverShowme()` / `forwardHashCommand()` / `executeTriggerResults()`;
+      all 10 executor forward sites routed through `forwardHashCommand`; test_line handler
+      uses the shared executor; row form `#show {x} {row}` still browser-side; depth cap 20.
+- [x] Gate: NEW `ShowmeServerTriggers` (`tests/sandbox/test_showme_server_triggers.js`,
+      T1 = detached-browser pivot) 5/5; Triggers T15/T26 rewritten to tt++ semantics;
+      VarSubst harness reads mud lines. Full gate 1336/1337 → the 1 was the VarSubst harness
+      read, fixed and re-run 7/7.
+- [x] Docs: troubleshooting.md (Trigger Issues), architecture.md (#showme section).
+- [ ] ⏳ `python deploy.py all` — restarts wmt-server during Nathan's live session; WAITING for OK.
+- [ ] ⏳ Live confirm after deploy: JSONL shows `"type":"trigger"...,"src":"showme"` records
+      for `coins here.`, and a post-kill `You cannot take that.` with no browser attached
+      still advances (celstep continues).
+- [ ] Behaviour note to watch: a gag matching your own `#showme` text now suppresses it
+      (tt++-faithful); a trigger's `#showme` fires matching actions exactly once (was once
+      per attached-browser bounce).
+- [ ] Not verified: which device held tokens 246df7dd / 16308bda (auth.log not pulled);
+      the 10-07 22:59Z stall's browser state (journal expired). Prod `/tmp/capture_phone.*`
+      from 09-28 still not cleaned (remote write denied this session).
+
+## SHIPPED 2026-09-26 (commit 63c2ebf) — PHP session died at exactly 7 days (cookie cliff)
 - **Root (auth.log 08-22→09-26 + session files):** the PHP session cookie is issued once at
   login with `lifetime = SESSION_LIFETIME` (7d, includes/auth.php initSession) and never
   re-sent, so it expires in the browser 168h after login regardless of activity. 124 authed
@@ -13,10 +68,17 @@
   Minutes after each cliff the same character's next API call has `cookie=NOT SET` while
   `data/sessions/sess_<id>` still exists with user_id. Nathan's 09-25 evening "session died"
   was two of his sessions (509078a1, 297181ab) hitting 168h.
-- [ ] **Fix:** sliding expiry — re-issue the session cookie with a fresh 7d expiry on authed
-      requests, throttled (once/hour stamp in $_SESSION), NOT on the login response (Set-Cookie
-      churn fed the 2026-06-27 login race). php -l on sandbox first (site-wide include);
-      PhpLogin gate + a new test asserting Set-Cookie refresh after the throttle window.
+- [x] **Fix (63c2ebf, deployed ionos 12:20 CDT, PHP-only, no wmt-server restart):**
+      `refreshSessionCookie()` (includes/auth.php) re-issues the SAME session id with a fresh
+      7d expiry on authed requests, throttled once/hour via `$_SESSION['_cookie_issued_at']`
+      (stamped at login so the login response emits no 2nd cookie). Called from requireAuth
+      (functions.php) and isLoggedIn. Logs `session cookie REFRESHED`. Sessions that predate
+      the deploy have no stamp → refreshed on their next authed request.
+- [x] **Proof:** PhpLogin T9a/b/c — NEGATIVE-CONTROLLED on the sandbox (old phpsrc: T9b
+      fails "cookies=[]"; patched: 11/11). Gate 124/124. Deployed files verified on IONOS;
+      index.php / app.php / api check all 200 after the site-wide include change.
+- [ ] ⏳ CONFIRM live: auth.log shows `session cookie REFRESHED` lines, and no Nathan
+      session ends at the 168.0h mark after 2026-10-03.
 - [ ] **Separate, unproven:** 2026-09-26 09:08 CDT loss of a 39h-old session (fa5b029e alive
       server-side, browser sent no cookie after PC wake). Not the cliff. Needs capture.
 - [x] (shipped e4cccf4, 2026-09-26 09:16 CDT, client-only) `cmdRead` 401-after-retry →
