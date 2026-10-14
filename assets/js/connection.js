@@ -247,16 +247,18 @@ class MudConnection {
         return this.send('command', { command, raw });
     }
 
-    setTriggers(triggers) {
-        return this.send('set_triggers', { triggers });
+    // `removed` (optional): ids the user deliberately deleted since the last push —
+    // the server drops them regardless of which device authored them (2026-10-14).
+    setTriggers(triggers, removed) {
+        return this.send('set_triggers', removed && removed.length ? { triggers, removed } : { triggers });
     }
 
-    setAliases(aliases) {
-        return this.send('set_aliases', { aliases });
+    setAliases(aliases, removed) {
+        return this.send('set_aliases', removed && removed.length ? { aliases, removed } : { aliases });
     }
 
-    setTickers(tickers) {
-        return this.send('set_tickers', { tickers });
+    setTickers(tickers, removed) {
+        return this.send('set_tickers', removed && removed.length ? { tickers, removed } : { tickers });
     }
 
     setVariables(variables) {

@@ -760,9 +760,11 @@ class WMTClient {
 
     // Send filtered triggers and aliases to server
     sendFilteredTriggersAndAliases() {
-        this.connection.setTriggers(this.getFilteredTriggers());
-        this.connection.setAliases(this.getFilteredAliases());
-        this.connection.setTickers(this.getFilteredTickers());
+        // Deliberate deletes ride along as `removed` ids (see _noteRemoved); kept
+        // queued if the socket is down so they land on the next successful push.
+        if (this.connection.setTriggers(this.getFilteredTriggers(), this._takeRemoved('triggers'))) this._clearRemoved('triggers');
+        if (this.connection.setAliases(this.getFilteredAliases(), this._takeRemoved('aliases'))) this._clearRemoved('aliases');
+        if (this.connection.setTickers(this.getFilteredTickers(), this._takeRemoved('tickers'))) this._clearRemoved('tickers');
         this.sendDiscordPrefsToServer();
         // Phase 3 step 2 (2026-07-11): NO variable push at connect — resume is
         // pull-only (session_resumed delivers the server store). Legit ops queued
@@ -7892,6 +7894,7 @@ class WMTClient {
         if (!confirm('Delete this trigger?')) return;
         const index = this.triggers.findIndex(t => t.id === id);
         if (index >= 0) {
+            this._noteRemoved('triggers', [this.triggers[index]]);
             this.triggers.splice(index, 1);
             await this.saveTriggers();
             this.renderScriptsSidebar();
@@ -7918,6 +7921,7 @@ class WMTClient {
         if (!confirm('Delete this alias?')) return;
         const index = this.aliases.findIndex(a => a.id === id);
         if (index >= 0) {
+            this._noteRemoved('aliases', [this.aliases[index]]);
             this.aliases.splice(index, 1);
             await this.saveAliases();
             this.renderScriptsSidebar();
@@ -8389,10 +8393,35 @@ class WMTClient {
 
     async deleteTrigger(index, confirmed = false) {
         if (!confirmed && !confirm('Delete this trigger?')) return;
+        this._noteRemoved('triggers', [this.triggers[index]]);
         this.triggers.splice(index, 1);
         await this.saveTriggers();
         if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
         this.renderScriptsSidebar();
+    }
+
+    // Explicit entity deletes (2026-10-14). The server's device-merge only lets a
+    // browser delete-by-omission what it pushed itself on this connection, and a
+    // resumed/reloaded browser is credited with nothing (echo guard) — so a UI
+    // delete or a typed #un* right after a reload was silently restored by the next
+    // push ("I deleted it and it came back"). Deliberate removals are recorded here
+    // and sent as `removed` ids with the next set_* push; the server honours them
+    // regardless of authorship. Script-driven removals (inside #read / silent) are
+    // NOT recorded: a bare device's startup re-#read must never delete another
+    // device's bot entities (bug_mobile_bot_multidevice_trigger_clobber).
+    _noteRemoved(table, items) {
+        if (this._bulkLoading || this.readingSilent) return;
+        if (!this._removedIds) this._removedIds = { triggers: new Set(), aliases: new Set(), tickers: new Set() };
+        const set = this._removedIds[table];
+        if (!set) return;
+        for (const it of (items || [])) { if (it && it.id) set.add(String(it.id)); }
+    }
+    _takeRemoved(table) {
+        const set = this._removedIds && this._removedIds[table];
+        return (set && set.size) ? Array.from(set) : [];
+    }
+    _clearRemoved(table) {
+        if (this._removedIds && this._removedIds[table]) this._removedIds[table].clear();
     }
 
     _setModalDeleteVisible(kind, visible) {
@@ -9041,6 +9070,7 @@ class WMTClient {
     // Delete ticker by id
     async deleteTickerById(id, confirmed = false) {
         if (!confirmed && !confirm('Delete this ticker?')) return;
+        this._noteRemoved('tickers', this.tickers.filter(t => t.id === id));
         this.tickers = this.tickers.filter(t => t.id !== id);
         await this.saveTickers();
     }
@@ -9101,6 +9131,7 @@ class WMTClient {
 
     async deleteAlias(index, confirmed = false) {
         if (!confirmed && !confirm('Delete this alias?')) return;
+        this._noteRemoved('aliases', [this.aliases[index]]);
         this.aliases.splice(index, 1);
         await this.saveAliases();
         if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
@@ -11464,6 +11495,7 @@ class WMTClient {
         let removed = 0;
         for (let i = this.aliases.length - 1; i >= 0; i--) {
             if (this.matchWild(this.aliases[i].pattern, pattern)) {
+                this._noteRemoved('aliases', [this.aliases[i]]);
                 this.aliases.splice(i, 1);
                 removed++;
             }
@@ -11545,7 +11577,10 @@ class WMTClient {
             }
             // Drop any other same-pattern action copies (highest index first)
             for (let k = matches.length - 1; k >= 0; k--) {
-                if (matches[k] !== keep) this.triggers.splice(matches[k], 1);
+                if (matches[k] !== keep) {
+                    this._noteRemoved('triggers', [this.triggers[matches[k]]]);
+                    this.triggers.splice(matches[k], 1);
+                }
             }
         } else {
             this.triggers.push({
@@ -11576,6 +11611,7 @@ class WMTClient {
         for (let i = this.triggers.length - 1; i >= 0; i--) {
             if (this.triggers[i].actions?.some(a => a.type === 'command') &&
                 this.matchWild(this.triggers[i].pattern, pattern)) {
+                this._noteRemoved('triggers', [this.triggers[i]]);
                 this.triggers.splice(i, 1);
                 removed++;
             }
@@ -11668,6 +11704,7 @@ class WMTClient {
         let removed = 0;
         for (let i = this.tickers.length - 1; i >= 0; i--) {
             if (this.matchWild(this.tickers[i].name, pattern)) {
+                this._noteRemoved('tickers', [this.tickers[i]]);
                 this.tickers.splice(i, 1);
                 removed++;
             }
@@ -11897,6 +11934,9 @@ class WMTClient {
                     const removedTriggers = this.triggers.filter(isUnassigned).length;
                     const removedAliases = this.aliases.filter(isUnassigned).length;
                     const removedTickers = this.tickers.filter(isUnassigned).length;
+                    this._noteRemoved('triggers', this.triggers.filter(isUnassigned));
+                    this._noteRemoved('aliases', this.aliases.filter(isUnassigned));
+                    this._noteRemoved('tickers', this.tickers.filter(isUnassigned));
                     this.triggers = this.triggers.filter(isAssigned);
                     this.aliases = this.aliases.filter(isAssigned);
                     this.tickers = this.tickers.filter(isAssigned);
@@ -11918,6 +11958,9 @@ class WMTClient {
                 const removedTriggers = this.triggers.filter(t => t.class === classId).length;
                 const removedAliases = this.aliases.filter(a => a.class === classId).length;
                 const removedTickers = this.tickers.filter(t => t.class === classId).length;
+                this._noteRemoved('triggers', this.triggers.filter(t => t.class === classId));
+                this._noteRemoved('aliases', this.aliases.filter(a => a.class === classId));
+                this._noteRemoved('tickers', this.tickers.filter(t => t.class === classId));
                 this.triggers = this.triggers.filter(t => t.class !== classId);
                 this.aliases = this.aliases.filter(a => a.class !== classId);
                 this.tickers = this.tickers.filter(t => t.class !== classId);
@@ -11975,6 +12018,9 @@ class WMTClient {
                 const removedTriggers = this.triggers.filter(t => t.class === classId).length;
                 const removedAliases = this.aliases.filter(a => a.class === classId).length;
                 const removedTickers = this.tickers.filter(t => t.class === classId).length;
+                this._noteRemoved('triggers', this.triggers.filter(t => t.class === classId));
+                this._noteRemoved('aliases', this.aliases.filter(a => a.class === classId));
+                this._noteRemoved('tickers', this.tickers.filter(t => t.class === classId));
                 this.triggers = this.triggers.filter(t => t.class !== classId);
                 this.aliases = this.aliases.filter(a => a.class !== classId);
                 this.tickers = this.tickers.filter(t => t.class !== classId);
@@ -12086,6 +12132,9 @@ class WMTClient {
                 const classId = await getOrCreateClassId();
                 if (!classId) return;
                 // Clear existing items for this class
+                this._noteRemoved('triggers', this.triggers.filter(t => t.class === classId));
+                this._noteRemoved('aliases', this.aliases.filter(a => a.class === classId));
+                this._noteRemoved('tickers', this.tickers.filter(t => t.class === classId));
                 this.triggers = this.triggers.filter(t => t.class !== classId);
                 this.aliases = this.aliases.filter(a => a.class !== classId);
                 this.tickers = this.tickers.filter(t => t.class !== classId);
@@ -12247,6 +12296,9 @@ class WMTClient {
                     });
                 } else {
                     // Remove items with this class
+                    this._noteRemoved('triggers', this.triggers.filter(t => t.class === classId));
+                    this._noteRemoved('aliases', this.aliases.filter(a => a.class === classId));
+                    this._noteRemoved('tickers', this.tickers.filter(t => t.class === classId));
                     this.triggers = this.triggers.filter(t => t.class !== classId);
                     this.aliases = this.aliases.filter(a => a.class !== classId);
                     this.tickers = this.tickers.filter(t => t.class !== classId);
@@ -13446,6 +13498,7 @@ class WMTClient {
         for (let i = this.triggers.length - 1; i >= 0; i--) {
             if (this.triggers[i].actions?.some(a => a.type === 'gag') &&
                 this.matchWild(this.triggers[i].pattern, pattern)) {
+                this._noteRemoved('triggers', [this.triggers[i]]);
                 this.triggers.splice(i, 1);
                 removed++;
             }
@@ -13621,6 +13674,7 @@ class WMTClient {
         for (let i = this.triggers.length - 1; i >= 0; i--) {
             if (this.triggers[i].actions?.some(a => a.type === 'highlight') &&
                 this.matchWild(this.triggers[i].pattern, pattern)) {
+                this._noteRemoved('triggers', [this.triggers[i]]);
                 this.triggers.splice(i, 1);
                 removed++;
             }
@@ -13715,6 +13769,7 @@ class WMTClient {
         for (let i = this.triggers.length - 1; i >= 0; i--) {
             if (this.triggers[i].actions?.some(a => a.type === 'substitute') &&
                 this.matchWild(this.triggers[i].pattern, pattern)) {
+                this._noteRemoved('triggers', [this.triggers[i]]);
                 this.triggers.splice(i, 1);
                 removed++;
             }

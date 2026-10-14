@@ -920,8 +920,24 @@ const ENTITY_MERGE_KEYS = {
   }) : '',
 };
 
-function mergeDevicePush(ws, session, table, serverList, incomingList) {
+// Explicit deletes (2026-10-14): a resumed/reloaded browser is credited with
+// authoring NOTHING (echo guard), so its delete-by-omission of any pre-existing
+// entity was silently restored here — "I deleted it and it came back" (locrian's
+// undeletable duplicate triggers). The client now sends the ids it deliberately
+// removed (UI x / modal Delete / typed #un*/#class kill — never script-driven
+// removals inside #read) as `removed: [ids]` on the set_* push; those ids are
+// dropped regardless of authorship. Omission-only semantics are unchanged.
+function explicitRemovedIds(data) {
+  const r = data && Array.isArray(data.removed) ? data.removed : [];
+  return r.slice(0, 5000)
+    .filter(x => typeof x === 'string' || typeof x === 'number')
+    .map(String);
+}
+
+function mergeDevicePush(ws, session, table, serverList, incomingList, removedIds) {
   const contentKey = ENTITY_MERGE_KEYS[table];
+  const removed = new Set(removedIds || []);
+  let explicitlyRemoved = 0;
   const idOf = (e) => (e && (e.id || e.name)) ? String(e.id || e.name) : null;
   const incomingIds = new Set();
   const incomingContent = new Set();
@@ -942,6 +958,7 @@ function mergeDevicePush(ws, session, table, serverList, incomingList) {
     const id = idOf(e);
     const key = contentKey(e);
     if (id && incomingIds.has(id)) continue;           // device re-sent it — incoming version wins
+    if (id && removed.has(id)) { explicitlyRemoved++; continue; } // user deleted it — honoured regardless of authorship
     if (baseline && ((id && baseline.ids.has(id)) || baseline.content.has(key)))
       continue;                                        // device knew it and omitted it — genuine delete
     if (incomingContent.has(key)) continue;            // same content under another id — no double-fire
@@ -974,6 +991,10 @@ function mergeDevicePush(ws, session, table, serverList, incomingList) {
     }
   }
   ws._entityBaseline[table] = { ids: baseIds, content: baseContent };
+  if (explicitlyRemoved > 0) {
+    writeSessionLog(session, 'entity_removed', { what: table, removed: explicitlyRemoved, incoming: incomingList.length });
+    console.log(`ENTITY_REMOVED ${table} char=${session.characterId} removed=${explicitlyRemoved} incoming=${incomingList.length}`);
+  }
   if (preserved.length > 0) {
     writeSessionLog(session, 'entity_merge', {
       what: table,
@@ -8691,7 +8712,7 @@ wss.on('connection', (ws, req) => {
           // Multi-device merge: this device may only delete entities it has
           // itself pushed (see mergeDevicePush) — a second attached client's
           // smaller full-state push must not wipe the bot device's triggers.
-          incomingTriggers = mergeDevicePush(ws, session, 'triggers', session.triggers, incomingTriggers);
+          incomingTriggers = mergeDevicePush(ws, session, 'triggers', session.triggers, incomingTriggers, explicitRemovedIds(data));
           session.triggers = incomingTriggers;
           writeSessionLog(session, 'settings', { what: 'triggers', count: session.triggers.length });
           // DB dual-write (gated by user during rollout)
@@ -8728,7 +8749,7 @@ wss.on('connection', (ws, req) => {
             incomingAliases = guarded.aliases;
           }
           // Multi-device merge (same contract as set_triggers above).
-          incomingAliases = mergeDevicePush(ws, session, 'aliases', session.aliases, incomingAliases);
+          incomingAliases = mergeDevicePush(ws, session, 'aliases', session.aliases, incomingAliases, explicitRemovedIds(data));
           session.aliases = incomingAliases;
           writeSessionLog(session, 'settings', { what: 'aliases', count: session.aliases.length });
           // DB dual-write (gated by user during rollout)
@@ -8767,7 +8788,7 @@ wss.on('connection', (ws, req) => {
             }
             // Multi-device merge (same contract as set_triggers above; _runtime
             // tickers are excluded — updateSessionTickers owns those).
-            incomingTickers = mergeDevicePush(ws, session, 'tickers', session.tickers, incomingTickers);
+            incomingTickers = mergeDevicePush(ws, session, 'tickers', session.tickers, incomingTickers, explicitRemovedIds(data));
             updateSessionTickers(session, incomingTickers);
             writeSessionLog(session, 'settings', { what: 'tickers', count: incomingTickers.length });
             if ((!DB_ENABLED_USERS || DB_ENABLED_USERS.has(session.userId)) && session.characterId) {

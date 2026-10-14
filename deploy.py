@@ -600,6 +600,11 @@ def run_test_suites(only_scripts=None):
         # echoed entities out of the device's authored-baseline. Negative-controlled
         # (red on pre-fix server.js).
         ('ResumeEchoClobber', 'test_resume_echo_clobber.js'),
+        # Explicit entity deletes (2026-10-14): a resumed browser could never
+        # delete-by-omission anything it didn't author (echo guard) → UI deletes
+        # came back. set_* pushes carry `removed: [ids]`; honoured regardless of
+        # authorship. Negative-controlled (T2-T4 red on pre-fix server.js).
+        ('ExplicitEntityDelete', 'test_explicit_entity_delete.js'),
         # PHP login flow: boots the real includes/+config/+api under `php -S`
         # (staged at /opt/wmt/phpsrc) — guards the double-login fix (single
         # session lifecycle) + login-stack smoke test. NOTE: PHP 8.3 masks the
