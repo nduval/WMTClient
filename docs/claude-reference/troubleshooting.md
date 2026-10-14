@@ -349,3 +349,24 @@ const hasComplexAction = trigger.actions.some(a =>
     a.type === 'command' || a.type === 'discord' || a.type === 'chatmon' || a.type === 'sound'
 );
 ```
+
+## Trigger / Script Issues
+
+### Trigger renames (or edits) revert on every connect; duplicate trigger rows (fixed 2026-10-14, commit 6a52fe4)
+
+**Symptom:** a trigger renamed in the UI shows its old pattern-as-name again after the next
+connect/resume; the DB (`triggers`) has two rows for the same pattern — one with the custom
+name, one with the default. Journal shows ENTITY_MERGE `preserved=N` on each startup push.
+
+**Cause:** `cmdAction` in app.js removed the existing same-pattern command trigger and pushed a
+brand-new one (new id, default name) every time a script `#action` ran — and startup scripts
+`#read` their trigger files on every connect. The server's device-merge then preserved the user's
+renamed copy (different content key) alongside the new one → duplicates. The other entity
+commands (#alias/#gag/#highlight/#substitute) always updated in place.
+
+**Fix:** cmdAction now updates in place (keeps id + name, replaces actions/matchType/priority,
+reassigns class only inside `#class {read}`), prefers the renamed copy if several exist and drops
+the rest. Duplicates self-heal on the character's next connect.
+
+**Still true by design:** the script owns a script-defined trigger's pattern/command/match type;
+only the name survives a `#read`. Edit those in the script file, not the modal.

@@ -5,6 +5,26 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 6a52fe4 2026-10-14 (IONOS-only) — UI trigger renames lost on every connect (`#action` delete+recreate)
+- locrian: "renaming triggers and they aren't saving". Data: DB had 94 trigger rows vs 80 in her
+  client; 17 patterns duplicated — one row with her custom name ("Fade - Heartening Laugh",
+  "Dodge - Blink"…), one with the default pattern-as-name, all class Bard. startup.tin `#read`s
+  bard.txt on every connect/resume.
+- Cause (app.js `cmdAction`): the ONLY entity command that removed the same-pattern trigger and
+  pushed a NEW one (new id, `name = pattern.substring(0,30)`); cmdAlias/cmdGag/cmdHighlight/
+  cmdSubstitute all update in place. So each `#read` renamed her trigger back; the server's
+  mergeDevicePush then kept her (content-differing) renamed copy as a preserved row → duplicate.
+  The ENTITY_ECHO_GUARD lines in her journal are the normal resume bookkeeping, not the cause.
+- Fix: cmdAction updates the existing same-pattern command trigger in place (keeps id, name,
+  enabled; sets actions/matchType/priority; class only when inside `#class {read}`), prefers the
+  renamed copy when several exist and drops the others — her 17 dups self-heal on her next connect
+  (omitted ids share the script's content key → mergeDevicePush drops them). Gate 146/146 (subset).
+- NOT covered: no sandbox test for cmdAction (client-side JS, no harness); a UI edit of a
+  script-owned trigger's pattern/command/match type is still overwritten by the next `#read`
+  (only the name/id survive — by design, the script owns the definition); DB rows not scrubbed
+  by hand. ⏳ live confirm: her next connect → `SELECT pattern,COUNT(*) … HAVING COUNT(*)>1` = 0
+  and the custom names still present.
+
 ## SHIPPED 12b3e24 2026-10-14 — "Incorrect password" after resume (3klient into Password:) + password in JSONL
 - locrian 13:55Z: fresh login, browser WS dropped as `Password:` arrived (password never sent),
   resume's `enableMip()` fired `3klient …` into the password prompt → "Incorrect password." → MUD
