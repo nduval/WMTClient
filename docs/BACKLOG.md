@@ -54,7 +54,10 @@
   webhooks); WS `set_discord_prefs` still prefix-only (client resync makes that moot — no restart).
   Old 21 URLs remain recoverable from change_log id 579669 if she ever wants them back.
 
-## COMMITTED a327194 (2026-10-14) — ⏳ DEPLOY PENDING NATHAN'S OK (wmt-server restart) — bot death on phone = `#show` browser hop
+## SHIPPED a327194 — DEPLOYED 2026-10-14 20:12:54Z (full gate 1359/1359; 8/8 live chars restored via bridge, 0 name prompts) — bot death on phone = `#show` browser hop
+- ⏳ LIVE CONFIRM PENDING: first JSONL trigger record with `src:"showme"` (written by serverShowme when a
+  trigger's #show output matches another trigger) — e.g. celbot `You cannot take that.` → `#show coins here.`
+  with NO browser attached. None yet as of 20:14Z (bot running, path not exercised).
 - **Root (prod JSONL 2026-10-13 + journal + code):** a server-side trigger's `#show`/`#showme`
   was forwarded to ONE browser as a `client_command` and only trigger-checked when that
   browser bounced it back as `test_line`. With ZERO browsers attached (phone app
