@@ -352,6 +352,22 @@ const hasComplexAction = trigger.actions.some(a =>
 
 ## Trigger / Script Issues
 
+### Deleted trigger/alias/ticker comes back after a reload (fixed 2026-10-14, commit e31aa22)
+
+**Symptom:** delete something with the x / modal Delete / `#unalias` etc. shortly after loading
+the page (or after a resume), it looks gone, and it is back on the next reload. Journal shows
+`ENTITY_MERGE … preserved=N` on each push from that browser.
+
+**Cause:** the server's device-merge (`mergeDevicePush`) only lets a browser delete-by-omission
+entities it pushed itself on that connection, and the resume echo guard credits a reloaded browser
+with nothing. So the first deletes after a reload were classified as "another device's entity
+omitted" and preserved.
+
+**Fix:** deliberate removals are recorded client-side (`_noteRemoved`) and sent as `removed: [ids]`
+with the next `set_*` push; the server drops those ids regardless of authorship and logs
+`ENTITY_REMOVED`. Script-driven removals inside a `#read` never send ids, so a bare device's
+startup script still cannot wipe another device's bot entities.
+
 ### Trigger renames (or edits) revert on every connect; duplicate trigger rows (fixed 2026-10-14, commit 6a52fe4)
 
 **Symptom:** a trigger renamed in the UI shows its old pattern-as-name again after the next

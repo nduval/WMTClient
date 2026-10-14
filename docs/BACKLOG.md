@@ -5,6 +5,28 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED e31aa22 2026-10-14 — UI deletes silently restored after a reload (explicit `removed` ids)
+- Found while cleaning locrian's duplicate triggers: 4 rows the client dropped kept coming back
+  (`ENTITY_MERGE preserved=4` on every push). mergeDevicePush only lets a device delete-by-omission
+  what it pushed ITSELF on this ws, and the resume echo guard (2ec261e) credits a reloaded browser
+  with authoring NOTHING — so for a normal single-device user, a UI x / modal Delete / typed `#un*`
+  right after a reload was restored by the server on the next push. True since 2026-09-14.
+- Fix: client records deliberate removals (`_noteRemoved`: UI deleters, #unalias/#unaction/#ungag/
+  #unhighlight/#unsubstitute/#unticker, #class kill/clean/unclass, cmdAction dedupe — NEVER inside
+  `_bulkLoading`/`readingSilent`, i.e. never script-driven) and sends them as `removed: [ids]` on
+  set_triggers/set_aliases/set_tickers (connection.js). Server `explicitRemovedIds(data)` →
+  mergeDevicePush drops those ids regardless of authorship; journal `ENTITY_REMOVED`, JSONL
+  `entity_removed`. Omission-only semantics unchanged (phone-bot protection intact). Queued
+  removals survive a dropped socket (cleared only on a successful send).
+- Gate: ExplicitEntityDelete 9 cases (T1 control + T2 multi-device safety pass on both servers;
+  T3 alias / T4 trigger / T5 ticker RED on the pre-fix server, green after). Full gate 1370/1370.
+- Deploy: `deploy.py all` (wmt-server restart) — STATUS: DEPLOYED 2026-10-14 23:10:13Z (full gate 1370/1370 incl. ExplicitEntityDelete 9/9; RESTORE 8/8 — donovan SESSION_RESTORED, 7 already active via silent resume; 0 relogins/password_fail; deployed server.js markers 5, IONOS app.js/connection.js read back).
+- NOT covered: `remove_trigger` (server-initiated oneshot removal) unchanged; `#class {name} {read}`
+  restore path notes removals but re-sends the same ids (harmless); the `/admin/triggers-bulk`
+  HTTP save path still writes the client's exact list and the WS merged write lands after it
+  (pre-existing dual-path, not audited here). ⏳ live confirm: first `ENTITY_REMOVED` journal line
+  from a real UI delete, and locrian's 4 leftover rows gone after she deletes them.
+
 ## SHIPPED 6a52fe4 2026-10-14 (IONOS-only) — UI trigger renames lost on every connect (`#action` delete+recreate)
 - locrian: "renaming triggers and they aren't saving". Data: DB had 94 trigger rows vs 80 in her
   client; 17 patterns duplicated — one row with her custom name ("Fade - Heartening Laugh",
