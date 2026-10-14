@@ -5,6 +5,19 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 63e2f7f 2026-10-14 (IONOS-only) — Script/FTP editor find: matches were nearly invisible
+- locrian: "when you search for a string in the script editor, the highlight color is almost impossible
+  to see". Cause: `_scriptFindNext` / `_ftpCMFind` showed the current hit only as the CodeMirror
+  SELECTION (theme colour) and other hits only as scrollbar ticks (`showMatchesOnScrollbar`); no
+  `.cm-matchhighlight` style existed.
+- Fix: shared `_cmMarkFinds(cm, term, current)` marks every hit `.cm-find-match` (translucent amber +
+  1px ring) and the current `.cm-find-current` (solid amber, dark text) via `markText`; marks stored on
+  the cm instance, replaced per search, cleared on empty term / no matches / replace-all. Case-sensitive
+  like the existing search. style.css rules scoped `.CodeMirror span.cm-find-*`.
+- Deployed 2026-10-14T23:39:57Z, subset gate 146/146, both files read back from IONOS (8 call sites).
+- NOT covered: the textarea fallback path (no CM) is unchanged; no case-insensitive option.
+  ⏳ live confirm: locrian's click-through after a hard refresh.
+
 ## SHIPPED 49ddc18 2026-10-14 (IONOS-only) — Actions sidebar: type groups + alphabetical sort + search box
 - locrian via Nathan: "if i expand a class in my actions menu, it has loads of things in there, maybe
   sort them alphabetically (but still grouped by type)… also a search bar that finds all actions and
