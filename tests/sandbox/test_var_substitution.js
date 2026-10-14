@@ -34,12 +34,16 @@ function send(type, data = {}) { ws.send(JSON.stringify({ type, ...data })); }
 function clearBuffers() { clientCommands = []; outputBuffer = []; }
 
 function getShowmeTexts() {
+  // Since 2026-10-13 the server executes #showme itself (tt++ do_showme) and the
+  // text arrives as a `mud` line (test:true) in outputBuffer; the client_command
+  // form is kept for the split-row display case only.
   return clientCommands
     .filter(c => c.command && /^#show(me)?\s/i.test(c.command))
     .map(c => {
       const m = c.command.match(/^#show(?:me)?\s+\{(.+)\}$/);
       return m ? m[1] : c.command.replace(/^#show(?:me)?\s+/, '');
-    });
+    })
+    .concat(outputBuffer);
 }
 
 function hasShowme(text) {

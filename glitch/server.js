@@ -5386,7 +5386,7 @@ function startTicker(session, ticker, firstFireMs) {
           executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
         } else if (cmd.startsWith('#')) {
           // #var/#math already processed during expansion for sequential side effects
-          sendToClient(session, { type: 'client_command', command: cmd });
+          forwardHashCommand(session, cmd);
         } else {
           mudSendExpanded(session, cmd);
         }
@@ -5445,7 +5445,7 @@ function dispatchServerEvent(session, eventName, arg) {
       } else if (cmd.startsWith('#')) {
         // Inline #var/#math already executed during expansion (server side effect +
         // var_update push); forward the rest to the browser for its own copy.
-        sendToClient(session, { type: 'client_command', command: cmd });
+        forwardHashCommand(session, cmd);
       } else if (session.mudSocket && !session.mudSocket.destroyed) {
         mudSendExpanded(session, cmd);
       }
@@ -7318,10 +7318,7 @@ function processLine(session, line) {
         // Not a server-handled command — substitute and forward to client
         // (e.g. #showme, #show, #bell, etc.)
         const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
-        sendToClient(session, {
-          type: 'client_command',
-          command: substitutedCmd
-        });
+        forwardHashCommand(session, substitutedCmd);
       }
       // If handled (#math/#var/#format/#cat/#replace): var_update already pushed to client.
       // Do NOT forward as client_command to avoid double-execution.
@@ -7335,7 +7332,7 @@ function processLine(session, line) {
           executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
         } else if (ec.startsWith('#')) {
           // #var/#math already processed during expansion for sequential side effects
-          sendToClient(session, { type: 'client_command', command: ec });
+          forwardHashCommand(session, ec);
         } else {
           mudSendExpanded(session, ec);   // map dead-reckoning: trigger/bot-driven movement
         }
@@ -8578,7 +8575,7 @@ wss.on('connection', (ws, req) => {
                 } else if (ec.startsWith('#')) {
                   // #var/#math already processed during expansion (for sequential side effects)
                   // Forward to client for #delay, #showme, etc.
-                  sendToClient(session, { type: 'client_command', command: ec });
+                  forwardHashCommand(session, ec);
                 } else {
                   // Detect 'quit' command — flag as intentional disconnect so
                   // client doesn't auto-reconnect after MUD closes connection.
@@ -9019,53 +9016,7 @@ wss.on('connection', (ws, req) => {
               }
             } catch (e) {}
 
-            // Execute any trigger commands (with alias expansion)
-            processed.commands.forEach(cmd => {
-              if (cmd.startsWith('#')) {
-                const handled = serverProcessInlineCommand(cmd, session);
-                if (!handled) {
-                  const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
-                  sendToClient(session, {
-                    type: 'client_command',
-                    command: substitutedCmd
-                  });
-                }
-              } else if (session.mudSocket && !session.mudSocket.destroyed) {
-                // Expand aliases before sending to MUD
-                const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
-                expanded.forEach(ec => {
-                  const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
-                  if (repeatMatch) {
-                    executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
-                  } else if (ec.startsWith('#')) {
-                    // #var/#math already processed during expansion for sequential side effects
-                    sendToClient(session, { type: 'client_command', command: ec });
-                  } else {
-                    mudSendExpanded(session, ec);
-                  }
-                });
-              }
-            });
-
-            // Send Discord webhooks (with user variable substitution, routed through IONOS proxy)
-            if (processed.discordWebhooks) {
-              processed.discordWebhooks.forEach(webhook => {
-                let finalMessage = substituteUserVariables(webhook.message, session.variables || {}, session.functions || {});
-                sendToDiscordWebhook(webhook.webhookUrl, finalMessage, session.discordUsername);
-              });
-            }
-
-            // Send ChatMon messages (with user variable substitution)
-            if (processed.chatmonMessages) {
-              processed.chatmonMessages.forEach(chat => {
-                let finalMessage = substituteUserVariables(chat.message, session.variables || {}, session.functions || {});
-                sendToClient(session, {
-                  type: 'trigger_chatmon',
-                  message: finalMessage,
-                  channel: chat.channel
-                });
-              });
-            }
+            executeTriggerResults(session, processed);
           }
           break;
 
@@ -10843,6 +10794,142 @@ function parseIfChain(str) {
 }
 
 // Server-side inline command processing
+// ---------------------------------------------------------------------------
+// Server-side #showme / #show (2026-10-13).
+//
+// TinTin++ semantics (src/show.c do_showme): the text is run through the session's
+// triggers (check_one_line — actions, gags, subs, highlights) and THEN displayed.
+// WMT used to forward a server-originated `#show` (from a trigger / ticker / #delay
+// / alias chain) to ONE browser as a client_command; the browser's cmdShowme bounced
+// it back as a `test_line`, and only then did the server match triggers on it. With
+// NO browser attached (phone app backgrounded, PC tab gone) the client_command sat
+// in the 150-line replay buffer and the trigger chain silently died: elminster's
+// celbot stalled 2026-10-13 19:25Z on `You cannot take that.` -> `#show coins here.`
+// -> (nothing), because the `coins here.` trigger that schedules the next `k
+// celestial` never saw the text. The browser hop was also why that match never
+// appeared in the per-char JSONL. Now the server does what tt++ does: match, log,
+// display to every device, execute. The browser never receives a client_command
+// for it, so a connected device fires the chain exactly ONCE (no double-fire), and
+// a detached session keeps botting.
+//
+// Scope: every server-side executor's "unhandled # command" branch funnels through
+// forwardHashCommand() (ticker fire, #EVENT dispatch, MUD-line trigger dispatch,
+// typed-chain expansion, test_line, #delay fire, restored-delay fire, #if bodies).
+// A TYPED #showme still goes browser -> test_line (app.js keeps non-routed # verbs
+// client-side), unchanged. The split-row form `#showme {msg} {row}` is display-only
+// in the browser (no trigger processing there either) and is still forwarded.
+// Gate: tests/sandbox/test_showme_server_triggers.js (ShowmeServerTriggers).
+const SHOWME_RE = /^#(?:showme|show)(?:\s|$)/i;
+const SHOWME_MAX_DEPTH = 20;   // a #show whose trigger #shows again — hard stop on top of loopTracker
+
+function serverShowme(session, cmd) {
+  if (!session || !cmd) return false;
+  const trimmed = cmd.trim();
+  if (!SHOWME_RE.test(trimmed)) return false;
+  const rest = trimmed.replace(/^#\w+\s*/, '');
+  const args = parseBracedArgs(rest);
+  // Row form -> browser split-screen display, no triggers (mirrors app.js cmdShowme)
+  if (args.length >= 2 && /^-?\d+$/.test(args[args.length - 1])) return false;
+
+  let message = args.length > 0 ? args.join(' ') : rest;
+  message = parseTinTinColorsServer(processEscapes(message));
+
+  session._showmeDepth = (session._showmeDepth || 0) + 1;
+  try {
+    if (session._showmeDepth > SHOWME_MAX_DEPTH) {
+      console.warn(`SHOWME_DEPTH user=${session.userId} char=${session.characterName} depth=${session._showmeDepth} text=${stripAnsi(message).substring(0, 80)}`);
+      return true;
+    }
+    if (!session.loopTracker) session.loopTracker = {};
+    for (const line of message.split('\n')) {
+      const processed = processTriggers(line, session.triggers || [], session.loopTracker, session.variables || {}, session.functions || {});
+      if (processed.commands.length > 0 || processed.gag) {
+        writeSessionLog(session, 'trigger', {
+          line: stripAnsi(line).substring(0, 200),
+          gag: processed.gag,
+          src: 'showme',
+          cmds: processed.commands.length > 0 ? processed.commands : undefined
+        });
+      }
+      if (processed.firedOneshots && processed.firedOneshots.length > 0) {
+        session.triggers = (session.triggers || []).filter(t => !processed.firedOneshots.includes(t.id));
+        processed.firedOneshots.forEach(id => sendToClient(session, { type: 'remove_trigger', triggerId: id }));
+      }
+      if (processed.loopDetected) {
+        sendToClient(session, { type: 'system', message: `Loop detected! Trigger "${processed.loopDetected.name}" fired too many times and has been disabled.` });
+        sendToClient(session, { type: 'disable_trigger', triggerId: processed.loopDetected.id });
+      }
+      if (processed.slowRegex) {
+        const slow = processed.slowRegex;
+        console.warn(`SLOW_REGEX(showme) user=${session.userId} char=${session.characterName} trigger=${slow.id} pattern=${slow.pattern.substring(0, 80)} elapsed=${slow.elapsedMs}ms`);
+        sendToClient(session, { type: 'system', message: `Slow regex detected! Trigger "${slow.name}" took ${slow.elapsedMs}ms to match and has been disabled.` });
+        sendToClient(session, { type: 'disable_trigger', triggerId: slow.id });
+      }
+      if (!processed.gag) {
+        sendToClient(session, { type: 'mud', line: processed.line, highlight: processed.highlight, sound: processed.sound, test: true });
+      }
+      executeTriggerResults(session, processed);
+    }
+  } finally {
+    session._showmeDepth--;
+  }
+  return true;
+}
+
+// Every server-side executor's "unhandled # command" branch goes through here:
+// server-side #show/#showme is executed in place (trigger-checked, tt++ style);
+// anything else is forwarded to ONE browser as a client_command, as before.
+function forwardHashCommand(session, cmd) {
+  if (serverShowme(session, cmd)) return;
+  sendToClient(session, { type: 'client_command', command: cmd });
+}
+
+// Execute what processTriggers() produced: commands (with alias expansion; # verbs
+// via serverProcessInlineCommand then forwardHashCommand), Discord webhooks and
+// ChatMon messages. Shared by the test_line handler and serverShowme. (The MUD-line
+// dispatcher in processLine keeps its own copy: it also handles oneshots/loop/slow
+// guards inline and is the hot path — regression rule 12.)
+function executeTriggerResults(session, processed) {
+  processed.commands.forEach(cmd => {
+    if (cmd.startsWith('#')) {
+      const handled = serverProcessInlineCommand(cmd, session);
+      if (!handled) {
+        const substitutedCmd = substituteUserVariables(cmd, session.variables || {}, session.functions || {});
+        forwardHashCommand(session, substitutedCmd);
+      }
+    } else if (session.mudSocket && !session.mudSocket.destroyed) {
+      const expanded = expandCommandWithAliases(cmd, session.aliases || [], 0, session.variables || {}, session.functions || {}, session);
+      expanded.forEach(ec => {
+        const repeatMatch = ec.match(/^#(\d+)\s+(.+)$/);
+        if (repeatMatch) {
+          executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
+        } else if (ec.startsWith('#')) {
+          // #var/#math already processed during expansion for sequential side effects
+          forwardHashCommand(session, ec);
+        } else {
+          mudSendExpanded(session, ec);
+        }
+      });
+    }
+  });
+
+  // Send Discord webhooks (with user variable substitution, routed through IONOS proxy)
+  if (processed.discordWebhooks) {
+    processed.discordWebhooks.forEach(webhook => {
+      let finalMessage = substituteUserVariables(webhook.message, session.variables || {}, session.functions || {});
+      sendToDiscordWebhook(webhook.webhookUrl, finalMessage, session.discordUsername);
+    });
+  }
+
+  // Send ChatMon messages (with user variable substitution)
+  if (processed.chatmonMessages) {
+    processed.chatmonMessages.forEach(chat => {
+      let finalMessage = substituteUserVariables(chat.message, session.variables || {}, session.functions || {});
+      sendToClient(session, { type: 'trigger_chatmon', message: finalMessage, channel: chat.channel });
+    });
+  }
+}
+
 // Canonical command registry: assets/js/app.js COMMAND_REGISTRY
 // Commands with serverInline: true are handled here:
 //   #math, #var/#variable, #unvar/#unvariable, #format, #cat, #replace,
@@ -10860,7 +10947,7 @@ function executeExpandedInline(session, commandString) {
     if (repeatMatch) {
       executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
     } else if (ec.startsWith('#')) {
-      sendToClient(session, { type: 'client_command', command: ec });
+      forwardHashCommand(session, ec);
     } else if (session.mudSocket && !session.mudSocket.destroyed) {
       mudSendExpanded(session, ec);
     }
@@ -11313,7 +11400,7 @@ function serverProcessInlineCommand(cmd, session) {
             if (repeatMatch) {
               executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
             } else if (ec.startsWith('#')) {
-              sendToClient(session, { type: 'client_command', command: ec });
+              forwardHashCommand(session, ec);
             } else if (session.mudSocket && !session.mudSocket.destroyed) {
               mudSendExpanded(session, ec);
             }
@@ -11382,7 +11469,7 @@ function serverProcessInlineCommand(cmd, session) {
             if (repeatMatch) {
               executeRepeat(Math.min(parseInt(repeatMatch[1]), 100), repeatMatch[2], session);
             } else if (ec.startsWith('#')) {
-              sendToClient(session, { type: 'client_command', command: ec });
+              forwardHashCommand(session, ec);
             } else if (session.mudSocket && !session.mudSocket.destroyed) {
               mudSendExpanded(session, ec);
             }

@@ -7,9 +7,14 @@
  * Key WMT architecture:
  * - Triggers run SERVER-SIDE in processTriggers() against MUD output
  * - __emit sends raw text from mock MUD to trigger matching
- * - #showme does NOT trigger actions (only MUD output does)
- * - Gags/subs only filter MUD output, not #showme
- * - Trigger commands come back as client_command messages
+ * - #showme text IS trigger-checked SERVER-SIDE before display (tt++ src/show.c
+ *   do_showme -> check_one_line): actions fire exactly once, gags suppress it.
+ *   (Until 2026-10-13 the server bounced `#showme` through the browser as a
+ *   client_command, so this raw harness saw no trigger processing at all — that
+ *   hop is what killed elminster's celbot with no browser attached. See
+ *   test_showme_server_triggers.js.)
+ * - Trigger commands come back as client_command messages (except #showme, which
+ *   now arrives as a `mud` line with test:true)
  * - Server auto-detects pattern type via isTinTinPattern() — matchType ignored
  * - Trigger data format: { pattern, actions: [{ type, ... }], enabled, priority }
  *   action types: command, gag, highlight, substitute, sound, discord, chatmon
@@ -377,7 +382,11 @@ async function runTests() {
   });
 
   // T15: Gag does NOT affect #showme output
-  await test('T15: Gag does not affect #showme', async () => {
+  // T15: tt++ do_showme honours gagline — a gag whose pattern matches the #showme text
+  // suppresses it (src/show.c: check_one_line, then `if (ses->gagline > 0) return`).
+  // Pre-2026-10-13 this test asserted the opposite, but only because the server
+  // bounced #showme through the browser and this raw harness never processed it.
+  await test('T15: Gag suppresses matching #showme text (tt++ do_showme)', async () => {
     await syncTriggers([
       gagTrigger('show this text')
     ]);
@@ -387,7 +396,15 @@ async function runTests() {
     clearBuffers();
     send('command', { command: 'showtest' });
     await sleep(800);
-    assert(hasText('show this text'), `#showme should bypass gag: ${dump()}`);
+    assert(!hasText('show this text'), `gagged #showme text should not display: ${dump()}`);
+    // Negative control: text the gag does NOT match still displays.
+    await syncAliases([
+      { pattern: 'showtest2', replacement: '#showme {show other text}', matchType: 'exact', enabled: true }
+    ]);
+    clearBuffers();
+    send('command', { command: 'showtest2' });
+    await sleep(800);
+    assert(hasText('show other text'), `ungagged #showme text should display: ${dump()}`);
   });
 
   // T16: Ungag — line should appear again
@@ -541,8 +558,13 @@ async function runTests() {
     assert(fired, `Substring match should fire on longer line: ${dump()}`);
   });
 
-  // T26: Trigger does not fire on #showme output (WMT-specific)
-  await test('T26: Trigger only fires on MUD output, not #showme', async () => {
+  // T26: #showme output IS trigger-checked, exactly once (tt++ do_showme -> check_one_line).
+  // This is the mechanism bots rely on: `You cannot take that.` -> `#show coins here.` ->
+  // the `coins here.` trigger advances the walk. Pre-2026-10-13 this test asserted the
+  // opposite — an artifact of the server bouncing #showme through the browser, which
+  // this raw harness never emulated (and which silently killed the chain with no
+  // browser attached). See test_showme_server_triggers.js for the detached case.
+  await test('T26: Trigger fires on #showme output, exactly once', async () => {
     await syncTriggers([
       cmdTrigger('trigger this text', '#showme {TRIGGERED}')
     ]);
@@ -552,10 +574,11 @@ async function runTests() {
     clearBuffers();
     send('command', { command: 'echotest' });
     await sleep(800);
-    // #showme should display the text but NOT trigger the action
-    const triggered = hasText('TRIGGERED');
-    console.log(`      Triggered on #showme: ${triggered} (should be false)`);
-    assert(!triggered, '#showme should not trigger actions');
+    const shownOriginal = outputBuffer.filter(l => l.includes('trigger this text')).length;
+    const fired = outputBuffer.filter(l => l.includes('TRIGGERED')).length;
+    console.log(`      shown=${shownOriginal} TRIGGERED=${fired} (expect 1 and 1)`);
+    assert(shownOriginal === 1, `#showme text should display once: ${dump()}`);
+    assert(fired === 1, `#showme text should fire the matching trigger exactly once: ${dump()}`);
   });
 
   // T27: $var in trigger command expands (post-fix verification)

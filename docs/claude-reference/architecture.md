@@ -128,9 +128,33 @@ By running triggers server-side (`glitch/server.js`):
   - Sends triggers to server via `setTriggers()`
   - Does NOT process triggers locally (except via `test_line` for #showme)
 
-### #showme Trigger Testing
+### #showme is trigger-checked — SERVER-SIDE (2026-10-13)
 
-`#showme` sends text to the server via `test_line` message, which runs it through `processTriggers()` exactly like MUD output.
+TinTin++ (`src/show.c` `do_showme`) runs `#showme` text through the session's
+triggers (`check_one_line`: actions, gags, subs, highlights) and THEN displays it.
+Bots depend on this: `You cannot take that.` → `#show coins here.` → the
+`coins here.` trigger schedules the next step. Two paths, both end in
+`processTriggers()`:
+
+- **Typed `#showme`** (user input, or a client-expanded alias chain): the browser's
+  `cmdShowme` sends `test_line`; the server matches triggers and answers the
+  ORIGINATING device with a `mud` line (`test: true`), then runs the results via
+  `executeTriggerResults()`.
+- **Server-originated `#show`/`#showme`** (fired by a trigger, ticker, `#delay`,
+  `#EVENT`, `#if` body, or a server-expanded alias): `serverShowme()` matches,
+  logs a JSONL `trigger` record with `src: 'showme'`, broadcasts the `mud` line to
+  every device, and executes the results — all in-process. Every executor's
+  "unhandled `#` command" branch goes through `forwardHashCommand()`, which does
+  this for `#show` and forwards anything else to ONE browser as a `client_command`.
+  The split-row form `#showme {msg} {row}` is display-only and still forwarded.
+
+**Why server-side:** until 2026-10-13 the server forwarded a trigger's `#show` to
+one browser as a `client_command` and relied on that browser bouncing it back as
+`test_line`. With no browser attached (phone app backgrounded, PC tab closed) the
+command sat in the 150-line replay buffer and the chain died silently — that is
+what killed elminster's celbot at 19:25Z on 2026-10-13. Guards: loopTracker (50
+fires / 2s) plus a 20-deep `_showmeDepth` cap for a `#show` that re-matches its own
+trigger. Gate: `ShowmeServerTriggers` (`tests/sandbox/test_showme_server_triggers.js`).
 
 ### DO NOT Move Triggers Client-Side
 
