@@ -25,6 +25,15 @@ BASE_DIR = Path(__file__).parent
 # fired) and hung the run for 10+ minutes with zero output. A stalled command
 # now fails its step loudly (rc=124) and the stall is visible in the log.
 STATUS_FILE = BASE_DIR / 'deploy_status.log'
+
+# --reuse-gate (2026-10-14): a FULL green gate is recorded here with a sha256 over
+# every file the gate exercises. A later deploy with --reuse-gate [MINUTES] skips
+# the sandbox staging + suite run when the record is full, young enough, and the
+# fingerprint still matches byte-for-byte. Born from running `deploy.py test`
+# (12 min) and then `deploy.py all` re-running the identical 44 suites.
+GATE_PASS_FILE = BASE_DIR / '.gate_pass.json'
+REUSE_GATE_MINUTES = 0          # set from --reuse-gate; 0 = never reuse
+_REUSE_DECISION = None          # memoised reusable_gate() result (None | False | record)
 _status_t0 = time.time()
 
 def dstatus(msg):
@@ -249,6 +258,80 @@ def deploy_lightsail(target='server', force_bridge=False):
         print(f"WARNING: Service status is '{status}' — check journalctl -u wmt-server")
     return True
 
+def gate_fingerprint():
+    """sha256 over everything a gate run exercises: server.js and its sandbox
+    companions, every IONOS-deployable file, the test suites, and deploy.py itself.
+    Keyed on CONTENT, not the commit — deploy.py ships the working tree, so any edit
+    after a green gate must invalidate it."""
+    import hashlib
+    h = hashlib.sha256()
+    rels = {'glitch/server.js', 'glitch/bridge.js', 'glitch/mock-mud.js', 'glitch/maplib.js',
+            'glitch/map_overrides.json', 'deploy.py'}
+    rels |= set(IONOS_DEPLOY_FILES)
+    files = []
+    for rel in sorted(rels):
+        p = BASE_DIR / rel
+        if p.is_file():
+            files.append(p)
+        elif p.is_dir():
+            files.extend(sorted(q for q in p.rglob('*') if q.is_file()))
+    files.extend(sorted(q for q in (BASE_DIR / 'tests' / 'sandbox').glob('*') if q.is_file()))
+    for p in sorted(set(files)):
+        h.update(str(p.relative_to(BASE_DIR)).replace('\\', '/').encode()); h.update(b'\0')
+        h.update(p.read_bytes()); h.update(b'\0')
+    return h.hexdigest()
+
+
+def record_gate_pass(passed):
+    """Remember a FULL green gate (subset passes are never recorded)."""
+    import json
+    try:
+        GATE_PASS_FILE.write_text(json.dumps({
+            'fingerprint': gate_fingerprint(),
+            'ts': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'passed': passed,
+        }, indent=2))
+        print(f"  (green gate recorded for --reuse-gate: {GATE_PASS_FILE.name})")
+    except Exception as e:
+        print(f"  (could not record gate pass: {e})")
+
+
+def reusable_gate():
+    """The recorded FULL green gate if --reuse-gate was given, it is within the
+    window, and the fingerprint still matches — else None (prints why, once)."""
+    global _REUSE_DECISION
+    if not REUSE_GATE_MINUTES:
+        return None
+    if _REUSE_DECISION is not None:
+        return _REUSE_DECISION or None
+    import json
+    why = None
+    rec = None
+    try:
+        rec = json.loads(GATE_PASS_FILE.read_text())
+    except Exception:
+        why = "no recorded green gate"
+    if rec is not None:
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(rec['ts'])).total_seconds() / 60
+        except Exception:
+            age = None
+        if age is None:
+            why = "recorded gate has no readable timestamp"
+        elif age > REUSE_GATE_MINUTES:
+            why = f"last green gate is {age:.0f} min old (window {REUSE_GATE_MINUTES} min)"
+        elif rec.get('fingerprint') != gate_fingerprint():
+            why = "files changed since the last green gate"
+        else:
+            rec['age_min'] = age
+    if why:
+        print(f"  --reuse-gate: {why} — running the gate.")
+        _REUSE_DECISION = False
+        return None
+    _REUSE_DECISION = rec
+    return rec
+
+
 def deploy_test_server(restart_server=True):
     """Deploy server.js to the test sandbox. Returns True on success, False on failure.
     restart_server=False (client/PHP-only gate): stage the suite inputs (test files,
@@ -256,6 +339,10 @@ def deploy_test_server(restart_server=True):
     restart wmt-server with it — for a client/PHP change server.js is unchanged, so
     the sandbox's existing build is the right thing to test against. Decouples the
     PHP/client gate from server.js WIP / a wmt-server-won't-boot condition (review F2)."""
+    rec = reusable_gate()
+    if rec:
+        print(f"\n=== Sandbox staging skipped — --reuse-gate: green gate {rec['age_min']:.0f} min ago on identical files ===")
+        return True
     print("\n=== Deploying server.js to test sandbox ===")
     ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
     host = '18.225.235.28'
@@ -507,6 +594,11 @@ def run_test_suites(only_scripts=None):
     """Run WMT test suites on sandbox. Returns (total_passed, total_failed, details).
     only_scripts: if given (a set of script filenames), run just those — the
     relevant-subset gate for a client/PHP-only deploy (full gate otherwise)."""
+    rec = reusable_gate()
+    if rec:
+        print(f"\n=== Gate reused — {rec['passed']} tests passed {rec['age_min']:.0f} min ago on byte-identical files (--reuse-gate) ===")
+        dstatus(f"gate: reused green pass from {rec['ts']} ({rec['passed']} passed)")
+        return rec['passed'], 0, []
     print("\n=== Running test suites on sandbox ===")
     ssh_key = Path.home() / '.ssh' / 'test-mud.pem'
     host = '18.225.235.28'
@@ -770,6 +862,9 @@ def run_test_suites(only_scripts=None):
                               if f > 0 and label not in KNOWN_FAILING_SUITES)
     if total_failed > 0 and unexpected_failures == 0:
         print(f"\n  ({total_failed} failure(s), all in known-failing suites — not blocking deploy)")
+
+    if only_scripts is None and total_failed == 0 and total_passed > 0:
+        record_gate_pass(total_passed)
 
     return total_passed, unexpected_failures, details
 
@@ -1101,9 +1196,15 @@ def main():
     parser.add_argument('--yes', action='store_true', help='Confirm bridge deploy (required — bridge restart kills ALL MUD connections)')
     parser.add_argument('--force', action='store_true', help='Deploy to production even if sandbox tests fail')
     parser.add_argument('--dry-run', action='store_true', help='(auto) Show what would deploy without changing anything')
+    parser.add_argument('--reuse-gate', nargs='?', const=30, default=0, type=int, metavar='MINUTES',
+                       help='Skip the sandbox gate if a FULL gate passed on byte-identical files within '
+                            'MINUTES (30 if omitted). For `deploy.py test` green → `deploy.py all --reuse-gate`.')
 
     args = parser.parse_args()
+    global REUSE_GATE_MINUTES
+    REUSE_GATE_MINUTES = max(0, args.reuse_gate or 0)
     dstatus_reset(f"target={args.target}"
+                  + (f' --reuse-gate {REUSE_GATE_MINUTES}' if REUSE_GATE_MINUTES else '')
                   + (' --force' if args.force else '')
                   + (' --dry-run' if args.dry_run else ''))
 

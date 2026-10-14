@@ -123,6 +123,8 @@ duplicate → the original socket orphans (no reaper) → the character is stuck
 
 The deploy script **auto-commits tracked changes** before deploying (for easy rollback). Use `--no-commit` to skip. Only tracked files are staged (`git add -u`) — untracked files are never committed automatically.
 
+**Gate once.** Don't pre-run `deploy.py test` when a deploy will follow — `all`/`lightsail` run the same 44 suites. If a full gate did already pass (e.g. you gated while waiting for the restart OK), deploy with `--reuse-gate` [MINUTES, default 30]: it skips the sandbox when the recorded green gate is young enough and every gated file is byte-identical (`.gate_pass.json`). Any edit invalidates it.
+
 **NEVER restart `wmt-bridge`.** Bridge.js holds the raw TCP connections to the MUD for every user. Restarting it causes instant linkdeath for ALL connected players. `deploy.py all` and `deploy.py lightsail` are safe — they only restart `wmt-server` while bridge preserves connections. Do not run `deploy.py bridge`, `systemctl restart wmt-bridge`, or any command that stops/restarts the bridge service unless the user explicitly asks for it.
 
 > Before deploying server.js: a syntax error in a site-wide-included PHP file (e.g. `includes/functions.php`) is a full outage — lint on the sandbox first (`php -l`).
