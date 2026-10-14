@@ -11515,27 +11515,50 @@ class WMTClient {
         // Store pattern and command as-is using TinTin++ matchType
         // The server will handle the TinTin++ pattern matching with %1, %*, etc.
 
-        // Remove ALL existing command-type triggers with same pattern
-        // (don't remove gags/highlights/substitutes that share the same pattern)
-        let wasUpdated = false;
-        for (let i = this.triggers.length - 1; i >= 0; i--) {
+        // Update an existing command-type trigger with this pattern IN PLACE
+        // (same shape as cmdAlias/cmdGag/cmdHighlight/cmdSubstitute): keep its id
+        // and name so a UI rename survives the script being #read again, and so
+        // the server's device-merge sees the same id instead of a fresh one.
+        // 2026-10-14: this path used to delete+recreate with a new id and the
+        // default name — every connect re-#read bard.txt, locrian's renames
+        // vanished, and the server kept her edited copy as a duplicate row.
+        // Gags/highlights/substitutes sharing the pattern are left alone.
+        const defaultName = pattern.substring(0, 30);
+        const matches = [];
+        for (let i = 0; i < this.triggers.length; i++) {
             if (this.triggers[i].pattern === pattern &&
                 this.triggers[i].actions?.some(a => a.type === 'command')) {
-                this.triggers.splice(i, 1);
-                wasUpdated = true;
+                matches.push(i);
             }
         }
-
-        this.triggers.push({
-            id: this.generateId(),
-            name: pattern.substring(0, 30),
-            pattern: pattern,
-            matchType: 'tintin',
-            actions: [{ type: 'command', command: command }],
-            priority: priority,
-            enabled: true,
-            class: this.currentScriptClass || null
-        });
+        if (matches.length > 0) {
+            // Prefer the copy the user renamed; otherwise the first one.
+            let keep = matches.find(i => this.triggers[i].name && this.triggers[i].name !== defaultName);
+            if (keep === undefined) keep = matches[0];
+            const t = this.triggers[keep];
+            t.actions = [{ type: 'command', command: command }];
+            t.matchType = 'tintin';
+            t.priority = priority;
+            // Reassign class when inside #class {read} context
+            if (this.currentScriptClass) {
+                t.class = this.currentScriptClass;
+            }
+            // Drop any other same-pattern action copies (highest index first)
+            for (let k = matches.length - 1; k >= 0; k--) {
+                if (matches[k] !== keep) this.triggers.splice(matches[k], 1);
+            }
+        } else {
+            this.triggers.push({
+                id: this.generateId(),
+                name: defaultName,
+                pattern: pattern,
+                matchType: 'tintin',
+                actions: [{ type: 'command', command: command }],
+                priority: priority,
+                enabled: true,
+                class: this.currentScriptClass || null
+            });
+        }
         if (!this._silent) this.appendOutput(`#OK: #ACTION {${pattern}} {${command}} @ {${priority}}.`, 'system');
 
         await this.saveTriggers();
