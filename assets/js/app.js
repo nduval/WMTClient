@@ -6002,14 +6002,15 @@ class WMTClient {
         const cm = this._ftpCM, term = document.getElementById('ftp-find').value;
         const status = document.getElementById('ftp-edit-status');
         if (this._ftpFindMarks) { this._ftpFindMarks.clear(); this._ftpFindMarks = null; }
-        if (!term) { if (status) status.textContent = ''; return; }
+        if (!term) { this._cmMarkFinds(cm, '', null); if (status) status.textContent = ''; return; }
         // Mark every match on the scrollbar + count them.
         if (cm.showMatchesOnScrollbar) this._ftpFindMarks = cm.showMatchesOnScrollbar(term, false, { className: 'CodeMirror-search-match' });
         let count = 0; const all = cm.getSearchCursor(term, { line: 0, ch: 0 }); while (all.findNext()) count++;
         // Advance from the current cursor (wrap to top).
         let cur = cm.getSearchCursor(term, cm.getCursor('to'));
-        if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { if (status) status.textContent = 'no matches'; return; } }
+        if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { this._cmMarkFinds(cm, '', null); if (status) status.textContent = 'no matches'; return; } }
         cm.setSelection(cur.from(), cur.to());
+        this._cmMarkFinds(cm, term, cur.from());
         cm.scrollIntoView({ from: cur.from(), to: cur.to() }, 60);
         if (status) status.textContent = count + (count === 1 ? ' match' : ' matches');
         // Do NOT cm.focus() here — focusing CodeMirror mid-keydown made the Enter that
@@ -11049,12 +11050,13 @@ class WMTClient {
         const status = document.getElementById('script-find-status');
         if (!cm) return;
         if (this._scriptFindMarks) { this._scriptFindMarks.clear(); this._scriptFindMarks = null; }
-        if (!term) { if (status) status.textContent = ''; return; }
+        if (!term) { this._cmMarkFinds(cm, '', null); if (status) status.textContent = ''; return; }
         if (cm.showMatchesOnScrollbar) this._scriptFindMarks = cm.showMatchesOnScrollbar(term, false, { className: 'CodeMirror-search-match' });
         let count = 0; const all = cm.getSearchCursor(term, { line: 0, ch: 0 }); while (all.findNext()) count++;
         let cur = cm.getSearchCursor(term, cm.getCursor('to'));
-        if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { if (status) status.textContent = 'no matches'; return; } }
+        if (!cur.findNext()) { cur = cm.getSearchCursor(term, { line: 0, ch: 0 }); if (!cur.findNext()) { this._cmMarkFinds(cm, '', null); if (status) status.textContent = 'no matches'; return; } }
         cm.setSelection(cur.from(), cur.to());
+        this._cmMarkFinds(cm, term, cur.from());
         cm.scrollIntoView({ from: cur.from(), to: cur.to() }, 60);
         if (status) status.textContent = count + (count === 1 ? ' match' : ' matches');
     }
@@ -11074,7 +11076,28 @@ class WMTClient {
         const rep = document.getElementById('script-replace')?.value ?? '';
         let cur = cm.getSearchCursor(term, { line: 0, ch: 0 }), count = 0;
         cm.operation(() => { while (cur.findNext()) { cur.replace(rep); count++; } });
+        this._cmMarkFinds(cm, '', null);
         if (status) status.textContent = count ? `replaced ${count}` : 'no matches';
+    }
+
+    // Visible find highlights (2026-10-14 — locrian: "the highlight color is almost
+    // impossible to see"). Before this the current hit was only the theme's selection
+    // colour and the other hits only showed as scrollbar ticks. Now every hit gets
+    // .cm-find-match and the current one .cm-find-current (style.css); marks live on
+    // the CodeMirror instance and are replaced on each search, cleared on an empty
+    // term / no matches / replace-all. Shared by the script editor and the FTP editor.
+    _cmMarkFinds(cm, term, current) {
+        if (!cm) return;
+        (cm._wmtFindMarks || []).forEach(m => { try { m.clear(); } catch (e) {} });
+        cm._wmtFindMarks = [];
+        if (!term) return;
+        const cur = cm.getSearchCursor(term, { line: 0, ch: 0 });
+        let n = 0;
+        while (cur.findNext() && n++ < 5000) {
+            const from = cur.from(), to = cur.to();
+            const isCur = !!current && from.line === current.line && from.ch === current.ch;
+            cm._wmtFindMarks.push(cm.markText(from, to, { className: isCur ? 'cm-find-current' : 'cm-find-match' }));
+        }
     }
 
     _scriptSetSaveBtn(state) {

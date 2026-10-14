@@ -1210,6 +1210,20 @@ body {
     padding: 6px 15px;
 }
 
+/* Editor find highlights (2026-10-14) — script editor + FTP editor (CodeMirror) */
+.CodeMirror span.cm-find-match {
+    background: rgba(255, 196, 0, 0.30);
+    box-shadow: 0 0 0 1px rgba(255, 196, 0, 0.55);
+    border-radius: 2px;
+}
+
+.CodeMirror span.cm-find-current {
+    background: #ffd54a;
+    color: #111 !important;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px #ffb300;
+}
+
 /* Sidebar search + type groups (2026-10-14) */
 .scripts-sidebar-search {
     display: flex;
