@@ -346,6 +346,10 @@ setcookie($tokenCookieName, $wsToken, [
                     <h3>Actions</h3>
                     <button class="scripts-sidebar-close" id="scripts-sidebar-close">&times;</button>
                 </div>
+                <div class="scripts-sidebar-search">
+                    <input type="search" id="scripts-search" placeholder="Search triggers, aliases, gags…" autocomplete="off" spellcheck="false" aria-label="Search actions">
+                    <span class="scripts-search-count" id="scripts-search-count"></span>
+                </div>
                 <div class="scripts-sidebar-content" id="scripts-sidebar-content">
                     <!-- Classes and items rendered by JavaScript -->
                 </div>

@@ -1210,6 +1210,59 @@ body {
     padding: 6px 15px;
 }
 
+/* Sidebar search + type groups (2026-10-14) */
+.scripts-sidebar-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-darker);
+    flex-shrink: 0;
+}
+
+.scripts-sidebar-search input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-panel);
+    color: var(--text-color);
+    font-size: 0.9em;
+}
+
+.scripts-sidebar-search input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.scripts-search-count {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.script-group-label {
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    padding: 6px 8px 2px;
+    user-select: none;
+}
+
+.script-group-label span {
+    opacity: 0.7;
+}
+
+.script-item-name mark {
+    background: rgba(255, 200, 0, 0.35);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
 /* Class Section */
 .class-section {
     margin-bottom: 8px;

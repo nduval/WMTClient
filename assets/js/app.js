@@ -4550,6 +4550,27 @@ class WMTClient {
         document.getElementById('scripts-sidebar-close')?.addEventListener('click', () => this.closeScriptsSidebar());
         document.getElementById('close-scripts-btn')?.addEventListener('click', () => this.closeScriptsSidebar());
         document.getElementById('add-class-btn')?.addEventListener('click', () => this.promptAddClass());
+        // Sidebar search (2026-10-14): lives OUTSIDE scripts-sidebar-content so every
+        // re-render (each save re-renders) keeps the typed text; state in _scriptsFilter.
+        const scriptsSearch = document.getElementById('scripts-search');
+        if (scriptsSearch) {
+            let searchTimer = null;
+            scriptsSearch.addEventListener('input', () => {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(() => {
+                    this._scriptsFilter = scriptsSearch.value.trim();
+                    this.renderScriptsSidebar();
+                }, 120);
+            });
+            scriptsSearch.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    scriptsSearch.value = '';
+                    this._scriptsFilter = '';
+                    this.renderScriptsSidebar();
+                }
+                e.stopPropagation();
+            });
+        }
         document.getElementById('upload-script-btn')?.addEventListener('click', () => {
             document.getElementById('script-file-input')?.click();
         });
@@ -7543,14 +7564,29 @@ class WMTClient {
             </div>
         `;
 
+        // Search filter: substring, case-insensitive, over name/pattern/command text.
+        // A class whose NAME matches shows all its items; otherwise only matching
+        // items are shown, matching classes auto-expand, empty ones are hidden.
+        const filter = (this._scriptsFilter || '').toLowerCase();
+        const filtering = filter.length > 0;
+        let matchTotal = 0;
+
         // Render each class
         this.classes.forEach(cls => {
-            const classTrigs = this.triggers.filter(t => t.class === cls.id);
-            const classAliases = this.aliases.filter(a => a.class === cls.id);
-            const classTickers = this.tickers.filter(t => t.class === cls.id);
+            let classTrigs = this.triggers.filter(t => t.class === cls.id);
+            let classAliases = this.aliases.filter(a => a.class === cls.id);
+            let classTickers = this.tickers.filter(t => t.class === cls.id);
+            const classNameHit = filtering && (cls.name || '').toLowerCase().includes(filter);
+            if (filtering && !classNameHit) {
+                classTrigs = classTrigs.filter(t => this._scriptItemMatches('trigger', t, filter));
+                classAliases = classAliases.filter(a => this._scriptItemMatches('alias', a, filter));
+                classTickers = classTickers.filter(t => this._scriptItemMatches('ticker', t, filter));
+            }
             const itemCount = classTrigs.length + classAliases.length + classTickers.length;
+            if (filtering && itemCount === 0 && !classNameHit) return;
+            if (filtering) matchTotal += itemCount;
             const isEnabled = cls.enabled !== false;
-            const isExpanded = cls._expanded === true; // Default to collapsed
+            const isExpanded = filtering ? true : cls._expanded === true; // Default to collapsed
 
             html += `
                 <div class="class-section ${isEnabled ? '' : 'disabled'} ${isExpanded ? 'expanded' : ''}" data-class-id="${cls.id}">
@@ -7574,9 +7610,15 @@ class WMTClient {
         // Render unassigned items (including orphans whose class was deleted)
         const classIds = new Set(this.classes.map(c => c.id));
         const isUnassigned = item => !item.class || !classIds.has(item.class);
-        const unassignedTrigs = this.triggers.filter(isUnassigned);
-        const unassignedAliases = this.aliases.filter(isUnassigned);
-        const unassignedTickers = this.tickers.filter(isUnassigned);
+        let unassignedTrigs = this.triggers.filter(isUnassigned);
+        let unassignedAliases = this.aliases.filter(isUnassigned);
+        let unassignedTickers = this.tickers.filter(isUnassigned);
+        if (filtering) {
+            unassignedTrigs = unassignedTrigs.filter(t => this._scriptItemMatches('trigger', t, filter));
+            unassignedAliases = unassignedAliases.filter(a => this._scriptItemMatches('alias', a, filter));
+            unassignedTickers = unassignedTickers.filter(t => this._scriptItemMatches('ticker', t, filter));
+            matchTotal += unassignedTrigs.length + unassignedAliases.length + unassignedTickers.length;
+        }
 
         if (unassignedTrigs.length > 0 || unassignedAliases.length > 0 || unassignedTickers.length > 0) {
             html += `
@@ -7585,7 +7627,7 @@ class WMTClient {
                     ${this.renderClassItems(unassignedTrigs, unassignedAliases, unassignedTickers)}
                 </div>
             `;
-        } else if (this.classes.length > 0) {
+        } else if (this.classes.length > 0 && !filtering) {
             // Always show unassigned as a drop target when classes exist
             html += `
                 <div class="unassigned-section" data-drop-class="">
@@ -7594,8 +7636,19 @@ class WMTClient {
             `;
         }
 
+        // Search result count / no-match state
+        const countEl = document.getElementById('scripts-search-count');
+        if (countEl) countEl.textContent = filtering ? `${matchTotal} match${matchTotal === 1 ? '' : 'es'}` : '';
+        if (filtering && matchTotal === 0) {
+            html += `
+                <div class="empty-state" style="padding: 20px;">
+                    <p>No matches for “${this.escapeHtml(this._scriptsFilter)}”.</p>
+                </div>
+            `;
+        }
+
         // Empty state
-        if (this.classes.length === 0 && unassignedTrigs.length === 0 && unassignedAliases.length === 0 && unassignedTickers.length === 0) {
+        if (!filtering && this.classes.length === 0 && unassignedTrigs.length === 0 && unassignedAliases.length === 0 && unassignedTickers.length === 0) {
             html += `
                 <div class="empty-state" style="padding: 20px;">
                     <p>No scripts yet.</p>
@@ -7608,57 +7661,102 @@ class WMTClient {
         this.setupSidebarDragDrop(content);
     }
 
+    // Items grouped by type (Triggers, Gags, Highlights, Substitutes, Aliases,
+    // Tickers) and sorted alphabetically within each group (2026-10-14 — locrian:
+    // "if i expand a class it has loads of things in there"). Sidebar order is
+    // display only; trigger execution order is priority, unaffected.
     renderClassItems(triggers, aliases, tickers = []) {
+        const byName = (a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base', numeric: true });
+        const groups = { trigger: [], gag: [], highlight: [], substitute: [] };
+        triggers.forEach(t => (groups[this.getTriggerType(t)] || groups.trigger).push(t));
+        const trigName = t => t.name || t.pattern || '';
+        const order = [
+            ['Triggers',    groups.trigger,    trigName,                   t => this.renderTriggerItem(t)],
+            ['Gags',        groups.gag,        trigName,                   t => this.renderTriggerItem(t)],
+            ['Highlights',  groups.highlight,  trigName,                   t => this.renderTriggerItem(t)],
+            ['Substitutes', groups.substitute, trigName,                   t => this.renderTriggerItem(t)],
+            ['Aliases',     aliases,           a => a.pattern || '',       a => this.renderAliasItem(a)],
+            ['Tickers',     tickers,           t => t.name || t.command || '', t => this.renderTickerItem(t)],
+        ];
         let html = '';
+        for (const [label, list, keyOf, render] of order) {
+            if (!list || list.length === 0) continue;
+            const sorted = list.slice().sort((x, y) => byName(keyOf(x), keyOf(y)));
+            html += `<div class="script-group-label">${label} <span>${sorted.length}</span></div>`;
+            html += sorted.map(render).join('');
+        }
+        return html;
+    }
 
-        triggers.forEach(t => {
-            const isEnabled = t.enabled !== false;
-            // Determine trigger type for icon
-            const triggerType = this.getTriggerType(t);
-            const iconMap = { gag: 'G', highlight: 'H', substitute: 'S', trigger: 'T' };
-            const icon = iconMap[triggerType] || 'T';
-
-            html += `
+    renderTriggerItem(t) {
+        const isEnabled = t.enabled !== false;
+        const triggerType = this.getTriggerType(t);
+        const iconMap = { gag: 'G', highlight: 'H', substitute: 'S', trigger: 'T' };
+        const icon = iconMap[triggerType] || 'T';
+        return `
                 <div class="script-item ${isEnabled ? '' : 'disabled'}" draggable="true" data-type="trigger" data-id="${t.id}">
                     <span class="script-item-icon ${triggerType}">${icon}</span>
-                    <span class="script-item-name" onclick="wmtClient.editTriggerById('${t.id}')" title="${this.escapeHtml(t.pattern)}">${this.escapeHtml(t.name || t.pattern)}</span>
+                    <span class="script-item-name" onclick="wmtClient.editTriggerById('${t.id}')" title="${this.escapeHtml(t.pattern)}">${this._highlightMatch(t.name || t.pattern)}</span>
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleTriggerById('${t.id}')"></div>
                     <div class="script-item-actions">
                         <button onclick="wmtClient.deleteTriggerById('${t.id}')" title="Delete">×</button>
                     </div>
                 </div>
             `;
-        });
+    }
 
-        aliases.forEach(a => {
-            const isEnabled = a.enabled !== false;
-            html += `
+    renderAliasItem(a) {
+        const isEnabled = a.enabled !== false;
+        return `
                 <div class="script-item ${isEnabled ? '' : 'disabled'}" draggable="true" data-type="alias" data-id="${a.id}">
                     <span class="script-item-icon alias">A</span>
-                    <span class="script-item-name" onclick="wmtClient.editAliasById('${a.id}')" title="${this.escapeHtml(a.replacement)}">${this.escapeHtml(a.pattern)}</span>
+                    <span class="script-item-name" onclick="wmtClient.editAliasById('${a.id}')" title="${this.escapeHtml(a.replacement)}">${this._highlightMatch(a.pattern)}</span>
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleAliasById('${a.id}')"></div>
                     <div class="script-item-actions">
                         <button onclick="wmtClient.deleteAliasById('${a.id}')" title="Delete">×</button>
                     </div>
                 </div>
             `;
-        });
+    }
 
-        tickers.forEach(t => {
-            const isEnabled = t.enabled !== false;
-            html += `
+    renderTickerItem(t) {
+        const isEnabled = t.enabled !== false;
+        return `
                 <div class="script-item ${isEnabled ? '' : 'disabled'}" draggable="true" data-type="ticker" data-id="${t.id}">
                     <span class="script-item-icon ticker">K</span>
-                    <span class="script-item-name" onclick="wmtClient.editTickerById('${t.id}')" title="${this.escapeHtml(t.command)} (${t.interval}s)">${this.escapeHtml(t.name || t.command)}</span>
+                    <span class="script-item-name" onclick="wmtClient.editTickerById('${t.id}')" title="${this.escapeHtml(t.command)} (${t.interval}s)">${this._highlightMatch(t.name || t.command)}</span>
                     <div class="script-item-toggle ${isEnabled ? 'enabled' : ''}" onclick="wmtClient.toggleTickerEnabled('${t.id}')"></div>
                     <div class="script-item-actions">
                         <button onclick="wmtClient.deleteTickerById('${t.id}')" title="Delete">×</button>
                     </div>
                 </div>
             `;
-        });
+    }
 
-        return html;
+    // Text the sidebar search looks through for one item.
+    _scriptItemText(kind, item) {
+        if (kind === 'alias') return [item.name, item.pattern, item.replacement];
+        if (kind === 'ticker') return [item.name, item.command];
+        const acts = (item.actions || []).map(a => a.command || a.replacement || a.message || a.text || '');
+        return [item.name, item.pattern, ...acts];
+    }
+
+    _scriptItemMatches(kind, item, filterLower) {
+        return this._scriptItemText(kind, item).some(s => s && String(s).toLowerCase().includes(filterLower));
+    }
+
+    // Escaped display text with the current search term wrapped in <mark>.
+    _highlightMatch(text) {
+        const s = String(text ?? '');
+        const f = this._scriptsFilter || '';
+        if (!f) return this.escapeHtml(s);
+        const lower = s.toLowerCase(), fl = f.toLowerCase();
+        let out = '', i = 0, j;
+        while ((j = lower.indexOf(fl, i)) !== -1) {
+            out += this.escapeHtml(s.slice(i, j)) + '<mark>' + this.escapeHtml(s.slice(j, j + f.length)) + '</mark>';
+            i = j + f.length;
+        }
+        return out + this.escapeHtml(s.slice(i));
     }
 
     // Determine the type of trigger for icon display
