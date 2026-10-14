@@ -54,7 +54,7 @@
   webhooks); WS `set_discord_prefs` still prefix-only (client resync makes that moot — no restart).
   Old 21 URLs remain recoverable from change_log id 579669 if she ever wants them back.
 
-## BUILT + GATED 2026-10-13 — ⏳ DEPLOY PENDING NATHAN'S OK — bot death on phone = `#show` browser hop
+## COMMITTED a327194 (2026-10-14) — ⏳ DEPLOY PENDING NATHAN'S OK (wmt-server restart) — bot death on phone = `#show` browser hop
 - **Root (prod JSONL 2026-10-13 + journal + code):** a server-side trigger's `#show`/`#showme`
   was forwarded to ONE browser as a `client_command` and only trigger-checked when that
   browser bounced it back as `test_line`. With ZERO browsers attached (phone app
