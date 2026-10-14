@@ -5,6 +5,25 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 49ddc18 2026-10-14 (IONOS-only) — Actions sidebar: type groups + alphabetical sort + search box
+- locrian via Nathan: "if i expand a class in my actions menu, it has loads of things in there, maybe
+  sort them alphabetically (but still grouped by type)… also a search bar that finds all actions and
+  gags etc with that string in them".
+- app.js `renderClassItems`: groups Triggers / Gags / Highlights / Substitutes / Aliases / Tickers
+  (small `.script-group-label` with count), alphabetical within each (localeCompare, base
+  sensitivity, numeric). Display only — trigger execution order is still priority.
+- Search: `#scripts-search` in app.php sits BETWEEN the sidebar header and `scripts-sidebar-content`
+  (outside the innerHTML that every save re-renders, so the text persists); 120 ms debounce →
+  `_scriptsFilter` → re-render. Matches name / pattern / action command text (aliases: pattern +
+  replacement; tickers: name + command), case-insensitive substring. Matching classes auto-expand,
+  non-matching classes and the Unassigned drop target are hidden, match count shown, term wrapped
+  in `<mark>` (`_highlightMatch`), class-name hit shows the whole class, Escape clears. Keydown
+  guards for numpad-move / editor shortcuts already skip inputs (checked).
+- Deployed 2026-10-14T23:24:59Z, gate subset 146/146, three files read back from IONOS.
+- NOT covered: no sort toggle (always alphabetical); the full-page Triggers/Aliases panels
+  (`loadPanelContent`) keep their own order and have no search; drag-and-drop unchanged.
+  ⏳ live confirm: locrian/Nathan click-through after a hard refresh.
+
 ## SHIPPED e31aa22 2026-10-14 — UI deletes silently restored after a reload (explicit `removed` ids)
 - Found while cleaning locrian's duplicate triggers: 4 rows the client dropped kept coming back
   (`ENTITY_MERGE preserved=4` on every push). mergeDevicePush only lets a device delete-by-omission
