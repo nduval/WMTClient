@@ -8144,6 +8144,7 @@ class WMTClient {
         // Show duplicate button only when editing an existing trigger
         const dupBtn = document.getElementById('trigger-duplicate-btn');
         if (dupBtn) dupBtn.style.display = index !== null ? '' : 'none';
+        this._setModalDeleteVisible('trigger', index !== null);
 
         modal.classList.add('open');
     }
@@ -8386,12 +8387,66 @@ class WMTClient {
         this.renderScriptsSidebar();
     }
 
-    async deleteTrigger(index) {
-        if (!confirm('Delete this trigger?')) return;
+    async deleteTrigger(index, confirmed = false) {
+        if (!confirmed && !confirm('Delete this trigger?')) return;
         this.triggers.splice(index, 1);
         await this.saveTriggers();
         if (this.currentPanel === 'triggers') this.loadPanelContent('triggers');
         this.renderScriptsSidebar();
+    }
+
+    _setModalDeleteVisible(kind, visible) {
+        const btn = document.getElementById(`${kind}-delete-btn`);
+        if (btn) btn.style.display = visible ? '' : 'none';
+    }
+
+    // Delete button inside an entity edit modal. Asks ONCE, closes the modal, then runs the
+    // same deleter the list's "x" uses (so persistence + panel/sidebar refresh stay identical).
+    // Gags, highlights and substitutes are triggers underneath, so they share deleteTrigger.
+    async deleteFromModal(kind) {
+        const labels = { trigger: 'trigger', alias: 'alias', gag: 'gag', highlight: 'highlight',
+                         substitute: 'substitute', ticker: 'ticker' };
+        const label = labels[kind];
+        if (!label) return;
+
+        let index = null, tickerId = null, name = '';
+        switch (kind) {
+            case 'trigger':    index = this.editingItem; break;
+            case 'alias':      index = this.editingItem; break;
+            case 'gag':        index = this.editingGagIndex; break;
+            case 'highlight':  index = this.editingHighlightIndex; break;
+            case 'substitute': index = this.editingSubstituteIndex; break;
+            case 'ticker':     tickerId = this.editingTickerId; break;
+        }
+        if (kind === 'ticker') {
+            const t = tickerId ? this.tickers.find(x => x.id === tickerId) : null;
+            if (!t) return;
+            name = t.name || t.command || '';
+        } else {
+            const list = kind === 'alias' ? this.aliases : this.triggers;
+            const item = (index !== null && index !== undefined) ? list[index] : null;
+            if (!item) return;
+            name = item.name || item.pattern || '';
+        }
+
+        const shown = name.length > 60 ? name.slice(0, 57) + '...' : name;
+        if (!confirm(`Delete this ${label}${shown ? `: "${shown}"` : ''}?\nThis cannot be undone.`)) return;
+
+        this.closeModal();
+        if (kind === 'ticker') {
+            this.editingTickerId = null;
+            await this.deleteTickerById(tickerId, true);
+            if (this.currentPanel === 'tickers') this.loadPanelContent('tickers');
+            this.renderScriptsSidebar();
+        } else if (kind === 'alias') {
+            await this.deleteAlias(index, true);
+        } else {
+            if (kind === 'gag') this.editingGagIndex = null;
+            if (kind === 'highlight') this.editingHighlightIndex = null;
+            if (kind === 'substitute') this.editingSubstituteIndex = null;
+            await this.deleteTrigger(index, true);
+        }
+        this.appendOutput(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted${shown ? ': ' + shown : ''}`, 'system');
     }
 
     showSaveError(msg, authExpired = false) {
@@ -8617,6 +8672,7 @@ class WMTClient {
             classSelect.innerHTML = this.renderClassOptions(alias?.class);
         }
 
+        this._setModalDeleteVisible('alias', index !== null);
         modal.classList.add('open');
     }
 
@@ -8647,6 +8703,7 @@ class WMTClient {
         const title = modal.querySelector('.modal-header h3');
         if (title) title.textContent = existing ? 'Edit Gag' : 'New Gag';
 
+        this._setModalDeleteVisible('gag', editIndex !== null);
         modal.classList.add('open');
     }
 
@@ -8795,6 +8852,7 @@ class WMTClient {
             modal.dataset.colorHandlersSet = 'true';
         }
 
+        this._setModalDeleteVisible('highlight', editIndex !== null);
         modal.classList.add('open');
     }
 
@@ -8923,6 +8981,7 @@ class WMTClient {
         if (title) {
             title.textContent = editId ? 'Edit Ticker' : 'New Ticker';
         }
+        this._setModalDeleteVisible('ticker', !!editId);
 
         modal.classList.add('open');
     }
@@ -8980,8 +9039,8 @@ class WMTClient {
     }
 
     // Delete ticker by id
-    async deleteTickerById(id) {
-        if (!confirm('Delete this ticker?')) return;
+    async deleteTickerById(id, confirmed = false) {
+        if (!confirmed && !confirm('Delete this ticker?')) return;
         this.tickers = this.tickers.filter(t => t.id !== id);
         await this.saveTickers();
     }
@@ -9040,8 +9099,8 @@ class WMTClient {
         this.renderScriptsSidebar();
     }
 
-    async deleteAlias(index) {
-        if (!confirm('Delete this alias?')) return;
+    async deleteAlias(index, confirmed = false) {
+        if (!confirmed && !confirm('Delete this alias?')) return;
         this.aliases.splice(index, 1);
         await this.saveAliases();
         if (this.currentPanel === 'aliases') this.loadPanelContent('aliases');
@@ -13664,6 +13723,7 @@ class WMTClient {
         const title = modal.querySelector('.modal-header h3');
         if (title) title.textContent = existing ? 'Edit Substitute' : 'New Substitute';
 
+        this._setModalDeleteVisible('substitute', editIndex !== null);
         modal.classList.add('open');
     }
 

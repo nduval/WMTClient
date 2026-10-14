@@ -397,6 +397,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-danger" id="trigger-delete-btn" onclick="wmtClient.deleteFromModal('trigger')" style="display:none;">Delete</button>
                 <button class="btn btn-secondary" id="trigger-duplicate-btn" onclick="wmtClient.duplicateTrigger()" style="display:none;margin-right:auto;">Duplicate</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveTrigger()">Save</button>
@@ -435,6 +436,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-danger" id="alias-delete-btn" onclick="wmtClient.deleteFromModal('alias')" style="display:none;margin-right:auto;">Delete</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveAlias()">Save</button>
             </div>
@@ -468,6 +470,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-danger" id="gag-delete-btn" onclick="wmtClient.deleteFromModal('gag')" style="display:none;margin-right:auto;">Delete</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveGag()">Save</button>
             </div>
@@ -552,6 +555,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-danger" id="highlight-delete-btn" onclick="wmtClient.deleteFromModal('highlight')" style="display:none;margin-right:auto;">Delete</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveHighlight()">Save</button>
             </div>
@@ -588,6 +592,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-danger" id="substitute-delete-btn" onclick="wmtClient.deleteFromModal('substitute')" style="display:none;margin-right:auto;">Delete</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveSubstitute()">Save</button>
             </div>
@@ -625,6 +630,7 @@ setcookie($tokenCookieName, $wsToken, [
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-danger" id="ticker-delete-btn" onclick="wmtClient.deleteFromModal('ticker')" style="display:none;margin-right:auto;">Delete</button>
                 <button class="btn btn-secondary" onclick="wmtClient.closeModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="wmtClient.saveTicker()">Save</button>
             </div>

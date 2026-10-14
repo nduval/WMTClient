@@ -5,6 +5,29 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 2026-10-14 (IONOS-only) — Delete button inside every entity edit modal
+- Nathan: "if i open a trigger, alias, gag etc. it has save/cancel but it would be nice to have
+  delete, so i dont have to hit cancel, go find it in the list, and click the little x" + "maybe
+  a prompt of are you sure you want to delete". app.php: a `btn-danger` Delete (`<kind>-delete-btn`,
+  left-aligned, hidden for New) in the trigger/alias/gag/highlight/substitute/ticker footers.
+  app.js: `_setModalDeleteVisible()` toggled by each `open*Modal`; `deleteFromModal(kind)` reads
+  the modal's editing index/id, confirms ONCE naming the item ("Delete this trigger: "x"? This
+  cannot be undone."), closes the modal, then calls the SAME deleter the list "×" uses
+  (`deleteTrigger`/`deleteAlias`/`deleteTickerById`, new `confirmed=true` arg skips their own
+  prompt) so persistence + panel/sidebar refresh are identical. Sandbox node --check + php -l OK.
+  ⏳ Nathan's click-through.
+
+## SHIPPED 2026-10-14 (IONOS-only) — "+ New class…" in every entity modal's class dropdown
+- Nathan: "when making a new trigger … a New Class option, to build a class that you want it to go
+  into". `renderClassOptions()` appends a `__new__` sentinel; one delegated `change` listener
+  (`_onClassSelectChange`) snaps the select back to its previous value (the sentinel can never be
+  saved as a class id) and opens an inline name row under the select (`_openInlineNewClass`:
+  Create / Cancel / Enter / Esc). Create → `createClass()` (now returns the class; same rules as
+  api/classes.php: non-empty, ≤50, unique — an existing name just gets selected) → options
+  re-rendered with the new class selected. Covers trigger, alias, ticker, gag, highlight,
+  substitute modals (the only `*-class` selects). Verified: sandbox `node --check` + client gate.
+- [ ] ⏳ Nathan's live click-through.
+
 ## SHIPPED 2026-10-13 (IONOS-only, no wmt-server restart) — Discord webhook URL silently blanked on save (mimic, 21 forum-channel webhooks)
 - **Root (prod change_log + journal, 2026-10-13):** mimic re-pointed 21 channels (all `bchat *`,
   9 knight channels, soul, tell) at Discord FORUM-channel webhooks = `…/<token>?thread_id=<post>`.
