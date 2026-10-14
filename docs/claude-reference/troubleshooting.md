@@ -71,6 +71,36 @@ if (line.includes('\x1b[0m')) {
 
 ## Connection Issues
 
+### "Incorrect password." right after "Session resumed" (fixed 2026-10-14, commit 12b3e24)
+**Symptom** (locrian 2026-10-14 13:55Z, Nathan "a few times"): fresh login → name typed →
+the browser's WebSocket drops at the exact moment `Password:` arrives (so the client never
+sends the password) → "Session resumed - MUD connection active." → "MIP enabled (ID: …)" →
+**"Incorrect password."** → MUD closes → auto-reconnect does a fresh login. Often followed by
+"Invalid character in position N" lines if a startup-script `#delay` fires raw commands into the
+new name prompt (see below).
+**Cause** (JSONL `input` records + code): the resume's `enableMip()` sends the three `3klient …`
+registration lines; the first one lands on the `Password:` prompt as the password. The 2026-06-14
+guard (drop `3klient` while `_atNamePrompt`) didn't apply because `_atNamePrompt` clears the
+moment the name is typed.
+**Fix**: `case 'command'` also drops `3klient` while `_eagerAtPasswordPrompt` is set (bounded to
+120s after the prompt) and sends ONE `system` notice "The MUD is waiting for your password — type
+it to continue." (the prompt itself is usually not in the replay buffer). Gate: MipNamePromptGuard
+T3 (negative-controlled). Residual: the player must type the password (or the MUD times the prompt
+out and the client's auto-reconnect does a fresh login) — the resume path does NOT auto-send it.
+
+### Startup-script `#delay` firing raw MUD commands into the name prompt ("Invalid character in position N")
+The startup script runs at CONNECT (before the name is sent) and again on a non-brief resume.
+`#delay` is a browser timer that does not care whether the MUD is logged in. A short delay
+(locrian had 10s) can fire plain commands into a reconnect's name prompt → one "Invalid character
+in position N" per command. Nathan's startup.tin uses `{90}`; locrian's was changed to match
+(2026-10-14). Better still: put post-login commands in a trigger on "3Kingdoms welcomes you".
+
+### Passwords were written to the JSONL input log (fixed 2026-10-14, commit 12b3e24)
+`writeSessionLog(session, 'input', …)` recorded every command verbatim, including the password the
+client auto-sends at `Password:`. Now the command captured by the eager password-prompt flag is
+logged as `[password redacted]`. Gate: MipNamePromptGuard T4. Files older than the fix age out
+with the 7-day retention (`LOG_RETENTION_DAYS`).
+
 ### 3S character connecting to wrong server
 1. Verify character's server field is set to `'3s'` in their data
 2. Check `app.php` is reading `getCurrentCharacterServer()` correctly

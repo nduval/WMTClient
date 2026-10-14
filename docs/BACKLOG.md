@@ -5,6 +5,24 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 12b3e24 2026-10-14 — "Incorrect password" after resume (3klient into Password:) + password in JSONL
+- locrian 13:55Z: fresh login, browser WS dropped as `Password:` arrived (password never sent),
+  resume's `enableMip()` fired `3klient …` into the password prompt → "Incorrect password." → MUD
+  closed → auto-reconnect; then her startup.tin's 10s `#delay` fired 4 raw `setm*` commands into
+  the new name prompt → "Invalid character in position 29/24/30/50". Nathan: "hit that same
+  password issue a few times myself".
+- server.js: drop `3klient` while `_eagerAtPasswordPrompt` (≤120s after the prompt) + one
+  `system` notice "The MUD is waiting for your password"; JSONL `input` record for the captured
+  password = `[password redacted]` (every auto-login password was in plaintext in /var/log/wmt;
+  older files age out in 7 days). Gate MipNamePromptGuard T3/T4, negative-controlled (2 FAIL on
+  the pre-fix server). Deploy = `deploy.py all` (wmt-server restart).
+- locrian's startup.tin EnterMess delay 10s → 90s (matches elminster's), IONOS + DB mirror verified.
+- NOT covered: the resume path still doesn't auto-send the password (player types it or the MUD
+  times out → fresh login); startup-script raw commands pre-login in general (script-side: use a
+  trigger on "3Kingdoms welcomes you"); the `con` alias she references isn't on locrian.
+- ⏳ live confirm: next "Dropped MIP cmd at password prompt" in the journal + no "Incorrect
+  password." following a SESSION_RESUME; JSONL shows `[password redacted]`.
+
 ## SHIPPED 2026-10-14 (IONOS-only) — Delete button inside every entity edit modal
 - Nathan: "if i open a trigger, alias, gag etc. it has save/cancel but it would be nice to have
   delete, so i dont have to hit cancel, go find it in the list, and click the little x" + "maybe
