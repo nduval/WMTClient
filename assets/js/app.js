@@ -4298,6 +4298,15 @@ class WMTClient {
     }
 
     bindEvents() {
+        // "+ New class…" in the entity modals' class dropdowns (delegated: the
+        // selects are re-rendered on every modal open). focusin records the
+        // pre-change value so the sentinel can snap back to it.
+        document.addEventListener('focusin', (e) => {
+            const s = e.target;
+            if (s instanceof HTMLSelectElement && /-class$/.test(s.id) && s.value !== '__new__') s.dataset.prevValue = s.value;
+        });
+        document.addEventListener('change', (e) => this._onClassSelectChange(e));
+
         // Command input
         const input = document.getElementById('command-input');
         const sendBtn = document.getElementById('send-btn');
@@ -8027,7 +8036,66 @@ class WMTClient {
             const disabled = cls.enabled === false ? ' (disabled)' : '';
             options += `<option value="${cls.id}" ${selected}>${this.escapeHtml(cls.name)}${disabled}</option>`;
         });
+        // Sentinel handled by _onClassSelectChange (bound once in bindEvents): opens
+        // an inline "name + Create" row and creates the class without leaving the
+        // modal. The select never KEEPS this value — see _onClassSelectChange.
+        options += '<option value="__new__">+ New class…</option>';
         return options;
+    }
+
+    // "+ New class…" chosen in any entity modal's class dropdown (trigger / alias /
+    // ticker / gag / highlight / substitute all render via renderClassOptions).
+    // The select is snapped straight back to its previous choice so a modal save
+    // during the flow can never persist "__new__" as a class id; the real class is
+    // selected once createClass() has persisted it.
+    _onClassSelectChange(e) {
+        const select = e.target;
+        if (!(select instanceof HTMLSelectElement) || !/-class$/.test(select.id)) return;
+        if (select.value !== '__new__') { select.dataset.prevValue = select.value; return; }
+        const previous = select.dataset.prevValue ?? '';
+        select.value = previous;
+        this._openInlineNewClass(select, previous);
+    }
+
+    _openInlineNewClass(select, previousValue) {
+        const group = select.parentElement;
+        if (!group) return;
+        group.querySelectorAll('.new-class-row').forEach(r => r.remove());   // stale row from an earlier open
+        const row = document.createElement('div');
+        row.className = 'new-class-row';
+        row.style.cssText = 'display:flex;gap:6px;margin-top:6px;align-items:center';
+        row.innerHTML =
+            '<input type="text" maxlength="50" placeholder="New class name" style="flex:1;margin:0">' +
+            '<button type="button" class="btn btn-primary ncr-create" style="padding:4px 10px">Create</button>' +
+            '<button type="button" class="btn btn-secondary ncr-cancel" style="padding:4px 10px">Cancel</button>';
+        select.insertAdjacentElement('afterend', row);
+        const input = row.querySelector('input');
+        const createBtn = row.querySelector('.ncr-create');
+        const cancel = () => { select.value = previousValue; row.remove(); };
+        const create = async () => {
+            const name = input.value.trim();
+            if (!name) { input.focus(); return; }
+            // Same rules as api/classes.php create: non-empty, ≤50, unique (case-insensitive).
+            let cls = this.classes.find(c => c.name.toLowerCase() === name.toLowerCase());
+            if (cls) {
+                this.appendOutput(`Class "${cls.name}" already exists — selected it.`, 'system');
+            } else {
+                createBtn.disabled = true;
+                cls = await this.createClass(name);          // persists + pushes to this.classes
+                createBtn.disabled = false;
+                if (!cls) { input.focus(); return; }          // createClass already printed the error
+            }
+            select.innerHTML = this.renderClassOptions(cls.id);
+            select.dataset.prevValue = cls.id;
+            row.remove();
+        };
+        createBtn.addEventListener('click', create);
+        row.querySelector('.ncr-cancel').addEventListener('click', cancel);
+        input.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); create(); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); cancel(); }
+        });
+        input.focus();
     }
 
     // Get class name by ID
@@ -12031,12 +12099,14 @@ class WMTClient {
                 this.classes.push(data.class);
                 this.appendOutput(`Class created: ${name}`, 'system');
                 this.renderScriptsSidebar();
+                return data.class;
             } else {
                 this.appendOutput(`Failed to create class: ${data.error}`, 'error');
             }
         } catch (e) {
             this.appendOutput('Failed to create class', 'error');
         }
+        return null;
     }
 
     // Enable/disable a class
