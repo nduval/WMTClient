@@ -7568,6 +7568,7 @@ function connectToMud(session) {
     // command handler when the first command after the prompt arrives.
     if (text.includes('Password:')) {
       session._eagerAtPasswordPrompt = true;
+      session._eagerAtPasswordPromptAt = Date.now();
     }
 
     if (session.lineBufferTimeout) {
@@ -7623,6 +7624,7 @@ function connectToMud(session) {
     // Reset password-suppression state — a new MUD connection will go
     // through fresh auth and may legitimately need to capture again.
     session._eagerAtPasswordPrompt = false;
+    session._passwordPromptNoticeSent = false;
     session._suppressionPassword = null;
     session._suppressionExpiresAt = 0;
     // Don't send misleading messages during server restart — browser already got notified
@@ -8328,6 +8330,24 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
+          // Same guard at the PASSWORD prompt (locrian 2026-10-14 13:55Z, Nathan "a few
+          // times"): the name was typed (which clears _atNamePrompt), the browser dropped
+          // BEFORE it sent the password, and the resume's enableMip fired '3klient …' into
+          // 'Password:' → "Incorrect password." → the MUD closed the link. Drop it and tell
+          // the player the MUD is waiting (the prompt itself is often not in the replay
+          // buffer, so without a notice they see nothing). Bounded to 120s after the
+          // prompt so a stray in-game "Password:" can't swallow a later `#mip reload`.
+          if (session._eagerAtPasswordPrompt &&
+              (Date.now() - (session._eagerAtPasswordPromptAt || 0)) < 120000 &&
+              /^3klient(\s|$)/i.test(String(data.command || '').trim())) {
+            console.log(`Dropped MIP cmd at password prompt: token=${session.token ? session.token.substring(0, 8) : '?'}`);
+            if (!session._passwordPromptNoticeSent) {
+              session._passwordPromptNoticeSent = true;
+              sendToClient(session, { type: 'system', message: 'The MUD is waiting for your password — type it to continue.' });
+            }
+            break;
+          }
+
           // Multi-device password leak suppression: when "Password:" was
           // recently seen in MUD output (eager flag set in the data handler),
           // capture the FIRST command that arrives as the password and arm a
@@ -8337,12 +8357,18 @@ wss.on('connection', (ws, req) => {
           // login completes and the MUD echoes the password back as an
           // unrecognized command — leaking the password to channels/logs.
           // Confirmed Nathan-reported 2026-05-06.
+          // isPasswordInput: this command IS the password → the JSONL input log
+          // below records it as '[password redacted]' (2026-10-14: every player's
+          // auto-sent password was sitting in plaintext in /var/log/wmt).
+          let isPasswordInput = false;
           {
             const cmd = data.command || '';
             if (session._eagerAtPasswordPrompt && cmd) {
               session._suppressionPassword = cmd;
               session._suppressionExpiresAt = Date.now() + 5000;
               session._eagerAtPasswordPrompt = false;
+              session._passwordPromptNoticeSent = false;
+              isPasswordInput = true;
               // Allow this first send through to the MUD normally.
             } else if (session._suppressionPassword &&
                        cmd === session._suppressionPassword &&
@@ -8388,7 +8414,7 @@ wss.on('connection', (ws, req) => {
             }
           }
           if (session.mudSocket && !session.mudSocket.destroyed) {
-            writeSessionLog(session, 'input', { cmd: data.command || '' });
+            writeSessionLog(session, 'input', { cmd: isPasswordInput ? '[password redacted]' : (data.command || '') });
 
             // Fire RECEIVED INPUT server-side so input-reset variables reset on the
             // authoritative side. Previously this event ran only in the browser and its

@@ -17,6 +17,11 @@
  *   T1  at the name prompt, a '3klient ...' command is DROPPED (server logs the drop;
  *       mock never receives it → no 'Password:' echoed back)
  *   T2  at the name prompt, a NON-MIP command still flows (mock replies 'Password:')
+ *   T3  at the PASSWORD prompt (locrian 2026-10-14: browser dropped before sending the
+ *       password, resume's enableMip fired 3klient into 'Password:' → "Incorrect
+ *       password."), a '3klient ...' is DROPPED and the player gets a system notice
+ *   T4  the real password still flows; the JSONL input log records '[password redacted]'
+ *       and never the password string (2026-10-14: plaintext passwords in /var/log/wmt)
  *
  * Negative control: on the pre-fix server T1 fails (3klient reaches the mock → 'Password:').
  * Run: sudo -n node test_mip_nameprompt_guard.js
@@ -125,6 +130,40 @@ async function main() {
     const flowed = await waitFor(() => cC.raw.slice(rawMark2).join('').includes('Password:'), 4000);
     if (flowed) ok('T2: non-MIP command still flows to the MUD at the name prompt');
     else bad('T2: non-MIP flows', 'mock did not reply Password: to a normal name');
+    await sleep(400);
+
+    // T3: now at the PASSWORD prompt (locrian 2026-10-14): a 3klient must be DROPPED
+    // (mock would otherwise accept it as the password → 'Welcome back'), and the
+    // player gets a one-shot system notice that the MUD is waiting for the password.
+    const pwDropMark = slob().length, pwRawMark = cC.raw.length;
+    cC.send('command', { command: '3klient 88888~~PortalWMT1.0.0' });
+    const pwDropped = await waitFor(() => /Dropped MIP cmd at password prompt/.test(slob().slice(pwDropMark)), 4000);
+    await sleep(800);
+    const rawAfter = cC.raw.slice(pwRawMark).join('');
+    const loggedInByMip = rawAfter.includes('Welcome back');
+    const noticed = rawAfter.includes('waiting for your password');
+    if (pwDropped && !loggedInByMip && noticed) ok('T3: 3klient at password prompt DROPPED + player notified');
+    else bad('T3: 3klient dropped at password prompt', `dropLog=${pwDropped} mockAcceptedAsPassword=${loggedInByMip} notice=${noticed}`);
+
+    // T4: the real password still flows (mock logs in) and the JSONL input log
+    // records '[password redacted]', never the password itself.
+    const secret = 'mipg-secret-' + crypto.randomBytes(4).toString('hex');
+    const rawMark4 = cC.raw.length;
+    cC.send('command', { command: secret });
+    const loggedIn = await waitFor(() => cC.raw.slice(rawMark4).join('').includes('Welcome back'), 4000);
+    await sleep(700);
+    const fs = require('fs'), pathm = require('path');
+    const dayDir = pathm.join('/var/log/wmt', new Date().toISOString().slice(0, 10));
+    let leaked = false, redacted = false;
+    try {
+      for (const f of fs.readdirSync(dayDir)) {
+        const txt = fs.readFileSync(pathm.join(dayDir, f), 'utf8');
+        if (txt.includes(secret)) leaked = true;
+        if (/^someguy\.jsonl/.test(f) && txt.includes('"cmd":"[password redacted]"')) redacted = true;
+      }
+    } catch (e) { bad('T4: read JSONL dir', e.message); }
+    if (loggedIn && !leaked && redacted) ok('T4: password flows to the MUD, JSONL logs [password redacted]');
+    else bad('T4: password redacted in JSONL', `loggedIn=${loggedIn} leaked=${leaked} redactedRecord=${redacted}`);
 
   } finally { done(); }
 
