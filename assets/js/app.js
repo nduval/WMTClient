@@ -8662,10 +8662,7 @@ class WMTClient {
         if (this._saveRetryTimer) return;
         this._saveRetryAttempts = (this._saveRetryAttempts || 0);
         if (this._saveRetryAttempts >= 5) {
-            const wsOk = !!(this.connection && this.connection.isConnected());
-            if (wsOk && !document.getElementById('save-error-banner')) {
-                this.appendOutput('Web save retries exhausted — your data is safe (saved over the live connection).', 'system');
-            }
+            console.warn('[save] PHP save retries exhausted, data safe over WS');
             return;
         }
         this._saveRetryTimer = setTimeout(async () => {
