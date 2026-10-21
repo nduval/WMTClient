@@ -79,8 +79,13 @@ switch ($action) {
             return $b['priority'] - $a['priority'];
         });
 
-        // DB is the only store — a failed push must be loud, not silent.
-        if (!pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $validatedTriggers)) {
+        $t1 = microtime(true);
+        $pushOk = pushBulkToLightsail('/admin/triggers-bulk', 'triggers', $characterId, $validatedTriggers);
+        $ms = round((microtime(true) - $t1) * 1000);
+        $logFile = __DIR__ . '/../data/logs/auth.log';
+        $ts = date('Y-m-d H:i:s');
+        @file_put_contents($logFile, "[$ts] triggers save: push=" . ($pushOk ? 'OK' : 'FAIL') . " ms=$ms count=" . count($validatedTriggers) . " cid=$characterId\n", FILE_APPEND | LOCK_EX);
+        if (!$pushOk) {
             errorResponse('Save failed — data server unreachable, nothing was changed', 503);
         }
         successResponse(['triggers' => $validatedTriggers]);

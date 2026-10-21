@@ -8638,15 +8638,15 @@ class WMTClient {
         const label = kind.charAt(0).toUpperCase() + kind.slice(1);
         const wsOk = !!(this.connection && this.connection.isConnected());
         if (wsOk) {
-            // Durable save via the token-authed WS → DB (same path a normal save
-            // syncs through). This is what actually prevents the data loss.
             this.sendFilteredTriggersAndAliases();
         }
-        // Queue a retry of the PHP save; the session often recovers from the
-        // 30-day cookie on a later request.
         this._pendingSaveRetry = this._pendingSaveRetry || new Set();
         this._pendingSaveRetry.add(kind);
         this._scheduleSaveRetry();
+        if (wsOk && !isAuthExpired) {
+            console.warn(`[save] ${label} PHP save failed (HTTP ${status || 'network'}), data saved over WS — retrying`);
+            return;
+        }
         if (wsOk) {
             this.showSaveError(
                 `Your web login expired, but your ${kind} change was saved over the live game connection ` +
@@ -8659,9 +8659,15 @@ class WMTClient {
     }
 
     _scheduleSaveRetry() {
-        if (this._saveRetryTimer) return;               // one timer; reschedules only while failures persist
+        if (this._saveRetryTimer) return;
         this._saveRetryAttempts = (this._saveRetryAttempts || 0);
-        if (this._saveRetryAttempts >= 5) return;       // give up quietly after ~5 tries; banner stays up
+        if (this._saveRetryAttempts >= 5) {
+            const wsOk = !!(this.connection && this.connection.isConnected());
+            if (wsOk && !document.getElementById('save-error-banner')) {
+                this.appendOutput('Web save retries exhausted — your data is safe (saved over the live connection).', 'system');
+            }
+            return;
+        }
         this._saveRetryTimer = setTimeout(async () => {
             this._saveRetryTimer = null;
             this._saveRetryAttempts++;
@@ -8691,12 +8697,14 @@ class WMTClient {
     async saveTriggers() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
+            const payload = JSON.stringify({ triggers: this.triggers });
             const res = await fetch(this.apiUrl('api/triggers.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ triggers: this.triggers })
+                body: payload
             });
             if (!res.ok) {
+                console.warn(`[save] triggers HTTP ${res.status} (${payload.length} bytes)`, res.headers.get('server'));
                 this._handleSaveFailure('triggers', res.status, res.status === 401);
                 return;
             }
@@ -8707,7 +8715,7 @@ class WMTClient {
                 this.renderScriptsSidebar();
             }
         } catch (e) {
-            console.error('Failed to save triggers:', e);
+            console.warn('[save] triggers network error:', e.message);
             this._handleSaveFailure('triggers', 0, false);
         }
     }
@@ -9240,12 +9248,14 @@ class WMTClient {
     async saveAliases() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
+            const payload = JSON.stringify({ aliases: this.aliases });
             const res = await fetch(this.apiUrl('api/aliases.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ aliases: this.aliases })
+                body: payload
             });
             if (!res.ok) {
+                console.warn(`[save] aliases HTTP ${res.status} (${payload.length} bytes)`, res.headers.get('server'));
                 this._handleSaveFailure('aliases', res.status, res.status === 401);
                 return;
             }
@@ -9256,7 +9266,7 @@ class WMTClient {
                 this.renderScriptsSidebar();
             }
         } catch (e) {
-            console.error('Failed to save aliases:', e);
+            console.warn('[save] aliases network error:', e.message);
             this._handleSaveFailure('aliases', 0, false);
         }
     }
@@ -9264,23 +9274,24 @@ class WMTClient {
     async saveTickers() {
         if (this._bulkLoading) return; // Deferred — cmdRead does one save at the end
         try {
+            const payload = JSON.stringify({ tickers: this.tickers });
             const res = await fetch(this.apiUrl('api/tickers.php?action=save'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tickers: this.tickers })
+                body: payload
             });
             if (!res.ok) {
+                console.warn(`[save] tickers HTTP ${res.status} (${payload.length} bytes)`, res.headers.get('server'));
                 this._handleSaveFailure('tickers', res.status, res.status === 401);
                 return;
             }
             this._clearSaveRetry('tickers');
             this.sendFilteredTriggersAndAliases();
-            // Refresh sidebar if open
             if (document.getElementById('scripts-sidebar')?.classList.contains('open')) {
                 this.renderScriptsSidebar();
             }
         } catch (e) {
-            console.error('Failed to save tickers:', e);
+            console.warn('[save] tickers network error:', e.message);
             this._handleSaveFailure('tickers', 0, false);
         }
     }
