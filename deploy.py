@@ -121,6 +121,7 @@ IONOS_DEPLOY_FILES = [
     'contact.php',
     'privacy.php',
     'terms.php',
+    'manifest.json',
     'robots.txt',
     'sitemap.xml',
     'composer.json',

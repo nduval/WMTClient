@@ -29,6 +29,9 @@ if ($isStealth) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#1a1a2e">
+    <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <title><?= APP_NAME ?> - Login</title>
     <style>
