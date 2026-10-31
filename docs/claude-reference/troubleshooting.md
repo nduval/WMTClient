@@ -173,6 +173,29 @@ if (!this.wakeLockVisibilityHandlerAdded) {
 
 **Lesson:** Keep frontend and backend validation ranges in sync.
 
+### Android "app" shows a title/URL bar at the top that covers the header buttons (fixed 2026-10-31, commit 976df27)
+
+**Problem:** On an Android phone running the client "as an app" from the home screen, a bar with
+the page title, `client.wemudtogether.com` and a three-dot menu sits over the top of the page and
+blocks the header buttons. Started "recently" with no client change.
+
+**Root Cause:** the site had NO web app manifest (only the iOS `apple-mobile-web-app-*` meta
+tags). On Android, "Add to Home screen" for a site without a manifest is a plain Chrome shortcut,
+and newer Chrome opens those in a Custom-Tab style window with that toolbar. Nothing in our CSS
+draws it; it is browser chrome.
+
+**Fix:** `manifest.json` at the site root (`display: standalone`, `scope: /`, `start_url: /`,
+192/512 PNG icons in `assets/icons/`, theme colour `#1a1a2e`) linked from index.php,
+characters.php and app.php with `<meta name="mobile-web-app-capable">` + `theme-color`. Added
+`manifest.json` to `IONOS_DEPLOY_FILES`.
+
+**User action required:** the reporter must delete the old home-screen shortcut and re-add it
+(Chrome menu -> "Add to Home screen" / "Install app"). The old shortcut was created without a
+manifest and will not pick the new one up on its own.
+
+**Not covered:** the stealth domain (3kbusinessservices.com) serves the same manifest.json if
+fetched directly; iOS behaviour unchanged (still driven by the apple-* meta tags).
+
 ## Authentication Issues
 
 ### Login loops back to login screen (cookie path mismatch)

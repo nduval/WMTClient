@@ -5,6 +5,20 @@
 > conversation MUST match this file. Born from the Phase-3 confusion: "step 1
 > shipped" read as "Phase 3 shipped" weeks later. If it's not DONE here, it's not done.
 
+## SHIPPED 976df27 2026-10-31 — Android "app" title/URL bar covering the header (PWA manifest)
+- A mobile user (screenshot cover.jpg): installed-app view shows Chrome's title + URL + menu bar over
+  the top of the page, hiding the header buttons. Cause: no web app manifest existed at all, so the
+  Android "app" was a bare shortcut; recent Chrome shows that toolbar for manifest-less shortcuts.
+- Fix: `manifest.json` (standalone, scope `/`, 192/512 icons in `assets/icons/`), linked from
+  index/characters/app.php + `mobile-web-app-capable`/`theme-color`; `manifest.json` added to
+  `IONOS_DEPLOY_FILES`. Live read-back: manifest 200 application/json, both icons 200, head tags present.
+- ⚠ The deploy restarted wmt-server although server.js was unchanged: the `auto` baseline had
+  been stale since 2026-10-14 because only `auto` ever wrote `.deploy_state.json`. 6/6 live chars
+  resumed (1 SESSION_RESTORED, 5 silent), 0 password failures. deploy.py now keeps per-side
+  baselines (`server_commit` / `ionos_commit`) and every target advances its own side.
+- ⏳ live confirm: the reporter removes the old shortcut, re-adds via "Add to Home screen", and the
+  bar is gone. NOT covered: iOS, the stealth domain's manifest exposure, maskable icon variant.
+
 ## SHIPPED 63e2f7f 2026-10-14 (IONOS-only) — Script/FTP editor find: matches were nearly invisible
 - locrian: "when you search for a string in the script editor, the highlight color is almost impossible
   to see". Cause: `_scriptFindNext` / `_ftpCMFind` showed the current hit only as the CodeMirror

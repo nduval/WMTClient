@@ -1142,17 +1142,35 @@ def log_deploy(target, commit_hash, success):
 DEPLOY_STATE_FILE = BASE_DIR / '.deploy_state.json'
 
 def read_deploy_state():
-    """Last commit successfully deployed by `auto`. None if unknown."""
+    """Per-side deploy baselines: {'server_commit', 'ionos_commit', 'last_commit'}.
+    `server_commit` / `ionos_commit` = last commit whose server.js / IONOS files are
+    known to be on prod; `last_commit` is the legacy single key (fallback for both).
+    Returns {} if unknown."""
     try:
         import json
-        return json.loads(DEPLOY_STATE_FILE.read_text()).get('last_commit')
+        return json.loads(DEPLOY_STATE_FILE.read_text())
     except Exception:
-        return None
+        return {}
 
-def write_deploy_state(commit):
+def deploy_baseline(side):
+    """Baseline commit for one side ('server' | 'ionos'); None if unknown."""
+    st = read_deploy_state()
+    return st.get(f'{side}_commit') or st.get('last_commit')
+
+def write_deploy_state(commit, sides=('server', 'ionos')):
+    """Advance the baseline for the given sides only. 2026-10-31 scar: the explicit
+    `ionos`/`all`/`lightsail` targets never wrote the baseline, so `auto` later saw a
+    weeks-old baseline, thought server.js had changed, and restarted wmt-server on
+    live players for a manifest.json change. A partial target advances ONLY its own
+    side so an undeployed server.js change can never be hidden by an IONOS deploy."""
     try:
         import json
-        DEPLOY_STATE_FILE.write_text(json.dumps({'last_commit': commit}, indent=2))
+        st = read_deploy_state()
+        for side in sides:
+            st[f'{side}_commit'] = commit
+        if st.get('server_commit') == st.get('ionos_commit') == commit:
+            st['last_commit'] = commit
+        DEPLOY_STATE_FILE.write_text(json.dumps(st, indent=2))
     except Exception as e:
         print(f"  WARNING: could not write {DEPLOY_STATE_FILE.name}: {e}")
 
@@ -1278,6 +1296,8 @@ def main():
             success = False
         if not deploy_ionos():
             success = False
+        if success:
+            write_deploy_state(commit_hash)   # both sides now at HEAD
 
     elif args.target == 'lightsail':
         # Same test-gate as 'all' so a quick `lightsail` deploy can't bypass
@@ -1302,6 +1322,8 @@ def main():
                 sys.exit(1)
         if not deploy_lightsail('server'):
             success = False
+        if success:
+            write_deploy_state(commit_hash, sides=('server',))
 
     elif args.target == 'bridge':
         if not deploy_lightsail('bridge', force_bridge=args.yes):
@@ -1327,10 +1349,17 @@ def main():
             sys.exit(1)
         if not deploy_ionos():
             success = False
+        if success:
+            write_deploy_state(commit_hash, sides=('ionos',))
 
     elif args.target == 'auto':
-        baseline = read_deploy_state()
-        changed = git_changed_files(baseline)
+        # Each side diffs against ITS OWN baseline (see write_deploy_state).
+        srv_baseline = deploy_baseline('server')
+        ion_baseline = deploy_baseline('ionos')
+        baseline = srv_baseline if srv_baseline == ion_baseline else f"server={srv_baseline} ionos={ion_baseline}"
+        changed_server = git_changed_files(srv_baseline)
+        changed_ionos = git_changed_files(ion_baseline)
+        changed = None if (changed_server is None or changed_ionos is None) else sorted(set(changed_server) | set(changed_ionos))
         print("\n=== Smart deploy (auto) ===")
         if changed is None:
             print("  No deploy baseline in .deploy_state.json — can't compute what's necessary.")
@@ -1338,9 +1367,9 @@ def main():
             print('  (e.g. {"last_commit": "<hash>"}), or run an explicit target this time.')
             sys.exit(1)
 
-        server_changed = 'glitch/server.js' in changed
-        bridge_changed = 'glitch/bridge.js' in changed
-        ionos_files = [f for f in changed if is_ionos_path(f)]
+        server_changed = 'glitch/server.js' in changed_server
+        bridge_changed = 'glitch/bridge.js' in changed_server
+        ionos_files = [f for f in changed_ionos if is_ionos_path(f)]
         other = [f for f in changed
                  if not is_ionos_path(f) and f not in ('glitch/server.js', 'glitch/bridge.js')]
 
