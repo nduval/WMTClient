@@ -1453,6 +1453,16 @@ def main():
     log_deploy(args.target, commit_hash, success)
 
     if success:
+        # Push commits to GitHub so the remote never drifts behind local
+        try:
+            push = subprocess.run(["git", "push", "origin", "main"],
+                                  capture_output=True, text=True, timeout=60)
+            if push.returncode == 0:
+                print("  Pushed to GitHub.")
+            else:
+                print(f"  WARNING: git push failed (non-fatal): {push.stderr.strip()}")
+        except Exception as e:
+            print(f"  WARNING: git push failed (non-fatal): {e}")
         print("\n=== Deployment complete! ===")
         dstatus("DONE: deployment complete")
     else:
