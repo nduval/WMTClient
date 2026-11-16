@@ -260,11 +260,9 @@ async function runTests() {
   // T6: indent-continuation block (blockStart, NO blockEnd) — capture an IDEA
   // report (header + indented body), forward a TIDIED copy to chatmon, and let
   // the first non-indented line terminate the block and pass through untouched.
-  // ⏸️ ON HOLD: this is the paused text-block-capture feature (see memory
-  // job_block_trigger_report_capture). It still fails ("no tidied chatmon block
-  // received") and is unrelated to the single-owner variable work. Gated behind an
-  // env flag so it doesn't block unrelated deploys; re-enable when that feature resumes.
-  if (process.env.RUN_BLOCK_T6) await test('T6: indent block forwards tidied report; terminator passes through', async () => {
+  // (Was env-gated while the feature was on hold; the failure was the stale sandbox
+  // mock that predated __emitline. Re-enabled 2026-11-16.)
+  await test('T6: indent block forwards tidied report; terminator passes through', async () => {
     send('set_triggers', { triggers: [{
       id: 'blk_idea',
       pattern: '~ignored',
@@ -306,6 +304,81 @@ async function runTests() {
     assert(lineMatches('A goblin arrives.'), 'terminator line did not pass through');
     // The report body still renders on the player's screen (block flushes lines too).
     assert(lineMatches('Make numbers work for bards'), 'report body not shown on screen');
+  });
+
+  // T7: mimic's REAL report shape (prod JSONL 2026-11-16 22:31Z): header, 1-space
+  // File: line, 2-space body, BLANK line, then a newline-less prompt (never a line).
+  // The UI checkbox stores blockStart = the trigger's own tintin pattern. The blank
+  // line must end the block at once — before it did, the block waited for a
+  // non-indented line, hit the 5s timeout and flushed WITHOUT forwarding. `%0` in a
+  // chatmon message expands to the tidied block; the old per-line %1 template on the
+  // discord action must be ignored (no webhook in the test, so only chatmon observed).
+  await test('T7: blank line ends capture block at once; %0 = whole tidied report', async () => {
+    const pat = '-== IDEA REPORT : %1 has reported %1 ==-';
+    send('set_triggers', { triggers: [{
+      id: 'blk_idea_ui',
+      name: 'IDEA REPORT',
+      pattern: pat,
+      matchType: 'contains',
+      enabled: true,
+      blockStart: pat,
+      blockEnd: null,
+      actions: [{ type: 'chatmon', channel: 'reports', message: 'NEW %0' }]
+    }]});
+    await sleep(300);
+    clearBuffers();
+
+    send('command', { command: '__emit -== IDEA REPORT : Mimic(750) has reported an idea at 2026/11/16 17:31 ==-' });
+    await sleep(120);
+    send('command', { command: '__emitline 1 File: players/mimic/workroom' });
+    await sleep(120);
+    send('command', { command: '__emitline 2 testing how to send the whole report to discord' });
+    await sleep(120);
+    const t0 = Date.now();
+    send('command', { command: '__emitline 0' });   // the blank line
+    await sleep(700);                                // << BLOCK_TIMEOUT_MS (5000)
+
+    const chat = outputBuffer.find(o => /^NEW IDEA REPORT/.test(o.line));
+    assert(chat, `no block forward within 700ms of the blank line (t+${Date.now() - t0}ms)`);
+    assert(chat.line === 'NEW IDEA REPORT: Mimic(750) @ 2026/11/16 17:31\nFile: players/mimic/workroom\ntesting how to send the whole report to discord',
+      `unexpected forwarded block: ${JSON.stringify(chat.line)}`);
+    assert(outputBuffer.filter(o => /IDEA REPORT/.test(o.line) && o.line.startsWith('NEW')).length === 1,
+      'block forwarded more than once');
+    // Everything still renders on screen, in order, including the blank line.
+    const mudLines = outputBuffer.map(o => o.line);
+    const iHdr = mudLines.findIndex(l => l.startsWith('-== IDEA REPORT'));
+    assert(iHdr >= 0, 'header not shown on screen');
+    assert(mudLines[iHdr + 1] === ' File: players/mimic/workroom', `File line not next on screen: ${JSON.stringify(mudLines.slice(iHdr, iHdr + 4))}`);
+    assert(mudLines[iHdr + 2] === '  testing how to send the whole report to discord', 'body not shown on screen');
+    assert(mudLines[iHdr + 3] === '', `blank line not shown: ${JSON.stringify(mudLines[iHdr + 3])}`);
+  });
+
+  // T8: a capture block that never gets a blank/non-indented line (output just
+  // stops) must self-flush after BLOCK_TIMEOUT_MS WITH its forward — not sit
+  // off-screen until the next MUD line, and not drop the forward. Also proves the
+  // start check sees through 3K's ANSI colour on the header (^-anchored pattern,
+  // header sent via __ansi which wraps it in a colour code).
+  await test('T8: capture block self-flushes with forward on timeout; ANSI header matches ^pattern', async () => {
+    const pat = '^-== BUG REPORT : %1 ==-';
+    send('set_triggers', { triggers: [{
+      id: 'blk_bug_ui', name: 'BUG REPORT', pattern: pat, matchType: 'tintin', enabled: true,
+      blockStart: pat, blockEnd: null,
+      actions: [{ type: 'chatmon', channel: 'reports', message: '' }]
+    }]});
+    await sleep(300);
+    clearBuffers();
+
+    send('command', { command: '__ansi -== BUG REPORT : Mimic(750) has reported a bug at 2026/11/16 17:40 ==-' });
+    await sleep(120);
+    send('command', { command: '__emitline 2 the door does not open' });
+    await sleep(1000);
+    assert(!lineMatches('the door does not open'), 'body shown before the block ended (should be buffered)');
+    await sleep(5000);   // past BLOCK_TIMEOUT_MS, with NO further MUD output
+
+    const chat = outputBuffer.find(o => /^BUG REPORT: Mimic\(750\) @ 2026\/11\/16 17:40/.test(o.line));
+    assert(chat, 'timed-out capture block did not forward');
+    assert(/\nthe door does not open$/.test(chat.line), `body missing from forward: ${JSON.stringify(chat.line)}`);
+    assert(lineMatches('the door does not open'), 'timed-out block lines never reached the screen');
   });
 
   // Cleanup: clear the test trigger

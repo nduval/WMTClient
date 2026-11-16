@@ -69,7 +69,13 @@ switch ($action) {
                 'actions' => $trigger['actions'] ?? [],
                 'enabled' => $trigger['enabled'] ?? true,
                 'priority' => intval($trigger['priority'] ?? 0),
-                'class' => $trigger['class'] ?? null
+                'class' => $trigger['class'] ?? null,
+                // Block-trigger fields ("capture following lines"). Must round-trip
+                // or an HTTP-fallback save turns a block trigger back into a
+                // per-line one (triggers-bulk writes NULL when absent).
+                'blockStart' => (isset($trigger['blockStart']) && is_string($trigger['blockStart']) && $trigger['blockStart'] !== '') ? $trigger['blockStart'] : null,
+                'blockEnd' => (isset($trigger['blockEnd']) && is_string($trigger['blockEnd']) && $trigger['blockEnd'] !== '') ? $trigger['blockEnd'] : null,
+                'oneshot' => !empty($trigger['oneshot'])
             ];
             $validatedTriggers[] = $validated;
         }

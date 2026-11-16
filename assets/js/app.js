@@ -8225,6 +8225,10 @@ class WMTClient {
         // Populate form
         document.getElementById('trigger-name').value = trigger?.name || '';
         document.getElementById('trigger-pattern').value = trigger?.pattern || '';
+        // "Capture following lines" = server-side indent-continuation block
+        // (blockStart set, no blockEnd). See processBlockTriggers in server.js.
+        const captureBox = document.getElementById('trigger-capture-block');
+        if (captureBox) captureBox.checked = !!(trigger?.blockStart && !trigger?.blockEnd);
 
         // Populate class dropdown
         const classSelect = document.getElementById('trigger-class');
@@ -8460,8 +8464,14 @@ class WMTClient {
             actions.push(action);
         });
 
+        // Start from the existing trigger so fields this form doesn't edit
+        // (priority, oneshot, blockStart/blockEnd, ...) survive an edit — they
+        // used to be silently dropped, turning a block trigger back into a
+        // per-line one the first time it was opened and saved.
+        const prev = this.editingItem !== null ? this.triggers[this.editingItem] : null;
         const trigger = {
-            id: this.editingItem !== null ? this.triggers[this.editingItem].id : this.generateId(),
+            ...(prev || {}),
+            id: prev ? prev.id : this.generateId(),
             name: name || pattern,
             pattern,
             matchType,
@@ -8470,8 +8480,19 @@ class WMTClient {
             class: classId || null
         };
 
+        const capture = !!document.getElementById('trigger-capture-block')?.checked;
+        if (capture) {
+            // Block start follows the pattern, so editing the pattern keeps them in step.
+            trigger.blockStart = pattern;
+            trigger.blockEnd = null;
+        } else if (prev?.blockStart && !prev?.blockEnd) {
+            // Unchecked on a capture trigger → back to a normal per-line trigger.
+            // (Explicit start/end blocks, which have blockEnd, are left as they were.)
+            trigger.blockStart = null;
+        }
+
         if (this.editingItem !== null) {
-            trigger.enabled = this.triggers[this.editingItem].enabled;
+            trigger.enabled = prev.enabled;
             this.triggers[this.editingItem] = trigger;
         } else {
             this.triggers.push(trigger);

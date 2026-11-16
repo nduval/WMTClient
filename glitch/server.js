@@ -6701,9 +6701,11 @@ function flushPendingBab(session, channel) {
 //   • explicit-end  (blockStart + blockEnd): buffer until the end pattern is
 //     observed (that end line is included), e.g. ring-identify.
 //   • indent-cont.  (blockStart only): buffer the header plus following indented
-//     (or blank) lines; the first non-indented line ends the block (exclusive)
-//     and passes through normally. Delimited by the text's own indentation, so
-//     no footer pattern is needed — used for IDEA/BUG/TYPO reports.
+//     lines; a blank line ends the block (inclusive), as does the first
+//     non-indented line (exclusive — it passes through normally). If neither
+//     arrives within BLOCK_TIMEOUT_MS the block self-flushes WITH its actions.
+//     No footer pattern needed — used for IDEA/BUG/TYPO reports. This is the
+//     trigger editor's "capture following lines" checkbox (blockStart = pattern).
 // On flush, the trigger's actions run on the joined block: `highlight` re-marks
 // the joined text, and `discord`/`chatmon` forward a tidied copy (see
 // tidyReportBlock). Then the buffered lines are flushed to the client. Lines
@@ -6772,8 +6774,10 @@ function flushBlockTriggerBuffer(session, trigger, buffered) {
   if (forwards.length) {
     const tidied = tidyReportBlock(buffered);
     for (const action of forwards) {
-      const hasTemplate = action.message && action.message.includes('%block');
-      let msg = hasTemplate ? action.message.replace(/%block/g, tidied) : tidied;
+      // `%0` (the whole match, as players already know it from line triggers) and
+      // `%block` both expand to the tidied block.
+      const hasTemplate = action.message && /%block|%0(?!\d)/.test(action.message);
+      let msg = hasTemplate ? action.message.replace(/%block|%0(?!\d)/g, () => tidied) : tidied;
       msg = substituteUserVariables(msg, session.variables || {}, session.functions || {});
       if (action.type === 'discord') {
         if (action.webhookUrl && msg) sendToDiscordWebhook(action.webhookUrl, msg, session.discordUsername);
@@ -6839,9 +6843,18 @@ function processBlockTriggers(session, line) {
   const now = Date.now();
   for (const [tid, block] of Array.from(session.activeBlocks.entries())) {
     if (now - block.startedAt > BLOCK_TIMEOUT_MS) {
-      // Flush as-is, no actions applied (we never saw the end marker).
-      for (const ln of block.lines) {
-        sendToClient(session, { type: 'mud', line: ln });
+      if (block.indentMode) {
+        // Indent blocks have no end marker to miss — whatever was captured IS the
+        // block, so run the actions (Discord/ChatMon forward) rather than drop them.
+        if (block.timer) clearTimeout(block.timer);
+        const trig = session.triggers.find(t => t && t.id === tid);
+        if (trig) flushBlockTriggerBuffer(session, trig, block.lines);
+        else for (const ln of block.lines) sendToClient(session, { type: 'mud', line: ln });
+      } else {
+        // Explicit-end block that never saw its end marker: flush as-is, no actions.
+        for (const ln of block.lines) {
+          sendToClient(session, { type: 'mud', line: ln });
+        }
       }
       session.activeBlocks.delete(tid);
     }
@@ -6862,10 +6875,9 @@ function processBlockTriggers(session, line) {
     //   explicit-end  (blockStart + blockEnd): buffer until a line matches the end
     //                 pattern; that end line is INCLUDED in the block.
     //   indent-cont.  (blockStart only): buffer the header plus following indented
-    //                 (or blank) lines; the first NON-indented line ends the block,
-    //                 is NOT part of it, and passes through normally. Delimited by
-    //                 the text's own structure, so no end pattern is needed — this
-    //                 is what captures IDEA/BUG/TYPO reports (indented body, no footer).
+    //                 lines; a blank line ends the block (included), and so does the
+    //                 first NON-indented line (NOT part of it — passes through
+    //                 normally). Captures IDEA/BUG/TYPO reports (indented body, no footer).
     const indentMode = !trigger.blockEnd;
     const startRx = compileBlockRegex(trigger.blockStart, true);
     if (!startRx) continue;
@@ -6875,12 +6887,24 @@ function processBlockTriggers(session, line) {
     const block = session.activeBlocks.get(trigger.id);
     if (block) {
       if (indentMode) {
-        if (isIndented || isBlank) {
+        if (isBlank) {
+          // A blank line ends the block (it's included so on-screen spacing is
+          // kept). 3K reports end "body, blank line, prompt" and the prompt has no
+          // newline, so waiting for a non-indented line would leave the report
+          // hidden until the next output line — and past BLOCK_TIMEOUT_MS.
+          block.lines.push(line);
+          consumed = true;
+          if (block.timer) clearTimeout(block.timer);
+          flushBlockTriggerBuffer(session, trigger, block.lines);
+          session.activeBlocks.delete(trigger.id);
+          continue;   // a blank line can't start a new block
+        } else if (isIndented) {
           block.lines.push(line);
           consumed = true;
         } else {
           // Non-indented line terminates the block (exclusive) — flush what we have
           // and let this line fall through to the start-check / normal output below.
+          if (block.timer) clearTimeout(block.timer);
           flushBlockTriggerBuffer(session, trigger, block.lines);
           session.activeBlocks.delete(trigger.id);
         }
@@ -6897,11 +6921,26 @@ function processBlockTriggers(session, line) {
 
     // Start check — also reached on the line that just terminated an indent block,
     // so back-to-back reports each start cleanly.
-    if (!session.activeBlocks.has(trigger.id) && startRx.test(line)) {
+    // Start is tested on the ANSI-stripped text too: 3K colours report headers
+    // (ESC[33;1m-== IDEA REPORT ...), which would defeat a ^-anchored pattern.
+    if (!session.activeBlocks.has(trigger.id) && (startRx.test(line) || startRx.test(stripped))) {
       if (!indentMode && endRx.test(line)) {
         flushBlockTriggerBuffer(session, trigger, [line]);   // 1-line explicit block
       } else {
-        session.activeBlocks.set(trigger.id, { lines: [line], startedAt: now });
+        const entry = { lines: [line], startedAt: now, indentMode };
+        if (indentMode) {
+          // Self-flush if no blank/non-indented line ever arrives (e.g. output stops
+          // at a newline-less prompt), so the captured lines aren't held off-screen
+          // until the next MUD line. Explicit-end blocks keep their lazy timeout.
+          entry.timer = setTimeout(() => {
+            if (session.activeBlocks && session.activeBlocks.get(trigger.id) === entry) {
+              session.activeBlocks.delete(trigger.id);
+              try { flushBlockTriggerBuffer(session, trigger, entry.lines); }
+              catch (e) { console.warn(`block timer flush failed: ${e.message}`); }
+            }
+          }, BLOCK_TIMEOUT_MS);
+        }
+        session.activeBlocks.set(trigger.id, entry);
       }
       consumed = true;
     }

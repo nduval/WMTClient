@@ -396,6 +396,15 @@ setcookie($tokenCookieName, $wsToken, [
                     <strong>Example:</strong> <code>^%1 tells you '%2'</code> → <code>reply %1 Got it: %2</code>
                 </div>
                 <div class="form-group">
+                    <label style="margin:0; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                        <input type="checkbox" id="trigger-capture-block"> Capture following lines as one block
+                    </label>
+                    <div class="help-text" style="font-size:0.85em; color:#888; margin-top:4px;">
+                        Also grabs the indented lines after the matching line, up to a blank line (e.g. a full BUG/IDEA/TYPO report).
+                        Send to Discord / ChatMon then posts the whole block — leave the message empty, or put <code>%0</code> where the block should go.
+                    </div>
+                </div>
+                <div class="form-group">
                     <label>Actions</label>
                     <div id="trigger-actions" class="action-list"></div>
                     <button type="button" class="btn btn-secondary btn-sm add-action-btn" onclick="wmtClient.addTriggerAction()">
